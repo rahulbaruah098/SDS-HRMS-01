@@ -16,12 +16,14 @@ import {
   ShieldCheck,
   Trash2,
   Users,
+  X,
 } from 'lucide-react';
 
 import { api } from '../api/client';
 import { useCustomAlert } from '../components/CustomAlertProvider.jsx';
 
 const DEFAULT_LIMIT = 500;
+const PAYROLL_NOTICE_HIDE_MS = 3600;
 
 let componentEditorSequence = 0;
 
@@ -487,6 +489,50 @@ function assamProfessionalTaxSlabs() {
   ];
 }
 
+
+function PayrollInlineMessage({ feedback, onClose, className = '' }) {
+  if (!feedback?.message) {
+    return null;
+  }
+
+  const type = ['success', 'warning', 'error', 'info'].includes(feedback.type)
+    ? feedback.type
+    : 'info';
+
+  const Icon =
+    type === 'success'
+      ? CheckCircle2
+      : type === 'error' || type === 'warning'
+        ? AlertTriangle
+        : ShieldCheck;
+
+  return (
+    <div
+      className={`payroll-inline-feedback ${type} ${className}`.trim()}
+      role={type === 'error' ? 'alert' : 'status'}
+      aria-live={type === 'error' ? 'assertive' : 'polite'}
+    >
+      <span className="payroll-inline-feedback-icon" aria-hidden="true">
+        {feedback.loading ? <Loader2 size={15} className="spin" /> : <Icon size={15} />}
+      </span>
+
+      <span className="payroll-inline-feedback-copy">
+        {feedback.title ? <strong>{feedback.title}</strong> : null}
+        <span>{feedback.message}</span>
+      </span>
+
+      <button
+        type="button"
+        className="payroll-inline-feedback-close"
+        onClick={onClose}
+        aria-label="Dismiss notification"
+      >
+        <X size={15} />
+      </button>
+    </div>
+  );
+}
+
 export default function PayrollConfiguration({ user = {}, setPage = () => {} }) {
   const alerts = useCustomAlert();
   const superAdmin = isSuperAdmin(user);
@@ -521,6 +567,64 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
     active_revision: null,
     error: '',
   });
+
+  const [inlineFeedback, setInlineFeedback] = useState({});
+  const feedbackTimersRef = useRef({});
+
+  function clearInlineFeedback(scope) {
+    if (!scope) {
+      return;
+    }
+
+    const timer = feedbackTimersRef.current[scope];
+    if (timer) {
+      window.clearTimeout(timer);
+      delete feedbackTimersRef.current[scope];
+    }
+
+    setInlineFeedback((current) => {
+      if (!Object.prototype.hasOwnProperty.call(current, scope)) {
+        return current;
+      }
+
+      const next = { ...current };
+      delete next[scope];
+      return next;
+    });
+  }
+
+  function showInlineFeedback(scope, type, message, title = '', options = {}) {
+    if (!scope) {
+      return;
+    }
+
+    const timer = feedbackTimersRef.current[scope];
+    if (timer) {
+      window.clearTimeout(timer);
+      delete feedbackTimersRef.current[scope];
+    }
+
+    setInlineFeedback((current) => ({
+      ...current,
+      [scope]: {
+        type,
+        message,
+        title,
+        loading: Boolean(options.loading),
+      },
+    }));
+
+    if (!options.loading) {
+      feedbackTimersRef.current[scope] = window.setTimeout(() => {
+        setInlineFeedback((current) => {
+          const next = { ...current };
+          delete next[scope];
+          return next;
+        });
+        delete feedbackTimersRef.current[scope];
+      }, PAYROLL_NOTICE_HIDE_MS);
+    }
+  }
 
   const filteredEmployees = useMemo(() => {
     const term = normalizeKey(employeeSearch);
@@ -729,16 +833,30 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
   function tenantParams() {
     return superAdmin && tenantId.trim() ? { tenant_id: tenantId.trim() } : {};
   }
-
-  async function loadEmployees({ silent = false } = {}) {
+  async function loadEmployees({ silent = false, feedbackScope = 'employee-load' } = {}) {
     if (superAdmin && !tenantId.trim()) {
       setEmployees([]);
       setSelectedEmployeeId('');
 
       if (!silent) {
-        alerts.warning('Enter the company tenant ID first.', 'Tenant Required');
+        showInlineFeedback(
+          feedbackScope,
+          'warning',
+          'Enter the company tenant ID first.',
+          'Tenant Required',
+        );
       }
       return;
+    }
+
+    if (!silent && feedbackScope) {
+      showInlineFeedback(
+        feedbackScope,
+        'info',
+        'Loading employees for the selected company...',
+        'Loading Employees',
+        { loading: true },
+      );
     }
 
     try {
@@ -759,18 +877,31 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
       setSelectedEmployeeId((current) =>
         items.some((employee) => employeeId(employee) === current) ? current : '',
       );
+
+      if (!silent && feedbackScope) {
+        showInlineFeedback(
+          feedbackScope,
+          'success',
+          `${items.length} ${items.length === 1 ? 'employee' : 'employees'} loaded successfully.`,
+          'Employees Loaded',
+        );
+      }
     } catch (error) {
       setEmployees([]);
       setSelectedEmployeeId('');
 
       if (!silent) {
-        alerts.error(error.message || 'Unable to load employees.', 'Employee Load Failed');
+        showInlineFeedback(
+          feedbackScope,
+          'error',
+          error.message || 'Unable to load employees.',
+          'Employee Load Failed',
+        );
       }
     } finally {
       setLoadingEmployees(false);
     }
   }
-
   async function loadSalaryHistory(employeeReference = selectedEmployeeId) {
     if (!employeeReference) {
       setSalaryHistory([]);
@@ -805,7 +936,9 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
       }
     } catch (error) {
       setSalaryHistory([]);
-      alerts.error(
+      showInlineFeedback(
+        'salary-load',
+        'error',
         error.message || 'Unable to load salary structure history.',
         'Salary Structure Load Failed',
       );
@@ -813,18 +946,38 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
       setLoadingSalary(false);
     }
   }
-
-  async function loadStatutoryHistory(code = stateCode) {
+  async function loadStatutoryHistory(code = stateCode, feedbackScope = '') {
     const normalizedCode = safeText(code, 'ALL').toUpperCase();
+    const noticeScope = feedbackScope || 'statutory-load';
 
     if (normalizedCode !== 'ALL' && normalizedCode.length !== 2) {
-      alerts.warning('Use a two-letter state code or ALL.', 'Invalid State Code');
+      showInlineFeedback(
+        noticeScope,
+        'warning',
+        'Use a two-letter state code or ALL.',
+        'Invalid State Code',
+      );
       return;
     }
 
     if (superAdmin && !tenantId.trim()) {
-      alerts.warning('Enter the company tenant ID first.', 'Tenant Required');
+      showInlineFeedback(
+        noticeScope,
+        'warning',
+        'Enter the company tenant ID first.',
+        'Tenant Required',
+      );
       return;
+    }
+
+    if (feedbackScope) {
+      showInlineFeedback(
+        feedbackScope,
+        'info',
+        `Loading statutory configuration history for ${normalizedCode}...`,
+        'Loading Rules',
+        { loading: true },
+      );
     }
 
     try {
@@ -843,9 +996,20 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
       setStatutoryForm(
         latest ? statutoryFormFromDocument(latest) : emptyStatutoryForm(normalizedCode),
       );
+
+      if (feedbackScope) {
+        showInlineFeedback(
+          feedbackScope,
+          'success',
+          `Statutory rules for ${normalizedCode} loaded successfully.`,
+          'Rules Loaded',
+        );
+      }
     } catch (error) {
       setStatutoryHistory([]);
-      alerts.error(
+      showInlineFeedback(
+        noticeScope,
+        'error',
         error.message || 'Unable to load statutory configuration history.',
         'Statutory Configuration Load Failed',
       );
@@ -1030,22 +1194,38 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedEmployeeId, selectedEmployee]);
 
+  useEffect(() => {
+    function dismissInlineFeedback(event) {
+      if (event.target?.closest?.('.payroll-inline-feedback')) {
+        return;
+      }
+
+      Object.values(feedbackTimersRef.current).forEach((timer) => {
+        window.clearTimeout(timer);
+      });
+      feedbackTimersRef.current = {};
+      setInlineFeedback({});
+    }
+
+    document.addEventListener('pointerdown', dismissInlineFeedback);
+
+    return () => {
+      document.removeEventListener('pointerdown', dismissInlineFeedback);
+      Object.values(feedbackTimersRef.current).forEach((timer) => {
+        window.clearTimeout(timer);
+      });
+      feedbackTimersRef.current = {};
+    };
+  }, []);
+
   function selectEmployee(employeeReference) {
     if (!employeeReference || employeeReference === selectedEmployeeId) {
       return;
     }
 
+    // Keep employee selection stable. The content updates in place without
+    // forcing the page/app-shell scroll position to jump.
     setSelectedEmployeeId(employeeReference);
-
-    window.requestAnimationFrame(() => {
-      window.requestAnimationFrame(() => {
-        payrollMainRef.current?.scrollIntoView({
-          behavior: 'smooth',
-          block: 'start',
-          inline: 'nearest',
-        });
-      });
-    });
   }
 
   function updateSalaryField(field, value) {
@@ -1140,12 +1320,13 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
       };
     });
   }
-
   function removeComponent(index) {
     const component = salaryForm.components[index];
 
     if (REQUIRED_EARNING_CODES.has(normalizeKey(component?.code))) {
-      alerts.warning(
+      showInlineFeedback(
+        'salary-components',
+        'warning',
         `${component.label || component.code} is required by the approved payslip format.`,
         'Required Component',
       );
@@ -1204,12 +1385,24 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
       }),
     };
   }
-
   async function saveSalaryDraft() {
     if (!selectedEmployeeId) {
-      alerts.warning('Select an employee first.', 'Employee Required');
+      showInlineFeedback(
+        'salary-actions',
+        'warning',
+        'Select an employee first.',
+        'Employee Required',
+      );
       return;
     }
+
+    showInlineFeedback(
+      'salary-actions',
+      'info',
+      'Saving the current salary structure draft...',
+      'Saving Draft',
+      { loading: true },
+    );
 
     try {
       setSavingSalary(true);
@@ -1220,24 +1413,38 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
 
       setSalaryForm(salaryFormFromDocument(data.salary_structure || {}));
       await loadSalaryHistory(selectedEmployeeId);
-      alerts.success('Salary structure draft saved successfully.', 'Draft Saved');
+      showInlineFeedback(
+        'salary-actions',
+        'success',
+        'Salary structure draft saved successfully.',
+        'Draft Saved',
+      );
     } catch (error) {
-      alerts.error(error.message || 'Unable to save salary structure.', 'Save Failed');
+      showInlineFeedback(
+        'salary-actions',
+        'error',
+        error.message || 'Unable to save salary structure.',
+        'Save Failed',
+      );
     } finally {
       setSavingSalary(false);
     }
   }
-
   async function activateSalaryDraft(document = salaryForm) {
     const id = documentId(document) || document.id;
 
     if (!id || normalizeKey(document.status) !== 'draft') {
-      alerts.warning('Save or select a salary structure draft first.', 'Draft Required');
+      showInlineFeedback(
+        'salary-actions',
+        'warning',
+        'Save or select a salary structure draft first.',
+        'Draft Required',
+      );
       return;
     }
 
     const confirmed = await alerts.confirm(
-      'Activate this salary revision? The current active revision will be superseded from the new effective date.',
+      'Approve this salary revision? A backdated revision fills an uncovered historical period and ends before the next approved revision. A later revision replaces the current one from its start date. Existing payslips are preserved.',
       {
         title: 'Activate Salary Revision',
         confirmText: 'Activate Revision',
@@ -1248,26 +1455,51 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
       return;
     }
 
+    showInlineFeedback(
+      'salary-actions',
+      'info',
+      'Activating the selected salary revision...',
+      'Activating Revision',
+      { loading: true },
+    );
+
     try {
       setSavingSalary(true);
-      await api(`/payroll/salary-structure/${encodeURIComponent(id)}/activate`, {
+      const activation = await api(`/payroll/salary-structure/${encodeURIComponent(id)}/activate`, {
         method: 'POST',
         body: JSON.stringify(tenantParams()),
       });
       await loadSalaryHistory(selectedEmployeeId);
-      alerts.success('Salary structure revision activated.', 'Revision Activated');
+      HEAD
+      showInlineFeedback(
+        'salary-actions',
+        'success',
+        activation.salary_structure?.activation_type === 'historical'
+          ? 'Historical salary revision approved. The current salary revision is unchanged.'
+          : 'Salary structure revision activated.',
+        'Revision Approved',
+      );
     } catch (error) {
-      alerts.error(error.message || 'Unable to activate salary revision.', 'Activation Failed');
+      showInlineFeedback(
+        'salary-actions',
+        'error',
+        error.message || 'Unable to activate salary revision.',
+        'Activation Failed',
+      );
     } finally {
       setSavingSalary(false);
     }
   }
-
   async function deleteActiveSalaryRevision(document = {}) {
     const id = documentId(document);
 
     if (!id || normalizeKey(document.status) !== 'active') {
-      alerts.warning('Only the currently active salary revision can be deleted with this action.', 'Active Revision Required');
+      showInlineFeedback(
+        'salary-history',
+        'warning',
+        'Only the currently active salary revision can be deleted with this action.',
+        'Active Revision Required',
+      );
       return;
     }
 
@@ -1283,6 +1515,14 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
       return;
     }
 
+    showInlineFeedback(
+      'salary-history',
+      'info',
+      'Deleting the active salary revision...',
+      'Deleting Active Revision',
+      { loading: true },
+    );
+
     try {
       setDeletingSalaryId(id);
       const data = await api(`/payroll/salary-structure/${encodeURIComponent(id)}/active`, {
@@ -1290,12 +1530,16 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
         body: JSON.stringify(tenantParams()),
       });
       await loadSalaryHistory(selectedEmployeeId);
-      alerts.success(
+      showInlineFeedback(
+        'salary-history',
+        'success',
         data.message || 'Active salary revision deleted. You can now create or activate the corrected salary revision.',
         'Active Revision Deleted',
       );
     } catch (error) {
-      alerts.error(
+      showInlineFeedback(
+        'salary-history',
+        'error',
         error.message || 'Unable to delete the active salary revision.',
         'Delete Active Revision Failed',
       );
@@ -1303,12 +1547,16 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
       setDeletingSalaryId('');
     }
   }
-
   async function deleteSalaryDraft(document = {}) {
     const id = documentId(document);
 
     if (!id || normalizeKey(document.status) !== 'draft') {
-      alerts.warning('Only salary structure drafts can be deleted.', 'Draft Required');
+      showInlineFeedback(
+        'salary-history',
+        'warning',
+        'Only salary structure drafts can be deleted.',
+        'Draft Required',
+      );
       return;
     }
 
@@ -1324,6 +1572,14 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
       return;
     }
 
+    showInlineFeedback(
+      'salary-history',
+      'info',
+      'Deleting the selected salary structure draft...',
+      'Deleting Draft',
+      { loading: true },
+    );
+
     try {
       setDeletingSalaryId(id);
       await api(`/payroll/salary-structure/${encodeURIComponent(id)}`, {
@@ -1331,9 +1587,19 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
         body: JSON.stringify(tenantParams()),
       });
       await loadSalaryHistory(selectedEmployeeId);
-      alerts.success('Salary structure draft deleted.', 'Draft Deleted');
+      showInlineFeedback(
+        'salary-history',
+        'success',
+        'Salary structure draft deleted.',
+        'Draft Deleted',
+      );
     } catch (error) {
-      alerts.error(error.message || 'Unable to delete salary structure draft.', 'Delete Failed');
+      showInlineFeedback(
+        'salary-history',
+        'error',
+        error.message || 'Unable to delete salary structure draft.',
+        'Delete Failed',
+      );
     } finally {
       setDeletingSalaryId('');
     }
@@ -1426,7 +1692,6 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
       },
     }));
   }
-
   function applyAssamProfessionalTaxPreset() {
     setStateCode('AS');
     setStatutoryForm((current) => ({
@@ -1447,7 +1712,9 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
       },
     }));
 
-    alerts.success(
+    showInlineFeedback(
+      'pt-preset',
+      'success',
       'Assam Professional Tax slabs were loaded into the current draft without changing your selected effective date. Review and save the draft before activation.',
       'Assam PT Preset Loaded',
     );
@@ -1520,14 +1787,26 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
       },
     };
   }
-
   async function saveStatutoryDraft() {
     const normalizedCode = safeText(statutoryForm.state_code, 'ALL').toUpperCase();
 
     if (normalizedCode !== 'ALL' && normalizedCode.length !== 2) {
-      alerts.warning('Use a two-letter state code or ALL.', 'Invalid State Code');
+      showInlineFeedback(
+        'statutory-actions',
+        'warning',
+        'Use a two-letter state code or ALL.',
+        'Invalid State Code',
+      );
       return;
     }
+
+    showInlineFeedback(
+      'statutory-actions',
+      'info',
+      'Saving the current statutory configuration draft...',
+      'Saving Draft',
+      { loading: true },
+    );
 
     try {
       setSavingStatutory(true);
@@ -1540,19 +1819,33 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
       setStateCode(safeText(saved.state_code, normalizedCode));
       setStatutoryForm(statutoryFormFromDocument(saved));
       await loadStatutoryHistory(safeText(saved.state_code, normalizedCode));
-      alerts.success('Statutory configuration draft saved.', 'Draft Saved');
+      showInlineFeedback(
+        'statutory-actions',
+        'success',
+        'Statutory configuration draft saved.',
+        'Draft Saved',
+      );
     } catch (error) {
-      alerts.error(error.message || 'Unable to save statutory configuration.', 'Save Failed');
+      showInlineFeedback(
+        'statutory-actions',
+        'error',
+        error.message || 'Unable to save statutory configuration.',
+        'Save Failed',
+      );
     } finally {
       setSavingStatutory(false);
     }
   }
-
   async function activateStatutoryDraft(document = statutoryForm) {
     const id = documentId(document) || document.id;
 
     if (!id || normalizeKey(document.status) !== 'draft') {
-      alerts.warning('Save or select a statutory configuration draft first.', 'Draft Required');
+      showInlineFeedback(
+        'statutory-actions',
+        'warning',
+        'Save or select a statutory configuration draft first.',
+        'Draft Required',
+      );
       return;
     }
 
@@ -1568,6 +1861,14 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
       return;
     }
 
+    showInlineFeedback(
+      'statutory-actions',
+      'info',
+      'Activating the selected statutory revision...',
+      'Activating Revision',
+      { loading: true },
+    );
+
     try {
       setSavingStatutory(true);
       await api(`/payroll/statutory-config/${encodeURIComponent(id)}/activate`, {
@@ -1576,19 +1877,33 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
       });
       await loadStatutoryHistory(statutoryForm.state_code);
       await loadEmployeeStatutoryReadiness(selectedEmployee);
-      alerts.success('Statutory revision activated.', 'Revision Activated');
+      showInlineFeedback(
+        'statutory-actions',
+        'success',
+        'Statutory revision activated.',
+        'Revision Activated',
+      );
     } catch (error) {
-      alerts.error(error.message || 'Unable to activate statutory revision.', 'Activation Failed');
+      showInlineFeedback(
+        'statutory-actions',
+        'error',
+        error.message || 'Unable to activate statutory revision.',
+        'Activation Failed',
+      );
     } finally {
       setSavingStatutory(false);
     }
   }
-
   async function deleteActiveStatutoryRevision(document = {}) {
     const id = documentId(document);
 
     if (!id || normalizeKey(document.status) !== 'active') {
-      alerts.warning('Only the currently active statutory revision can be deleted with this action.', 'Active Revision Required');
+      showInlineFeedback(
+        'statutory-history',
+        'warning',
+        'Only the currently active statutory revision can be deleted with this action.',
+        'Active Revision Required',
+      );
       return;
     }
 
@@ -1604,6 +1919,14 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
       return;
     }
 
+    showInlineFeedback(
+      'statutory-history',
+      'info',
+      'Deleting the active statutory revision...',
+      'Deleting Active Revision',
+      { loading: true },
+    );
+
     try {
       setDeletingStatutoryId(id);
       const data = await api(`/payroll/statutory-config/${encodeURIComponent(id)}/active`, {
@@ -1612,12 +1935,16 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
       });
       await loadStatutoryHistory(safeText(document.state_code, stateCode));
       await loadEmployeeStatutoryReadiness(selectedEmployee);
-      alerts.success(
+      showInlineFeedback(
+        'statutory-history',
+        'success',
         data.message || 'Active statutory revision deleted. You can now activate the corrected draft.',
         'Active Revision Deleted',
       );
     } catch (error) {
-      alerts.error(
+      showInlineFeedback(
+        'statutory-history',
+        'error',
         error.message || 'Unable to delete the active statutory revision.',
         'Delete Active Revision Failed',
       );
@@ -1625,12 +1952,16 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
       setDeletingStatutoryId('');
     }
   }
-
   async function deleteSupersededStatutoryRevision(document = {}) {
     const id = documentId(document);
 
     if (!id || normalizeKey(document.status) !== 'superseded') {
-      alerts.warning('Only superseded statutory revisions can be deleted with this action.', 'Superseded Revision Required');
+      showInlineFeedback(
+        'statutory-history',
+        'warning',
+        'Only superseded statutory revisions can be deleted with this action.',
+        'Superseded Revision Required',
+      );
       return;
     }
 
@@ -1646,6 +1977,14 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
       return;
     }
 
+    showInlineFeedback(
+      'statutory-history',
+      'info',
+      'Deleting the superseded statutory revision...',
+      'Deleting Superseded Revision',
+      { loading: true },
+    );
+
     try {
       setDeletingStatutoryId(id);
       const data = await api(`/payroll/statutory-config/${encodeURIComponent(id)}/superseded`, {
@@ -1654,12 +1993,16 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
       });
       await loadStatutoryHistory(safeText(document.state_code, stateCode));
       await loadEmployeeStatutoryReadiness(selectedEmployee);
-      alerts.success(
+      showInlineFeedback(
+        'statutory-history',
+        'success',
         data.message || 'Superseded statutory revision deleted successfully.',
         'Superseded Revision Deleted',
       );
     } catch (error) {
-      alerts.error(
+      showInlineFeedback(
+        'statutory-history',
+        'error',
         error.message || 'Unable to delete the superseded statutory revision.',
         'Delete Superseded Revision Failed',
       );
@@ -1667,12 +2010,16 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
       setDeletingStatutoryId('');
     }
   }
-
   async function deleteStatutoryDraft(document = {}) {
     const id = documentId(document);
 
     if (!id || normalizeKey(document.status) !== 'draft') {
-      alerts.warning('Only statutory configuration drafts can be deleted.', 'Draft Required');
+      showInlineFeedback(
+        'statutory-history',
+        'warning',
+        'Only statutory configuration drafts can be deleted.',
+        'Draft Required',
+      );
       return;
     }
 
@@ -1688,6 +2035,14 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
       return;
     }
 
+    showInlineFeedback(
+      'statutory-history',
+      'info',
+      'Deleting the selected statutory configuration draft...',
+      'Deleting Draft',
+      { loading: true },
+    );
+
     try {
       setDeletingStatutoryId(id);
       await api(`/payroll/statutory-config/${encodeURIComponent(id)}`, {
@@ -1696,9 +2051,19 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
       });
       await loadStatutoryHistory(safeText(document.state_code, stateCode));
       await loadEmployeeStatutoryReadiness(selectedEmployee);
-      alerts.success('Statutory configuration draft deleted.', 'Draft Deleted');
+      showInlineFeedback(
+        'statutory-history',
+        'success',
+        'Statutory configuration draft deleted.',
+        'Draft Deleted',
+      );
     } catch (error) {
-      alerts.error(error.message || 'Unable to delete statutory configuration draft.', 'Delete Failed');
+      showInlineFeedback(
+        'statutory-history',
+        'error',
+        error.message || 'Unable to delete statutory configuration draft.',
+        'Delete Failed',
+      );
     } finally {
       setDeletingStatutoryId('');
     }
@@ -1870,6 +2235,12 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
         </div>
       </header>
 
+      <PayrollInlineMessage
+        feedback={inlineFeedback.page}
+        onClose={() => clearInlineFeedback('page')}
+        className="payroll-page-feedback"
+      />
+
       {superAdmin ? (
         <section className="payroll-config-card payroll-config-tenant-card">
           <label>
@@ -1880,10 +2251,20 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
               placeholder="Enter tenant ID"
             />
           </label>
-          <button type="button" className="secondary" onClick={() => loadEmployees()}>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => loadEmployees({ feedbackScope: 'tenant-load' })}
+          >
             {loadingEmployees ? <Loader2 size={16} className="spin" /> : <RefreshCw size={16} />}
             Load Company
           </button>
+
+          <PayrollInlineMessage
+            feedback={inlineFeedback['tenant-load']}
+            onClose={() => clearInlineFeedback('tenant-load')}
+            className="payroll-full-feedback"
+          />
         </section>
       ) : null}
 
@@ -1974,50 +2355,86 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
                 <span className="payroll-config-kicker">Employee</span>
                 <h2>Select employee</h2>
               </div>
-              <button type="button" className="icon-button" onClick={() => loadEmployees()}>
+              <button
+                type="button"
+                className="icon-button"
+                onClick={() => loadEmployees({ feedbackScope: 'employee-load' })}
+                aria-label="Refresh employees"
+              >
                 {loadingEmployees ? <Loader2 size={16} className="spin" /> : <RefreshCw size={16} />}
               </button>
             </div>
 
-            <div className="payroll-config-search">
-              <Search size={16} />
-              <input
-                value={employeeSearch}
-                onChange={(event) => setEmployeeSearch(event.target.value)}
-                placeholder="Search employee"
-              />
+            <PayrollInlineMessage
+              feedback={inlineFeedback['employee-load']}
+              onClose={() => clearInlineFeedback('employee-load')}
+            />
+
+            <div className="payroll-config-employee-picker">
+              <div className="payroll-config-search">
+                <Search size={16} />
+                <input
+                  value={employeeSearch}
+                  onChange={(event) => setEmployeeSearch(event.target.value)}
+                  placeholder="Search employee"
+                />
+              </div>
+
+              <label className="payroll-config-employee-dropdown">
+                <span>Employee</span>
+                <select
+                  value={selectedEmployeeId}
+                  onChange={(event) => selectEmployee(event.target.value)}
+                  disabled={loadingEmployees || (!filteredEmployees.length && !selectedEmployeeId)}
+                  aria-label="Select employee"
+                >
+                  <option value="">
+                    {loadingEmployees
+                      ? 'Loading employees...'
+                      : filteredEmployees.length
+                        ? 'Choose an employee'
+                        : 'No employees found'}
+                  </option>
+
+                  {selectedEmployeeId &&
+                  selectedEmployee &&
+                  !filteredEmployees.some((employee) => employeeId(employee) === selectedEmployeeId) ? (
+                    <option value={selectedEmployeeId}>
+                      {employeeName(selectedEmployee)} · {employeeCode(selectedEmployee)} · {safeText(selectedEmployee.designation, 'No designation')}
+                    </option>
+                  ) : null}
+
+                  {filteredEmployees.map((employee) => {
+                    const id = employeeId(employee);
+                    return (
+                      <option key={id} value={id}>
+                        {employeeName(employee)} · {employeeCode(employee)} · {safeText(employee.designation, 'No designation')}
+                      </option>
+                    );
+                  })}
+                </select>
+              </label>
             </div>
 
-            <div className="payroll-config-employee-list">
-              {filteredEmployees.map((employee) => {
-                const id = employeeId(employee);
-                return (
-                  <button
-                    type="button"
-                    key={id}
-                    className={selectedEmployeeId === id ? 'active' : ''}
-                    onClick={() => selectEmployee(id)}
-                  >
-                    <strong>{employeeName(employee)}</strong>
-                    <span>{employeeCode(employee)} · {safeText(employee.designation, 'No designation')}</span>
-                  </button>
-                );
-              })}
-
-              {!loadingEmployees && filteredEmployees.length === 0 ? (
-                <div className="payroll-config-empty">No employees found.</div>
-              ) : null}
+            <div className="payroll-config-employee-list-meta" aria-live="polite">
+              <span>{filteredEmployees.length} {filteredEmployees.length === 1 ? 'employee' : 'employees'}</span>
+              {selectedEmployeeId ? (
+                <span className="payroll-config-selected-employee" title={employeeName(selectedEmployee || {})}>
+                  Selected: <strong>{employeeName(selectedEmployee || {})}</strong>
+                </span>
+              ) : (
+                <span>Select one to continue</span>
+              )}
             </div>
           </aside>
 
-          <main ref={payrollMainRef} className="payroll-config-main">
-            {!selectedEmployeeId ? (
-              <section className="payroll-config-card payroll-config-placeholder">
-                <Users size={34} />
-                <h2>Select an employee</h2>
-                <p>Choose an employee to create or revise their salary structure.</p>
-              </section>
-            ) : (
+          <main className="payroll-config-main">
+            <PayrollInlineMessage
+              feedback={inlineFeedback['salary-load']}
+              onClose={() => clearInlineFeedback('salary-load')}
+            />
+
+            {selectedEmployeeId ? (
               <>
                 {salaryValidationIssues.length ? (
                   <section className="payroll-config-inline-issues">
@@ -2122,6 +2539,11 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
                       <Plus size={16} /> Add Component
                     </button>
                   </div>
+
+                  <PayrollInlineMessage
+                    feedback={inlineFeedback['salary-components']}
+                    onClose={() => clearInlineFeedback('salary-components')}
+                  />
 
                   <div className="payroll-component-list">
                     {salaryForm.components.map((component, index) => {
@@ -2367,6 +2789,12 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
                       <CheckCircle2 size={16} /> Activate Revision
                     </button>
                   </div>
+
+                  <PayrollInlineMessage
+                    feedback={inlineFeedback['salary-actions']}
+                    onClose={() => clearInlineFeedback('salary-actions')}
+                    className="payroll-action-feedback"
+                  />
                 </section>
 
                 <section className="payroll-config-card">
@@ -2374,9 +2802,15 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
                     <div>
                       <span className="payroll-config-kicker">Audit history</span>
                       <h2>Salary revision history</h2>
+                      <p>For an earlier payroll month, save and approve a revision for the missing historical period. Approved dates must not overlap.</p>
                     </div>
                     <FileClock size={22} />
                   </div>
+
+                  <PayrollInlineMessage
+                    feedback={inlineFeedback['salary-history']}
+                    onClose={() => clearInlineFeedback('salary-history')}
+                  />
 
                   <div className="payroll-config-history">
                     {salaryHistory.map((item) => (
@@ -2384,7 +2818,7 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
                         <div>
                           <strong>Version {item.version || '—'}</strong>
                           <span className={`payroll-config-status status-${normalizeKey(item.status)}`}>
-                            {statusLabel(item.status)}
+                            {item.activation_type === 'historical' ? 'Historical' : statusLabel(item.status)}
                           </span>
                         </div>
                         <p>
@@ -2435,7 +2869,7 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
                   </div>
                 </section>
               </>
-            )}
+            ) : null}
           </main>
         </div>
       ) : (
@@ -2462,11 +2896,20 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
                   placeholder="ALL or AS"
                 />
               </label>
-              <button type="button" className="secondary" onClick={() => loadStatutoryHistory(stateCode)}>
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => loadStatutoryHistory(stateCode, 'statutory-load')}
+              >
                 {loadingStatutory ? <Loader2 size={16} className="spin" /> : <RefreshCw size={16} />}
                 Load Rules
               </button>
             </div>
+
+            <PayrollInlineMessage
+              feedback={inlineFeedback['statutory-load']}
+              onClose={() => clearInlineFeedback('statutory-load')}
+            />
           </section>
 
           {statutoryValidationIssues.length ? (
@@ -2669,6 +3112,11 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
               </div>
             </div>
 
+            <PayrollInlineMessage
+              feedback={inlineFeedback['pt-preset']}
+              onClose={() => clearInlineFeedback('pt-preset')}
+            />
+
             {safeText(statutoryForm.state_code).toUpperCase() === 'AS' ? (
               <div className="payroll-config-info-notice">
                 <CheckCircle2 size={17} />
@@ -2818,6 +3266,12 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
                 <CheckCircle2 size={16} /> Activate Revision
               </button>
             </div>
+
+            <PayrollInlineMessage
+              feedback={inlineFeedback['statutory-actions']}
+              onClose={() => clearInlineFeedback('statutory-actions')}
+              className="payroll-action-feedback"
+            />
           </section>
 
           <section className="payroll-config-card">
@@ -2828,6 +3282,11 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
               </div>
               <FileClock size={22} />
             </div>
+
+            <PayrollInlineMessage
+              feedback={inlineFeedback['statutory-history']}
+              onClose={() => clearInlineFeedback('statutory-history')}
+            />
 
             <div className="payroll-config-history payroll-config-history-wide">
               {statutoryHistory.map((item) => (
@@ -2916,6 +3375,7 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
           --pc-teal: #34c9c4;
           --pc-danger: #d84d68;
           --pc-line: rgba(16, 26, 58, .14);
+          --payroll-sticky-top: var(--app-sticky-top, 18px);
 
           display: grid;
           gap: clamp(18px, 2vw, 26px);
@@ -3094,7 +3554,7 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
           .payroll-config-page .success-button:hover:not(:disabled),
           .payroll-config-page .danger-light:hover:not(:disabled),
           .payroll-config-page .icon-button:hover:not(:disabled),
-          .payroll-config-card:hover,
+          .payroll-config-card:not(.payroll-config-sidebar):hover,
           .payroll-config-step:hover:not(:disabled),
           .payroll-component-row:hover,
           .payroll-config-history article:hover {
@@ -3490,46 +3950,68 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
         }
 
         .payroll-config-layout {
+          position: relative;
           display: grid;
-          grid-template-columns: minmax(280px, 330px) minmax(0, 1fr);
+          grid-template-columns: 1fr;
           gap: 22px;
           align-items: start;
         }
 
         .payroll-config-sidebar {
-          position: relative;
+          position: sticky;
+          z-index: 30;
+          top: var(--payroll-sticky-top);
           align-self: start;
           display: grid;
-          grid-template-rows: auto auto minmax(0, 1fr);
-          gap: 14px;
-          height: fit-content;
-          max-height: calc(100vh - 36px);
-          overflow: hidden;
+          grid-template-rows: auto auto auto auto;
+          gap: 12px;
+          width: 100%;
+          min-width: 0;
+          height: auto;
+          max-height: none;
+          overflow: visible;
+          transform: none !important;
         }
 
-        .payroll-config-layout {
-          position: relative;
+        .payroll-config-sidebar .payroll-config-section-head {
+          margin-bottom: 0;
         }
 
-        .payroll-config-sidebar.is-sticky-fixed {
-          position: fixed;
-          z-index: 30;
-          top: 18px;
-          left: var(--payroll-sidebar-left);
-          width: var(--payroll-sidebar-width);
-          height: var(--payroll-sidebar-height);
-          max-height: calc(100vh - 36px);
+        .payroll-config-employee-picker {
+          display: grid;
+          grid-template-columns: minmax(220px, .8fr) minmax(300px, 1.2fr);
+          gap: 12px;
+          align-items: end;
+          min-width: 0;
         }
 
-        .payroll-config-sidebar.is-sticky-bottom {
-          position: absolute;
-          z-index: 30;
-          top: auto;
-          bottom: 0;
-          left: 0;
-          width: var(--payroll-sidebar-width);
-          height: var(--payroll-sidebar-height);
-          max-height: calc(100vh - 36px);
+        .payroll-config-employee-dropdown {
+          display: grid;
+          gap: 7px;
+          min-width: 0;
+        }
+
+        .payroll-config-employee-dropdown > span {
+          color: #56617d;
+          font-size: 10px;
+          font-weight: 900;
+          letter-spacing: .035em;
+          text-transform: uppercase;
+        }
+
+        .payroll-config-employee-dropdown select {
+          width: 100%;
+          min-width: 0;
+          min-height: 47px;
+          padding-right: 38px;
+          border-color: rgba(171,181,211,.62);
+          background: #ffffff;
+          box-shadow: 3px 4px 0 rgba(52,43,120,.07);
+          cursor: pointer;
+        }
+
+        .payroll-config-employee-dropdown select:disabled {
+          cursor: not-allowed;
         }
 
         .payroll-config-main {
@@ -3538,8 +4020,14 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
           min-width: 0;
         }
 
+
+        .payroll-config-main section[id],
+        .payroll-config-statutory-main [id] {
+          scroll-margin-top: calc(var(--payroll-sticky-top) + 16px);
+        }
+
         .payroll-config-layout > .payroll-config-main {
-          grid-column: 2;
+          grid-column: 1;
         }
 
         .payroll-config-statutory-main {
@@ -3579,12 +4067,65 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
           box-shadow: none !important;
         }
 
+        .payroll-config-employee-list-meta {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 10px;
+          min-width: 0;
+          padding: 0 2px;
+          color: #6b7694;
+          font-size: 10px;
+          font-weight: 800;
+          line-height: 1.35;
+        }
+
+        .payroll-config-employee-list-meta > span {
+          min-width: 0;
+        }
+
+        .payroll-config-selected-employee {
+          max-width: 62%;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+          text-align: right;
+        }
+
+        .payroll-config-selected-employee strong {
+          color: var(--pc-violet-deep);
+          font-weight: 900;
+        }
+
         .payroll-config-employee-list {
           display: grid;
           gap: 9px;
           min-height: 0;
-          overflow: auto;
-          padding-right: 3px;
+          max-height: none;
+          overflow: visible;
+          overscroll-behavior: auto;
+          scrollbar-gutter: auto;
+          padding: 1px 8px 8px 1px;
+        }
+
+        .payroll-config-employee-list::-webkit-scrollbar {
+          width: 8px;
+        }
+
+        .payroll-config-employee-list::-webkit-scrollbar-track {
+          background: transparent;
+        }
+
+        .payroll-config-employee-list::-webkit-scrollbar-thumb {
+          border: 2px solid transparent;
+          border-radius: 999px;
+          background: rgba(102,88,220,.38);
+          background-clip: padding-box;
+        }
+
+        .payroll-config-employee-list::-webkit-scrollbar-thumb:hover {
+          background: rgba(64,52,141,.58);
+          background-clip: padding-box;
         }
 
         .payroll-config-employee-list button {
@@ -3621,25 +4162,20 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
           box-shadow: 4px 5px 0 #c9c0ff;
         }
 
-        .payroll-config-placeholder {
-          display: grid;
-          min-height: 320px;
-          place-items: center;
-          align-content: center;
-          color: var(--pc-copy);
-          text-align: center;
+
+        @media (hover: hover) and (pointer: fine) {
+          .payroll-config-employee-list button:hover:not(.active) {
+            transform: translateY(-1px);
+            border-color: rgba(102,88,220,.30);
+            background: #f8f8ff;
+            box-shadow: 4px 5px 0 rgba(102,88,220,.12);
+          }
         }
 
-        .payroll-config-placeholder h2 {
-          margin: 12px 0 4px;
-          color: var(--pc-ink);
-          font-family: var(--yc-display, Georgia, "Times New Roman", serif);
-          font-size: clamp(24px, 2.2vw, 34px);
-        }
-
-        .payroll-config-placeholder p {
-          margin: 0;
-          line-height: 1.6;
+        .payroll-config-employee-list button:focus-visible {
+          outline: 3px solid rgba(102,88,220,.22);
+          outline-offset: 2px;
+          border-color: rgba(102,88,220,.58);
         }
 
         .payroll-config-form-grid {
@@ -4022,7 +4558,7 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
           }
 
           .payroll-config-layout {
-            grid-template-columns: minmax(250px, 300px) minmax(0, 1fr);
+            grid-template-columns: 1fr;
           }
 
           .payroll-config-form-grid-3 {
@@ -4048,14 +4584,9 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
             grid-column: 1;
           }
 
-          .payroll-config-sidebar,
-          .payroll-config-sidebar.is-sticky-fixed,
-          .payroll-config-sidebar.is-sticky-bottom {
-            position: static;
-            top: auto;
-            right: auto;
-            bottom: auto;
-            left: auto;
+          .payroll-config-sidebar {
+            position: sticky;
+            top: var(--payroll-sticky-top);
             width: 100%;
             height: auto;
             max-height: none;
@@ -4063,7 +4594,9 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
           }
 
           .payroll-config-employee-list {
-            max-height: 320px;
+            max-height: none;
+            overflow: visible;
+            overscroll-behavior: auto;
           }
 
           .payroll-config-step-map {
@@ -4071,7 +4604,29 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
           }
         }
 
+
+        @media (pointer: coarse) {
+          .payroll-config-sidebar {
+            position: sticky;
+            top: var(--payroll-sticky-top);
+            width: 100%;
+            height: auto;
+            max-height: none;
+            overflow: visible;
+          }
+
+          .payroll-config-employee-list {
+            max-height: none;
+            overflow: visible;
+            overscroll-behavior: auto;
+          }
+        }
+
         @media (max-width: 820px) {
+          .payroll-config-employee-picker {
+            grid-template-columns: 1fr;
+          }
+
           .payroll-config-page {
             gap: 18px;
           }
@@ -4126,6 +4681,17 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
         }
 
         @media (max-width: 680px) {
+          .payroll-config-employee-list-meta {
+            align-items: flex-start;
+            flex-direction: column;
+            gap: 4px;
+          }
+
+          .payroll-config-selected-employee {
+            max-width: 100%;
+            text-align: left;
+          }
+
           .payroll-config-page {
             gap: 15px;
           }
@@ -4300,6 +4866,491 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
             padding: 13px;
           }
         }
+
+        /* Final visual system: Career/IT Support-aligned, display-only overrides. */
+        .payroll-config-page {
+          --pc-ink: #101a3a;
+          --pc-copy: #64708d;
+          --pc-violet: #6658dc;
+          --pc-violet-deep: #40348d;
+          --pc-blue: #4d77dd;
+          --pc-cyan: #2eb2b9;
+          --pc-teal: #34c9c4;
+          --pc-danger: #b4234f;
+          --pc-line: rgba(171,181,211,.62);
+
+          width: min(1280px, calc(100% - 48px));
+          max-width: 1280px;
+          min-width: 0;
+          margin: 0 auto;
+          padding: 0 14px 18px 0;
+          overflow: visible;
+        }
+
+        .payroll-config-page > * {
+          min-width: 0;
+          max-width: 100%;
+        }
+
+        .payroll-config-hero {
+          min-height: 250px;
+          padding: clamp(26px, 3.2vw, 42px);
+          border: 1px solid rgba(154,164,205,.58);
+          border-radius: clamp(28px, 2.7vw, 40px);
+          background: linear-gradient(
+            90deg,
+            #d3f4fb 0%,
+            #f7fcfb 34%,
+            #fffdf8 52%,
+            #fbf8fa 68%,
+            #f0edfb 100%
+          );
+          box-shadow:
+            10px 12px 0 #b9d7ff,
+            0 26px 44px rgba(70,92,140,.12);
+        }
+
+        .payroll-config-eyebrow {
+          color: #fff;
+          background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+          box-shadow: 4px 5px 0 #575092;
+        }
+
+        .payroll-config-kicker {
+          color: #40348d;
+          background: #f1efff;
+          box-shadow: 3px 4px 0 #c9c0ff;
+        }
+
+        .payroll-config-tax-button {
+          border: 1px solid rgba(102,88,220,.18);
+          color: #40348d;
+          background: #f5f5ff;
+          box-shadow:
+            5px 6px 0 #c9c0ff,
+            0 14px 25px rgba(44,75,116,.10);
+        }
+
+        .payroll-config-hero-icon {
+          border-color: rgba(102,88,220,.18);
+          color: #40348d;
+          background: #f5f5ff;
+          box-shadow:
+            6px 7px 0 #c9c0ff,
+            0 14px 25px rgba(44,75,116,.10);
+        }
+
+        .payroll-config-card {
+          padding: clamp(20px, 2vw, 26px);
+          border: 1px solid rgba(171,181,211,.70);
+          border-radius: clamp(24px, 2.1vw, 34px);
+          background: #ffffff;
+          box-shadow:
+            8px 10px 0 #c4ccff,
+            0 22px 38px rgba(34,38,110,.09);
+        }
+
+        .payroll-config-tenant-card {
+          background: #edf6ff;
+          box-shadow:
+            8px 10px 0 #b9d7ff,
+            0 22px 38px rgba(34,38,110,.09);
+        }
+
+        .payroll-config-roadmap {
+          background: #ffffff;
+          box-shadow:
+            8px 10px 0 #c9c0ff,
+            0 22px 38px rgba(34,38,110,.09);
+        }
+
+        .payroll-config-sidebar {
+          background: #f8f9ff;
+          box-shadow:
+            8px 10px 0 #c9c0ff,
+            0 22px 38px rgba(34,38,110,.09);
+        }
+
+        .payroll-config-rule-grid .payroll-config-rule-card:nth-child(1) {
+          box-shadow:
+            8px 10px 0 #b9d7ff,
+            0 22px 38px rgba(34,38,110,.09);
+        }
+
+        .payroll-config-rule-grid .payroll-config-rule-card:nth-child(2) {
+          box-shadow:
+            8px 10px 0 #aee6d9,
+            0 22px 38px rgba(34,38,110,.09);
+        }
+
+        .payroll-config-tabs {
+          padding: 10px;
+          border: 1px solid rgba(171,181,211,.62);
+          border-radius: 22px;
+          background: #f8f9ff;
+          box-shadow: 5px 6px 0 rgba(52,43,120,.08);
+        }
+
+        .payroll-config-tabs button {
+          min-height: 48px;
+          border: 1px solid rgba(102,88,220,.16);
+          border-radius: 14px;
+          color: #40348d;
+          background: #f5f5ff;
+          box-shadow: 3px 4px 0 #c9c0ff;
+        }
+
+        .payroll-config-tabs button.active {
+          border-color: rgba(77,119,221,.18);
+          color: #fff;
+          background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+          box-shadow:
+            5px 6px 0 #575092,
+            0 12px 22px rgba(67,116,170,.13);
+        }
+
+        .payroll-config-page .primary,
+        .payroll-config-page .secondary,
+        .payroll-config-page .success-button,
+        .payroll-config-page .danger-light {
+          min-height: 46px;
+          border-radius: 14px;
+        }
+
+        .payroll-config-page .primary {
+          border: 1px solid rgba(77,119,221,.18);
+          background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+          box-shadow:
+            5px 6px 0 #575092,
+            0 12px 22px rgba(67,116,170,.13);
+        }
+
+        .payroll-config-page .secondary {
+          border: 1px solid rgba(102,88,220,.18);
+          color: #40348d;
+          background: #f5f5ff;
+          box-shadow: 3px 4px 0 #c9c0ff;
+        }
+
+        .payroll-config-page .success-button {
+          background: linear-gradient(135deg, #2b8c68 0%, #34b38a 100%);
+          box-shadow:
+            4px 5px 0 #aee6d9,
+            0 12px 22px rgba(22,116,75,.14);
+        }
+
+        .payroll-config-page .danger-light {
+          border: 1px solid rgba(180,70,94,.20);
+          color: #a2344d;
+          background: #fff0f2;
+          box-shadow: 3px 4px 0 #f2c2cc;
+        }
+
+        .payroll-config-page .icon-button {
+          width: 44px;
+          min-width: 44px;
+          height: 44px;
+          min-height: 44px;
+          border: 1px solid rgba(102,88,220,.18);
+          color: #40348d;
+          background: #f5f5ff;
+          box-shadow: 3px 4px 0 #c9c0ff;
+        }
+
+        .payroll-config-page input,
+        .payroll-config-page select,
+        .payroll-config-page textarea {
+          border: 1px solid rgba(159,169,205,.62);
+          border-radius: 14px;
+          color: #101a3a;
+          background: #ffffff;
+        }
+
+        .payroll-config-page input:focus,
+        .payroll-config-page select:focus,
+        .payroll-config-page textarea:focus {
+          border-color: rgba(77,119,221,.78);
+          box-shadow: 0 0 0 4px rgba(77,119,221,.09);
+          transform: none;
+        }
+
+        .payroll-config-search {
+          border-color: rgba(171,181,211,.55);
+          border-radius: 14px;
+          background: #ffffff;
+          box-shadow: 3px 4px 0 rgba(52,43,120,.06);
+        }
+
+        .payroll-config-search:focus-within {
+          border-color: rgba(77,119,221,.72);
+          box-shadow: 0 0 0 4px rgba(77,119,221,.09);
+          transform: none;
+        }
+
+        .payroll-config-employee-list button {
+          border-color: rgba(171,181,211,.52);
+          border-radius: 16px;
+          background: #ffffff;
+          box-shadow: 3px 4px 0 rgba(52,43,120,.06);
+        }
+
+        .payroll-config-employee-list button.active {
+          border-color: rgba(102,88,220,.34);
+          color: #40348d;
+          background: #f1efff;
+          box-shadow: 4px 5px 0 #c9c0ff;
+        }
+
+        .payroll-component-row {
+          border-color: rgba(171,181,211,.58);
+          border-radius: 20px;
+          background: #ffffff;
+          box-shadow: 4px 5px 0 rgba(52,43,120,.07);
+        }
+
+        .payroll-component-summary {
+          background: linear-gradient(145deg, #edf6ff, #f1efff);
+        }
+
+        .payroll-config-check,
+        .payroll-switch {
+          border-color: rgba(102,88,220,.20);
+          color: #40348d;
+          background: #f5f5ff;
+          box-shadow: 3px 4px 0 rgba(52,43,120,.07);
+        }
+
+        .payroll-config-history article {
+          border-color: rgba(171,181,211,.58);
+          border-radius: 20px;
+          background: #ffffff;
+          box-shadow: 5px 6px 0 #b9d7ff;
+        }
+
+        .payroll-config-history article:nth-child(3n + 2) {
+          box-shadow: 5px 6px 0 #c9c0ff;
+        }
+
+        .payroll-config-history article:nth-child(3n + 3) {
+          box-shadow: 5px 6px 0 #aee6d9;
+        }
+
+        .payroll-config-info-notice {
+          border-color: rgba(4,120,87,.18);
+          color: #047857;
+          background: #eaf8f4;
+          box-shadow: 3px 4px 0 #aee6d9;
+        }
+
+        .payroll-config-notice {
+          border-color: rgba(154,104,23,.18);
+          color: #8a5a17;
+          background: #fff4d5;
+          box-shadow: 3px 4px 0 #ffe0a5;
+        }
+
+        .payroll-config-inline-issues,
+        .payroll-config-issues {
+          border-color: rgba(162,52,77,.18);
+          background: #fff8ed;
+          box-shadow: 4px 5px 0 #ffe0a5;
+        }
+
+        .payroll-pt-table-wrap {
+          border-color: rgba(171,181,211,.55);
+          border-radius: 20px;
+          background: #ffffff;
+          box-shadow: 5px 6px 0 rgba(52,43,120,.08);
+        }
+
+        .payroll-pt-table th {
+          color: #4f5e7f;
+          background: #f1efff;
+        }
+
+        .payroll-inline-feedback {
+          display: grid;
+          grid-template-columns: auto minmax(0, 1fr) auto;
+          gap: 9px;
+          align-items: start;
+          width: 100%;
+          min-width: 0;
+          margin-top: 10px;
+          padding: 10px 11px;
+          border: 1px solid rgba(102,88,220,.18);
+          border-radius: 12px;
+          color: #40348d;
+          background: #f1efff;
+          box-shadow: 3px 4px 0 #c9c0ff;
+          font-size: 10px;
+          line-height: 1.45;
+          animation: payrollFeedbackIn .18s ease both;
+        }
+
+        .payroll-inline-feedback.success {
+          border-color: rgba(4,120,87,.18);
+          color: #047857;
+          background: #eaf8f4;
+          box-shadow: 3px 4px 0 #aee6d9;
+        }
+
+        .payroll-inline-feedback.warning {
+          border-color: rgba(154,104,23,.18);
+          color: #9a6817;
+          background: #fff4d5;
+          box-shadow: 3px 4px 0 #ffe0a5;
+        }
+
+        .payroll-inline-feedback.error {
+          border-color: rgba(162,52,77,.18);
+          color: #a2344d;
+          background: #fff0f2;
+          box-shadow: 3px 4px 0 #f2c2cc;
+        }
+
+        .payroll-inline-feedback-icon {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          width: 22px;
+          height: 22px;
+        }
+
+        .payroll-inline-feedback-copy {
+          min-width: 0;
+        }
+
+        .payroll-inline-feedback-copy strong,
+        .payroll-inline-feedback-copy span {
+          display: block;
+          overflow-wrap: anywhere;
+        }
+
+        .payroll-inline-feedback-copy strong {
+          margin-bottom: 2px;
+          font-weight: 950;
+        }
+
+        .payroll-inline-feedback-copy span {
+          font-weight: 750;
+        }
+
+        .payroll-inline-feedback-close {
+          width: 24px;
+          min-width: 24px;
+          height: 24px;
+          min-height: 24px !important;
+          display: inline-grid !important;
+          place-items: center;
+          padding: 0 !important;
+          border: 0 !important;
+          border-radius: 8px !important;
+          color: currentColor !important;
+          background: rgba(255,255,255,.58) !important;
+          box-shadow: none !important;
+          cursor: pointer;
+        }
+
+        .payroll-full-feedback {
+          flex: 1 0 100%;
+          margin-top: 2px;
+        }
+
+        .payroll-action-feedback {
+          margin-top: 12px;
+        }
+
+        .payroll-page-feedback {
+          width: min(760px, 100%);
+          margin-top: -6px;
+        }
+
+        @keyframes payrollFeedbackIn {
+          from {
+            opacity: 0;
+            transform: translateY(-4px);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0);
+          }
+        }
+
+        @media (max-width: 1100px) {
+          .payroll-config-page {
+            width: min(100% - 28px, 1280px);
+            padding-right: 12px;
+          }
+        }
+
+        @media (max-width: 820px) {
+          .payroll-config-page {
+            width: min(100% - 20px, 1280px);
+            padding-right: 10px;
+          }
+
+          .payroll-config-hero {
+            min-height: 0;
+          }
+
+          .payroll-config-history {
+            grid-template-columns: 1fr;
+          }
+        }
+
+        @media (max-width: 680px) {
+          .payroll-config-page {
+            width: calc(100% - 16px);
+            padding-right: 8px;
+          }
+
+          .payroll-config-hero,
+          .payroll-config-card {
+            border-radius: 22px;
+          }
+
+          .payroll-config-tenant-card,
+          .payroll-config-state-loader,
+          .payroll-config-inline-field,
+          .payroll-config-actions {
+            align-items: stretch;
+          }
+
+          .payroll-config-tenant-card > button,
+          .payroll-config-state-loader > button,
+          .payroll-config-inline-field > button {
+            width: 100%;
+          }
+
+          .payroll-config-rule-actions > *,
+          .payroll-config-actions > *,
+          .payroll-component-actions > *,
+          .payroll-config-history-actions > * {
+            width: 100%;
+          }
+
+          .payroll-inline-feedback {
+            padding: 10px;
+          }
+        }
+
+        @media (max-width: 390px) {
+          .payroll-config-page {
+            width: calc(100% - 12px);
+            padding-right: 7px;
+          }
+
+          .payroll-config-hero,
+          .payroll-config-card,
+          .payroll-config-tabs {
+            border-radius: 18px;
+          }
+
+          .payroll-config-hero h1 {
+            font-size: 29px;
+          }
+        }
+
       `}</style>
     </section>
   );

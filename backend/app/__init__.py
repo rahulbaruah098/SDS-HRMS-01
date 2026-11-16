@@ -1,3 +1,7 @@
+from .routes.notice_period import notice_period_bp
+from .routes.employee_handover import employee_handover_bp
+from .routes.employee_handover_execution import handover_execution_bp
+from .routes.employee_handover_advanced import advanced_handover_bp
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 import os
@@ -27,6 +31,7 @@ from app.routes.management_groups import management_groups_bp
 from app.routes.assets import assets_bp
 from app.routes.ai_assistant import ai_assistant_bp
 from .routes.recruitment import recruitment_bp
+from .routes.sprint_planning import sprint_planning_bp
 from .routes.account_access import account_access_bp
 from .services.recruitment_service import ensure_recruitment_indexes
 from .utils.auth import request_has_super_admin_role
@@ -323,6 +328,10 @@ def create_app():
     # legacy attendance_mode_requests, holiday_work_requests, compoff_credits,
     # notifications fallback, etc.
     app.register_blueprint(crud_bp, url_prefix="/api/v1")
+    app.register_blueprint(notice_period_bp, url_prefix="/api/v1/notice-period")
+    app.register_blueprint(employee_handover_bp, url_prefix="/api/v1/employee-handover")
+    app.register_blueprint(handover_execution_bp, url_prefix="/api/v1/employee-handover")
+    app.register_blueprint(advanced_handover_bp, url_prefix="/api/v1/employee-handover")
 
     # Report APIs:
     # attendance, field attendance, holiday work approvals, holidays,
@@ -334,6 +343,11 @@ def create_app():
     # companies, users, full employee profile creation/update,
     # employee capability mapping and password reset.
     app.register_blueprint(superadmin_bp, url_prefix="/api/v1/superadmin")
+
+    # YourComate Sprint Planning API
+    # Monthly, weekly and day-wise planning
+    # Route paths already include /api/v1/sprint-planning
+    app.register_blueprint(sprint_planning_bp)
 
     @app.get("/")
     def root():

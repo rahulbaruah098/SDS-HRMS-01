@@ -44,11 +44,13 @@ export default function AppStoreBadges({
           {playBadgeContent}
         </span>
       ) : (
-        <a
-          className="yc-store-badge yc-store-badge-play"
-          href="#yourcomate-app"
-          aria-label="Get YourComate on Google Play"
-        >
+       <a
+  className="yc-store-badge yc-store-badge-play"
+  href="https://play.google.com/store/apps/details?id=com.sayanant.yourcomate"
+  target="_blank"
+  rel="noreferrer"
+  aria-label="Get YourComate on Google Play"
+>
           {playBadgeContent}
         </a>
       )}

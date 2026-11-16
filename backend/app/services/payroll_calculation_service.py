@@ -990,6 +990,32 @@ def calculate_payroll(
     components = _active_components(salary_structure)
     lwp = _resolve_lwp(attendance, statutory_config)
 
+    # A historical salary revision may begin during the selected payroll
+    # period.  Keep this separate from LWP so the payslip explains why the
+    # contractual salary was reduced and existing LWP rules remain unchanged.
+    salary_proration_days = _decimal(
+        inputs.get("salary_proration_days", 0),
+        "inputs.salary_proration_days",
+        minimum=ZERO,
+    ) or ZERO
+    salary_proration_total_days = _decimal(
+        inputs.get("salary_proration_total_days", 0),
+        "inputs.salary_proration_total_days",
+        minimum=ZERO,
+    ) or ZERO
+    if salary_proration_days > ZERO:
+        if salary_proration_total_days <= ZERO or salary_proration_days > salary_proration_total_days:
+            raise PayrollCalculationError(
+                "Salary proration days must be within the selected payroll period.",
+                code="invalid_salary_proration",
+                field="inputs.salary_proration_days",
+            )
+        salary_proration_factor = (
+            salary_proration_total_days - salary_proration_days
+        ) / salary_proration_total_days
+    else:
+        salary_proration_factor = ONE
+
     pf_config = statutory_config.get("pf") or {}
     esi_config = statutory_config.get("esi") or {}
     pt_config = statutory_config.get("professional_tax") or {}
@@ -1128,6 +1154,7 @@ def calculate_payroll(
     # Apply LWP proportion to configured earning components. Paid leave is
     # intentionally ignored; it never changes the factor.
     payable_amounts: dict[str, Decimal] = {}
+    lwp_only_amounts: dict[str, Decimal] = {}
     for component in components:
         if component.get("calculation_type") == "statutory":
             continue
@@ -1138,12 +1165,19 @@ def calculate_payroll(
             and component.get("prorate_on_lwp")
             and code in lwp["prorate_component_codes"]
         )
-        payable_amounts[code] = (
+        lwp_only_amounts[code] = (
             full_amount * lwp["proration_factor"] if should_prorate else full_amount
         )
+        payable_amounts[code] = lwp_only_amounts[code] * salary_proration_factor
 
     contractual_gross = _sum(
         full_amounts.get(component["code"], ZERO)
+        for component in components
+        if component.get("calculation_type") != "statutory"
+        and component.get("include_in_gross")
+    )
+    lwp_only_gross = _sum(
+        lwp_only_amounts.get(component["code"], ZERO)
         for component in components
         if component.get("calculation_type") != "statutory"
         and component.get("include_in_gross")
@@ -1154,7 +1188,8 @@ def calculate_payroll(
         if component.get("calculation_type") != "statutory"
         and component.get("include_in_gross")
     )
-    lwp_deduction = max(contractual_gross - payable_gross, ZERO)
+    lwp_deduction = max(contractual_gross - lwp_only_gross, ZERO)
+    salary_proration_deduction = max(lwp_only_gross - payable_gross, ZERO)
 
     current_pf = _pf_values(pf_config, payable_amounts)
     current_esi = _esi_values(esi_config, payable_amounts, payable_gross)
@@ -1221,6 +1256,9 @@ def calculate_payroll(
     professional_tax = _round_money(pt_amount, rounding_mode)
     tds = _round_money(tds_amount, rounding_mode)
     lwp_deduction_rounded = _round_money(lwp_deduction, rounding_mode)
+    salary_proration_deduction_rounded = _round_money(
+        salary_proration_deduction, rounding_mode
+    )
 
     employer_contributions: list[dict[str, Any]] = []
 
@@ -1305,6 +1343,22 @@ def calculate_payroll(
             metadata={"mode": tds_mode},
         )
     )
+
+    if salary_proration_deduction_rounded > ZERO:
+        deductions.append(
+            _line(
+                code="salary_proration_deduction",
+                label="Salary proration for partial effective period",
+                amount=salary_proration_deduction_rounded,
+                display_order=135,
+                category="deduction",
+                source="salary_structure",
+                metadata={
+                    "excluded_days": _ratio_number(salary_proration_days),
+                    "period_days": _ratio_number(salary_proration_total_days),
+                },
+            )
+        )
 
     pf_employee_meta = _component_metadata(
         components,
@@ -1483,6 +1537,9 @@ def calculate_payroll(
             "divisor_days": _ratio_number(lwp["divisor_days"]),
             "payable_days": _ratio_number(lwp["payable_days"]),
             "proration_factor": _ratio_number(lwp["proration_factor"]),
+            "salary_proration_days": _ratio_number(salary_proration_days),
+            "salary_proration_total_days": _ratio_number(salary_proration_total_days),
+            "salary_proration_factor": _ratio_number(salary_proration_factor),
             "paid_leave_affects_salary": False,
         },
         "earnings": earnings,

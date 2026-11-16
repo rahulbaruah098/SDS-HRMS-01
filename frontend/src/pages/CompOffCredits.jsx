@@ -1,22 +1,26 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   CalendarCheck,
   CalendarDays,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   Clock,
   Gift,
   History,
   RefreshCcw,
+  Search,
   Send,
   ShieldCheck,
+  Sparkles,
   Timer,
   X,
   XCircle,
 } from 'lucide-react';
 import { claimCompOff, getMyCompOffs } from '../api/client';
-import { useCustomAlert } from '../components/CustomAlertProvider.jsx';
-
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
+const COMP_OFF_NOTICE_HIDE_MS = 3600;
+const COMP_OFF_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 
 function toArray(value) {
   if (Array.isArray(value)) return value;
@@ -181,20 +185,277 @@ function statusIcon(status) {
   return Gift;
 }
 
+function creditMatchesSearch(credit = {}, search = '') {
+  const term = String(search || '').trim().toLowerCase();
+
+  if (!term) return true;
+
+  const storedStatus = normalizeStatus(credit.status);
+  const windowStatus = claimWindowStatus(credit);
+  const displayStatus =
+    storedStatus === 'available' ? windowStatus : storedStatus;
+
+  return [
+    creditTitle(credit),
+    credit.holiday_title,
+    credit.holiday_name,
+    statusLabel(displayStatus === 'active' ? 'available' : displayStatus),
+    credit.earned_date,
+    credit.available_from,
+    credit.valid_until,
+    credit.expiry_date,
+    credit.claimed_date,
+    credit.claim_date,
+    credit.reason,
+    credit.claim_reason,
+  ]
+    .map((value) => String(value || '').trim().toLowerCase())
+    .join(' ')
+    .includes(term);
+}
+
+function compOffPageNumbers(pageCount, page) {
+  if (pageCount <= 7) {
+    return Array.from({ length: pageCount }, (_, index) => index + 1);
+  }
+
+  const current = Math.max(1, Math.min(pageCount, page));
+  const pages = new Set([1, pageCount, current]);
+
+  if (current > 2) pages.add(current - 1);
+  if (current < pageCount - 1) pages.add(current + 1);
+
+  const sorted = Array.from(pages).sort((a, b) => a - b);
+  const output = [];
+
+  sorted.forEach((value, index) => {
+    const previous = sorted[index - 1];
+
+    if (index > 0 && value - previous > 1) {
+      output.push(`ellipsis-${previous}-${value}`);
+    }
+
+    output.push(value);
+  });
+
+  return output;
+}
+
+function CompOffInlineMessage({ message, onClose }) {
+  if (!message?.text) return null;
+
+  return (
+    <div
+      className={`co-inline-feedback ${message.type || 'info'}`}
+      role="status"
+    >
+      <span className="co-inline-feedback-icon">
+        {message.loading ? (
+          <RefreshCcw size={15} className="is-spinning" />
+        ) : message.type === 'success' ? (
+          <CheckCircle2 size={15} />
+        ) : message.type === 'error' || message.type === 'warning' ? (
+          <XCircle size={15} />
+        ) : (
+          <Sparkles size={15} />
+        )}
+      </span>
+
+      <span className="co-inline-feedback-copy">
+        {message.title ? <strong>{message.title}</strong> : null}
+        <span>{message.text}</span>
+      </span>
+
+      <button
+        type="button"
+        className="co-inline-feedback-close"
+        onClick={onClose}
+        aria-label="Dismiss notification"
+      >
+        ×
+      </button>
+    </div>
+  );
+}
+
+function CompOffPagination({
+  total,
+  page,
+  pageSize,
+  onPageChange,
+  onPageSizeChange,
+}) {
+  const pageCount = Math.max(
+    1,
+    Math.ceil(Number(total || 0) / Math.max(1, Number(pageSize || 10))),
+  );
+  const safePage = Math.min(Math.max(1, page), pageCount);
+
+  if (!total) return null;
+
+  return (
+    <div className="co-pagination">
+      <div className="co-pagination-copy">
+        <strong>{Number(total || 0).toLocaleString('en-IN')}</strong>
+        <span>credits</span>
+      </div>
+
+      <div className="co-pagination-controls">
+        <label className="co-page-size">
+          <span>View</span>
+          <select
+            value={pageSize}
+            onChange={(event) => onPageSizeChange(Number(event.target.value))}
+            aria-label="Comp-Off credits per page"
+          >
+            {COMP_OFF_PAGE_SIZE_OPTIONS.map((size) => (
+              <option value={size} key={size}>
+                {size}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <button
+          type="button"
+          className="co-page-button co-page-nav"
+          onClick={() => onPageChange(Math.max(1, safePage - 1))}
+          disabled={safePage <= 1}
+          aria-label="Previous page"
+        >
+          <ChevronLeft size={15} />
+          <span>Previous</span>
+        </button>
+
+        <div className="co-page-numbers" aria-label="Pagination">
+          {compOffPageNumbers(pageCount, safePage).map((item) =>
+            typeof item === 'number' ? (
+              <button
+                type="button"
+                className={`co-page-number ${
+                  item === safePage ? 'is-active' : ''
+                }`}
+                key={item}
+                onClick={() => onPageChange(item)}
+                aria-current={item === safePage ? 'page' : undefined}
+              >
+                {item}
+              </button>
+            ) : (
+              <span className="co-page-ellipsis" key={item}>
+                …
+              </span>
+            ),
+          )}
+        </div>
+
+        <span className="co-page-indicator">
+          Page {safePage} of {pageCount}
+        </span>
+
+        <button
+          type="button"
+          className="co-page-button co-page-nav"
+          onClick={() => onPageChange(Math.min(pageCount, safePage + 1))}
+          disabled={safePage >= pageCount}
+          aria-label="Next page"
+        >
+          <span>Next</span>
+          <ChevronRight size={15} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function CompOffCredits() {
-  const alerts = useCustomAlert();
   const [credits, setCredits] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [claiming, setClaiming] = useState(false);
   const [filter, setFilter] = useState('all');
+  const [searchInput, setSearchInput] = useState('');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+  const [feedbackMap, setFeedbackMap] = useState({});
+  const feedbackTimersRef = useRef({});
   const [selectedCredit, setSelectedCredit] = useState(null);
   const [claimDate, setClaimDate] = useState('');
   const [reason, setReason] = useState('');
 
-  async function loadCredits({ silent = false } = {}) {
+  function clearFeedback(scopeKey) {
+    if (!scopeKey) return;
+
+    const timer = feedbackTimersRef.current[scopeKey];
+
+    if (timer) {
+      window.clearTimeout(timer);
+      delete feedbackTimersRef.current[scopeKey];
+    }
+
+    setFeedbackMap((current) => {
+      if (!Object.prototype.hasOwnProperty.call(current, scopeKey)) {
+        return current;
+      }
+
+      const next = { ...current };
+      delete next[scopeKey];
+      return next;
+    });
+  }
+
+  function showFeedback(
+    scopeKey,
+    type,
+    text,
+    title = '',
+    options = {},
+  ) {
+    if (!scopeKey) return;
+
+    const timer = feedbackTimersRef.current[scopeKey];
+
+    if (timer) {
+      window.clearTimeout(timer);
+      delete feedbackTimersRef.current[scopeKey];
+    }
+
+    setFeedbackMap((current) => ({
+      ...current,
+      [scopeKey]: {
+        type,
+        text,
+        title,
+        loading: Boolean(options.loading),
+      },
+    }));
+
+    if (!options.loading) {
+      feedbackTimersRef.current[scopeKey] = window.setTimeout(() => {
+        setFeedbackMap((current) => {
+          const next = { ...current };
+          delete next[scopeKey];
+          return next;
+        });
+
+        delete feedbackTimersRef.current[scopeKey];
+      }, COMP_OFF_NOTICE_HIDE_MS);
+    }
+  }
+
+  async function loadCredits({ silent = false, feedbackScope = '' } = {}) {
     if (silent) setRefreshing(true);
     else setLoading(true);
+
+    if (feedbackScope) {
+      showFeedback(
+        feedbackScope,
+        'info',
+        'Refreshing your Comp-Off credit wallet...',
+        'Refreshing',
+        { loading: true },
+      );
+    }
 
     try {
       const response = await getMyCompOffs();
@@ -211,11 +472,34 @@ export default function CompOffCredits() {
 
         return refreshed && canClaimCredit(refreshed) ? refreshed : null;
       });
+
+      if (feedbackScope) {
+        showFeedback(
+          feedbackScope,
+          'success',
+          'Your Comp-Off credits are up to date.',
+          'Refresh Complete',
+        );
+      }
     } catch (error) {
-      alerts.error(
-        error.message || 'Unable to load your Comp-Off credits.',
-        'Comp-Off Load Failed',
-      );
+      const errorMessage =
+        error.message || 'Unable to load your Comp-Off credits.';
+
+      if (feedbackScope) {
+        showFeedback(
+          feedbackScope,
+          'error',
+          errorMessage,
+          'Refresh Failed',
+        );
+      } else {
+        showFeedback(
+          'wallet',
+          'error',
+          errorMessage,
+          'Comp-Off Load Failed',
+        );
+      }
     } finally {
       if (silent) setRefreshing(false);
       else setLoading(false);
@@ -246,10 +530,71 @@ export default function CompOffCredits() {
   }, [credits]);
 
   useEffect(() => {
-    if (!selectedCredit) return undefined;
+    setPage(1);
+  }, [filter, searchInput, pageSize]);
 
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
+  useEffect(() => {
+    const filteredCount = credits.filter((credit) => {
+      const status = normalizeStatus(credit.status);
+      const matchesFilter = filter === 'all' || status === filter;
+      return matchesFilter && creditMatchesSearch(credit, searchInput);
+    }).length;
+
+    const pageCount = Math.max(
+      1,
+      Math.ceil(filteredCount / Math.max(1, pageSize)),
+    );
+
+    setPage((current) => Math.min(current, pageCount));
+  }, [credits, filter, pageSize, searchInput]);
+
+  useEffect(() => {
+    function dismissFeedback(event) {
+      if (event.target?.closest?.('.co-inline-feedback')) return;
+
+      Object.values(feedbackTimersRef.current).forEach((timer) => {
+        window.clearTimeout(timer);
+      });
+
+      feedbackTimersRef.current = {};
+      setFeedbackMap({});
+    }
+
+    document.addEventListener('pointerdown', dismissFeedback);
+
+    return () => {
+      document.removeEventListener('pointerdown', dismissFeedback);
+
+      Object.values(feedbackTimersRef.current).forEach((timer) => {
+        window.clearTimeout(timer);
+      });
+
+      feedbackTimersRef.current = {};
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!selectedCredit || typeof document === 'undefined') {
+      return undefined;
+    }
+
+    const body = document.body;
+    const root = document.documentElement;
+
+    const previousBodyOverflow = body.style.overflow;
+    const previousRootOverflow = root.style.overflow;
+    const previousBodyOverscroll = body.style.overscrollBehavior;
+    const previousRootOverscroll = root.style.overscrollBehavior;
+
+    body.style.overflow = 'hidden';
+    root.style.overflow = 'hidden';
+    body.style.overscrollBehavior = 'none';
+    root.style.overscrollBehavior = 'none';
+
+    function blockBackgroundScroll(event) {
+      if (event.target?.closest?.('.co-dialog')) return;
+      event.preventDefault();
+    }
 
     function closeOnEscape(event) {
       if (event.key === 'Escape' && !claiming) {
@@ -257,11 +602,23 @@ export default function CompOffCredits() {
       }
     }
 
+    document.addEventListener('wheel', blockBackgroundScroll, {
+      passive: false,
+    });
+    document.addEventListener('touchmove', blockBackgroundScroll, {
+      passive: false,
+    });
     window.addEventListener('keydown', closeOnEscape);
 
     return () => {
-      document.body.style.overflow = previousOverflow;
+      document.removeEventListener('wheel', blockBackgroundScroll);
+      document.removeEventListener('touchmove', blockBackgroundScroll);
       window.removeEventListener('keydown', closeOnEscape);
+
+      body.style.overflow = previousBodyOverflow;
+      root.style.overflow = previousRootOverflow;
+      body.style.overscrollBehavior = previousBodyOverscroll;
+      root.style.overscrollBehavior = previousRootOverscroll;
     };
   }, [claiming, selectedCredit]);
 
@@ -286,7 +643,9 @@ export default function CompOffCredits() {
   const visibleCredits = useMemo(() => {
     const rows = credits.filter((credit) => {
       const status = normalizeStatus(credit.status);
-      return filter === 'all' || status === filter;
+      const matchesFilter = filter === 'all' || status === filter;
+
+      return matchesFilter && creditMatchesSearch(credit, searchInput);
     });
 
     return rows.sort((left, right) => {
@@ -301,10 +660,23 @@ export default function CompOffCredits() {
         String(left.earned_date || ''),
       );
     });
-  }, [credits, filter]);
+  }, [credits, filter, searchInput]);
+
+  const pageCount = Math.max(
+    1,
+    Math.ceil(visibleCredits.length / Math.max(1, pageSize)),
+  );
+  const safePage = Math.min(Math.max(1, page), pageCount);
+  const pageStart = (safePage - 1) * pageSize;
+  const pagedCredits = visibleCredits.slice(
+    pageStart,
+    pageStart + pageSize,
+  );
 
   function openClaimDialog(credit) {
     if (!canClaimCredit(credit)) return;
+
+    clearFeedback('claim-modal');
 
     const today = todayInputValue();
     const availableFrom = dateInputValue(credit.available_from);
@@ -331,7 +703,9 @@ export default function CompOffCredits() {
     event.preventDefault();
 
     if (!selectedCredit || !canClaimCredit(selectedCredit)) {
-      alerts.warning(
+      showFeedback(
+        'claim-modal',
+        'warning',
         'This Comp-Off credit is not currently available for claiming.',
         'Comp-Off Not Available',
       );
@@ -339,7 +713,12 @@ export default function CompOffCredits() {
     }
 
     if (!claimDate) {
-      alerts.warning('Please select the leave date.', 'Claim Date Required');
+      showFeedback(
+        'claim-modal',
+        'warning',
+        'Please select the leave date.',
+        'Claim Date Required',
+      );
       return;
     }
 
@@ -349,19 +728,36 @@ export default function CompOffCredits() {
     );
 
     if (claimDate < today) {
-      alerts.warning('The claim date cannot be in the past.', 'Invalid Claim Date');
+      showFeedback(
+        'claim-modal',
+        'warning',
+        'The claim date cannot be in the past.',
+        'Invalid Claim Date',
+      );
       return;
     }
 
     if (validUntil && claimDate > validUntil) {
-      alerts.warning(
+      showFeedback(
+        'claim-modal',
+        'warning',
         `Select a date on or before ${formatDate(validUntil)}.`,
         'Claim Window Exceeded',
       );
       return;
     }
 
+    const submittedCreditKey = creditKey(selectedCredit);
+
     setClaiming(true);
+
+    showFeedback(
+      'claim-modal',
+      'info',
+      'Submitting your Comp-Off claim...',
+      'Submitting Claim',
+      { loading: true },
+    );
 
     try {
       const response = await claimCompOff(selectedCredit._id || selectedCredit.id, {
@@ -372,14 +768,19 @@ export default function CompOffCredits() {
       setSelectedCredit(null);
       setClaimDate('');
       setReason('');
+      clearFeedback('claim-modal');
       await loadCredits({ silent: true });
 
-      alerts.success(
+      showFeedback(
+        `credit-${submittedCreditKey}`,
+        'success',
         response.message || 'Your Comp-Off claim has been submitted.',
         'Comp-Off Claimed',
       );
     } catch (error) {
-      alerts.error(
+      showFeedback(
+        'claim-modal',
+        'error',
         error.message || 'Unable to submit the Comp-Off claim.',
         'Comp-Off Claim Failed',
       );
@@ -396,163 +797,210 @@ export default function CompOffCredits() {
     <div className="comp-off-page">
       <style>{`
         .comp-off-page {
-          --co-ink: #17223f;
-          --co-copy: #64748b;
-          --co-line: rgba(100, 116, 139, .2);
-          --co-purple: #6657dc;
-          --co-purple-dark: #3f348f;
-          --co-teal: #159f98;
-          --co-amber: #d98516;
-          --co-red: #c85568;
+          --co-ink: #101a3a;
+          --co-copy: #5d6d8d;
+          --co-line: rgba(16, 26, 58, .14);
+          --co-blue: #4d77dd;
+          --co-cyan: #2eb2b9;
+          --co-violet: #575092;
+          --co-teal: #16835f;
+          --co-amber: #da7b12;
+          --co-red: #a2344d;
+          width: 100%;
+          min-width: 0;
           display: grid;
-          gap: 22px;
+          gap: clamp(16px, 1.8vw, 24px);
           color: var(--co-ink);
+        }
+
+        .comp-off-page,
+        .comp-off-page * {
+          box-sizing: border-box;
+        }
+
+        .comp-off-page > *,
+        .comp-off-page section,
+        .comp-off-page article,
+        .comp-off-page form,
+        .comp-off-page label {
+          min-width: 0;
+          max-width: 100%;
+        }
+
+        .comp-off-page::before,
+        .comp-off-page::after,
+        .comp-off-page .co-hero::before,
+        .comp-off-page .co-hero::after,
+        .comp-off-page .co-summary-card::before,
+        .comp-off-page .co-summary-card::after {
+          content: none;
+          display: none;
+          background: none;
         }
 
         .co-hero {
           position: relative;
+          isolation: isolate;
           overflow: hidden;
           display: grid;
-          grid-template-columns: minmax(0, 1.5fr) minmax(270px, .7fr);
-          gap: 24px;
-          align-items: end;
-          padding: clamp(26px, 4vw, 46px);
-          border: 1px solid rgba(135, 146, 196, .34);
-          border-radius: 34px;
+          grid-template-columns: minmax(0, 1fr) minmax(220px, 330px);
+          gap: clamp(20px, 3vw, 38px);
+          align-items: center;
+          min-height: 240px;
+          padding: clamp(24px, 3vw, 40px);
+          border: 1px solid rgba(154,164,205,.58);
+          border-radius: clamp(28px, 2.7vw, 40px);
           background:
-            radial-gradient(circle at 92% 10%, rgba(83, 205, 187, .28), transparent 30%),
-            radial-gradient(circle at 5% 5%, rgba(135, 119, 235, .25), transparent 32%),
-            linear-gradient(135deg, #f3f1ff, #f5fbff 52%, #effbf7);
-          box-shadow: 10px 12px 0 #d4ddf7, 0 24px 46px rgba(41, 52, 109, .1);
+            linear-gradient(
+              90deg,
+              #d3f4fb 0%,
+              #f7fcfb 34%,
+              #fffdf8 52%,
+              #fbf8fa 68%,
+              #f0edfb 100%
+            );
+          box-shadow: 0 22px 46px rgba(70,92,140,.10);
+        }
+
+        .co-hero-copy {
+          min-width: 0;
+          max-width: 900px;
         }
 
         .co-kicker {
           display: inline-flex;
           align-items: center;
-          gap: 7px;
+          gap: 8px;
           width: max-content;
-          margin-bottom: 14px;
-          padding: 8px 12px;
+          max-width: 100%;
+          margin-bottom: 15px;
+          padding: 9px 13px;
           border-radius: 999px;
           color: #fff;
-          background: var(--co-purple-dark);
-          font-size: 10px;
-          font-weight: 900;
-          letter-spacing: .1em;
+          background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+          box-shadow: 0 8px 18px rgba(77,119,221,.18);
+          font-size: 9px;
+          font-weight: 950;
+          line-height: 1;
+          letter-spacing: .12em;
           text-transform: uppercase;
         }
 
         .co-hero h1 {
           margin: 0;
-          font-family: Georgia, 'Times New Roman', serif;
-          font-size: clamp(40px, 5vw, 70px);
-          line-height: .96;
-          letter-spacing: -.05em;
+          color: var(--co-ink);
+          font-family: var(--yc-display, Georgia, "Times New Roman", serif);
+          font-size: clamp(44px, 5.2vw, 76px);
+          font-weight: 760;
+          line-height: .94;
+          letter-spacing: -.058em;
         }
 
         .co-hero h1 em {
-          color: var(--co-purple);
+          color: var(--co-blue);
+          font-family: Georgia, "Times New Roman", serif;
           font-weight: 500;
         }
 
         .co-hero p {
-          max-width: 760px;
-          margin: 16px 0 0;
+          max-width: 820px;
+          margin: 17px 0 0;
           color: var(--co-copy);
-          line-height: 1.7;
+          font-size: clamp(13px, 1vw, 16px);
+          line-height: 1.68;
         }
 
         .co-policy-card {
-          padding: 19px;
-          border: 1px solid rgba(102, 87, 220, .2);
-          border-radius: 22px;
-          background: rgba(255, 255, 255, .78);
-          box-shadow: 6px 7px 0 rgba(102, 87, 220, .16);
+          padding: 18px;
+          border: 1px solid rgba(77,119,221,.18);
+          border-radius: 18px;
+          background: rgba(255,255,255,.86);
+          box-shadow: 0 12px 26px rgba(70,92,140,.08);
         }
 
         .co-policy-card strong {
           display: flex;
           align-items: center;
           gap: 8px;
+          color: var(--co-ink);
+          font-size: 13px;
+        }
+
+        .co-policy-card strong svg {
+          color: var(--co-blue);
         }
 
         .co-policy-card span {
           display: block;
           margin-top: 8px;
           color: var(--co-copy);
-          font-size: 13px;
+          font-size: 12px;
           line-height: 1.55;
         }
 
         .co-summary-grid {
           display: grid;
-          grid-template-columns: repeat(3, minmax(0, 1fr));
-          gap: 16px;
-        }
-
-        .co-summary-card,
-        .co-credit-card,
-        .co-empty-state {
-          border: 1px solid var(--co-line);
-          background: linear-gradient(145deg, #fff, #f8fbff);
-          box-shadow: 7px 8px 0 #d8def7, 0 20px 34px rgba(38, 48, 94, .08);
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+          gap: 14px;
         }
 
         .co-summary-card {
-          display: flex;
-          align-items: center;
-          gap: 14px;
           min-width: 0;
-          padding: 20px;
-          border-radius: 24px;
+          min-height: 120px;
+          padding: 18px;
+          border: 1px solid rgba(171,181,211,.66);
+          border-radius: 22px;
+          background: #edf6ff;
+          box-shadow: 0 16px 30px rgba(34,38,110,.07);
         }
 
-        .co-summary-icon {
-          display: grid;
-          place-items: center;
-          width: 48px;
-          height: 48px;
-          flex: 0 0 auto;
-          border-radius: 16px;
-          color: var(--co-purple);
-          background: #eeecff;
+        .co-summary-card:nth-child(2) {
+          background: #eaf8f4;
         }
 
-        .co-summary-card.is-claimed .co-summary-icon {
-          color: #127a76;
-          background: #e4faf6;
+        .co-summary-card:nth-child(3) {
+          background: #fff4d5;
         }
 
-        .co-summary-card.is-expired .co-summary-icon {
-          color: #ad4c5d;
-          background: #fff0f3;
+        .co-summary-card:nth-child(4) {
+          background: #f1efff;
         }
 
         .co-summary-card span,
-        .co-summary-card strong {
+        .co-summary-card strong,
+        .co-summary-card small {
           display: block;
         }
 
         .co-summary-card span {
-          color: var(--co-copy);
-          font-size: 12px;
-          font-weight: 800;
+          color: #5d6785;
+          font-size: 9px;
+          font-weight: 950;
+          letter-spacing: .09em;
+          text-transform: uppercase;
         }
 
         .co-summary-card strong {
-          margin-top: 3px;
-          font-size: clamp(23px, 3vw, 32px);
+          margin-top: 8px;
+          color: var(--co-ink);
+          font-family: Georgia, "Times New Roman", serif;
+          font-size: clamp(28px, 3vw, 42px);
           line-height: 1;
         }
 
+        .co-summary-card small {
+          margin-top: 7px;
+          color: var(--co-copy);
+          font-size: 11px;
+          line-height: 1.45;
+        }
+
         .co-list-section {
-          display: grid;
-          gap: 18px;
-          padding: clamp(20px, 3vw, 30px);
-          border: 1px solid var(--co-line);
-          border-radius: 28px;
-          background: rgba(255, 255, 255, .82);
-          box-shadow: 7px 8px 0 #d8def7, 0 20px 34px rgba(38, 48, 94, .07);
+          overflow: hidden;
+          border: 1px solid rgba(171,181,211,.70);
+          border-radius: clamp(26px, 2.2vw, 36px);
+          background: #fff;
+          box-shadow: 0 22px 42px rgba(34,38,110,.09);
         }
 
         .co-list-head {
@@ -560,11 +1008,18 @@ export default function CompOffCredits() {
           align-items: flex-start;
           justify-content: space-between;
           gap: 18px;
+          padding: clamp(18px, 2vw, 24px);
+          border-bottom: 1px solid rgba(65,55,161,.08);
+          background: #fff;
         }
 
         .co-list-head h2 {
           margin: 0;
-          font-size: clamp(24px, 3vw, 32px);
+          color: var(--co-ink);
+          font-family: var(--yc-display, Georgia, "Times New Roman", serif);
+          font-size: clamp(24px, 2.4vw, 34px);
+          font-weight: 760;
+          letter-spacing: -.04em;
         }
 
         .co-list-head p {
@@ -574,35 +1029,72 @@ export default function CompOffCredits() {
           line-height: 1.5;
         }
 
+        .co-refresh-stack {
+          width: min(260px, 100%);
+          display: grid;
+          gap: 8px;
+        }
+
         .co-refresh-btn,
         .co-claim-btn,
         .co-cancel-btn,
         .co-submit-btn,
         .co-dialog-close,
+        .co-filter-btn,
+        .co-page-button,
+        .co-page-number,
+        .co-inline-feedback-close {
+          font: inherit;
+          cursor: pointer;
+        }
+
+        .co-refresh-btn,
+        .co-claim-btn,
+        .co-cancel-btn,
+        .co-submit-btn,
         .co-filter-btn {
+          min-height: 44px;
+          padding: 10px 15px;
+          border: 1px solid transparent;
+          border-radius: 14px;
           display: inline-flex;
           align-items: center;
           justify-content: center;
           gap: 8px;
-          border: 0;
-          cursor: pointer;
-          font: inherit;
+          font-size: 12px;
           font-weight: 900;
-          transition: transform .16s ease, box-shadow .16s ease, opacity .16s ease;
+          transition:
+            transform 180ms ease,
+            border-color 180ms ease,
+            filter 180ms ease,
+            opacity 180ms ease;
         }
 
         .co-refresh-btn {
-          min-height: 42px;
-          padding: 10px 15px;
-          border-radius: 999px;
-          color: var(--co-purple-dark);
-          background: #eeecff;
+          color: #4767b4;
+          border-color: rgba(77,119,221,.18);
+          background: #fff;
+        }
+
+        .co-claim-btn,
+        .co-submit-btn {
+          color: #fff;
+          background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+          box-shadow: 0 10px 22px rgba(77,119,221,.18);
+        }
+
+        .co-cancel-btn {
+          color: #536078;
+          border-color: rgba(100,116,139,.16);
+          background: #f3f5f9;
         }
 
         .co-refresh-btn:hover:not(:disabled),
         .co-claim-btn:hover:not(:disabled),
-        .co-submit-btn:hover:not(:disabled) {
-          transform: translateY(-2px);
+        .co-submit-btn:hover:not(:disabled),
+        .co-filter-btn:hover:not(:disabled) {
+          transform: translateY(-1px);
+          filter: saturate(1.03);
         }
 
         .co-refresh-btn:disabled,
@@ -612,55 +1104,343 @@ export default function CompOffCredits() {
         .co-dialog-close:disabled {
           cursor: not-allowed;
           opacity: .55;
+          transform: none;
         }
 
+        .is-spinning,
         .co-refresh-btn svg.is-spinning {
           animation: co-spin .8s linear infinite;
         }
 
+        .co-controls {
+          display: grid;
+          grid-template-columns: minmax(220px, 1fr) auto;
+          gap: 12px;
+          align-items: center;
+          padding: 16px clamp(18px, 2vw, 24px);
+          background:
+            linear-gradient(
+              145deg,
+              rgba(237,248,255,.44),
+              rgba(248,241,255,.30)
+            );
+        }
+
+        .co-search-wrap {
+          position: relative;
+          min-width: 0;
+        }
+
+        .co-search-wrap > svg {
+          position: absolute;
+          top: 50%;
+          left: 13px;
+          color: var(--co-blue);
+          transform: translateY(-50%);
+          pointer-events: none;
+        }
+
+        .co-search-wrap input {
+          width: 100%;
+          min-height: 46px;
+          padding: 0 13px 0 39px;
+          border: 1px solid rgba(151,161,197,.58);
+          border-radius: 14px;
+          outline: 0;
+          color: var(--co-ink);
+          background: rgba(255,255,255,.96);
+          font: inherit;
+          font-size: 13px;
+        }
+
+        .co-search-wrap input:focus,
+        .co-page-size select:focus,
+        .co-field input:focus,
+        .co-field textarea:focus {
+          border-color: rgba(77,119,221,.65);
+          box-shadow: 0 0 0 4px rgba(77,119,221,.09);
+        }
+
         .co-filters {
           display: flex;
+          align-items: center;
+          justify-content: flex-end;
+          gap: 7px;
           flex-wrap: wrap;
-          gap: 9px;
         }
 
         .co-filter-btn {
-          min-height: 38px;
-          padding: 9px 14px;
-          border: 1px solid #e1e5ef;
-          border-radius: 999px;
-          color: #536078;
-          background: #fff;
+          min-height: 40px;
+          padding: 8px 12px;
+          color: #4767b4;
+          border-color: rgba(77,119,221,.18);
+          background: linear-gradient(135deg, #f0f5ff 0%, #eefcfb 100%);
         }
 
         .co-filter-btn.is-active {
           border-color: transparent;
           color: #fff;
-          background: linear-gradient(135deg, var(--co-purple-dark), var(--co-purple));
-          box-shadow: 0 9px 18px rgba(79, 68, 176, .2);
+          background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+          box-shadow: 0 8px 18px rgba(77,119,221,.17);
+        }
+
+        .co-wallet-feedback {
+          padding: 0 clamp(18px, 2vw, 24px) 14px;
+        }
+
+        .co-inline-feedback {
+          display: grid;
+          grid-template-columns: auto minmax(0, 1fr) auto;
+          gap: 9px;
+          align-items: start;
+          width: 100%;
+          min-width: 0;
+          padding: 10px 11px;
+          border: 1px solid rgba(102,88,220,.18);
+          border-radius: 12px;
+          color: #40348d;
+          background: #f1efff;
+          font-size: 10px;
+          line-height: 1.45;
+        }
+
+        .co-inline-feedback.success {
+          border-color: rgba(4,120,87,.18);
+          color: #047857;
+          background: #eaf8f4;
+        }
+
+        .co-inline-feedback.warning {
+          border-color: rgba(154,104,23,.18);
+          color: #9a6817;
+          background: #fff4d5;
+        }
+
+        .co-inline-feedback.error {
+          border-color: rgba(162,52,77,.18);
+          color: #a2344d;
+          background: #fff0f2;
+        }
+
+        .co-inline-feedback-icon {
+          width: 22px;
+          height: 22px;
+          display: inline-grid;
+          place-items: center;
+        }
+
+        .co-inline-feedback-copy {
+          min-width: 0;
+        }
+
+        .co-inline-feedback-copy strong,
+        .co-inline-feedback-copy span {
+          display: block;
+          overflow-wrap: anywhere;
+        }
+
+        .co-inline-feedback-copy strong {
+          margin-bottom: 2px;
+          font-weight: 950;
+        }
+
+        .co-inline-feedback-copy span {
+          font-weight: 750;
+        }
+
+        .co-inline-feedback-close {
+          width: 24px;
+          min-width: 24px;
+          height: 24px;
+          padding: 0;
+          border: 0;
+          border-radius: 8px;
+          display: inline-grid;
+          place-items: center;
+          color: currentColor;
+          background: rgba(255,255,255,.58);
+          font-size: 17px;
+          line-height: 1;
+        }
+
+        .co-inline-feedback-close:hover {
+          background: #fff;
+        }
+
+        .co-pagination {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 14px;
+          padding: 13px clamp(18px, 2vw, 24px);
+          border-top: 1px solid rgba(65,55,161,.08);
+          border-bottom: 1px solid rgba(65,55,161,.08);
+          background: #fff;
+        }
+
+        .co-pagination-copy {
+          display: flex;
+          align-items: baseline;
+          gap: 6px;
+          color: var(--co-copy);
+          font-size: 10px;
+          font-weight: 850;
+        }
+
+        .co-pagination-copy strong {
+          color: var(--co-ink);
+          font-size: 13px;
+          font-weight: 950;
+        }
+
+        .co-pagination-controls {
+          display: flex;
+          align-items: center;
+          justify-content: flex-end;
+          gap: 8px;
+          flex-wrap: wrap;
+        }
+
+        .co-page-size {
+          display: inline-flex;
+          align-items: center;
+          gap: 7px;
+          color: var(--co-copy);
+          font-size: 10px;
+          font-weight: 900;
+          white-space: nowrap;
+        }
+
+        .co-page-size select {
+          min-width: 78px;
+          min-height: 38px;
+          padding: 0 28px 0 10px;
+          border: 1px solid rgba(77,119,221,.18);
+          border-radius: 11px;
+          outline: 0;
+          color: #40348d;
+          background: #f1efff;
+          font-size: 10px;
+          font-weight: 900;
+        }
+
+        .co-page-button,
+        .co-page-number {
+          border: 1px solid rgba(77,119,221,.18);
+          color: #4767b4;
+          background: #fff;
+          font-size: 10px;
+          font-weight: 900;
+          transition:
+            transform 180ms ease,
+            border-color 180ms ease,
+            background 180ms ease;
+        }
+
+        .co-page-button {
+          min-width: 38px;
+          height: 38px;
+          padding: 0 10px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 5px;
+          border-radius: 11px;
+        }
+
+        .co-page-nav {
+          min-width: 78px;
+        }
+
+        .co-page-numbers {
+          display: flex;
+          align-items: center;
+          gap: 5px;
+        }
+
+        .co-page-number {
+          width: 36px;
+          height: 36px;
+          padding: 0;
+          display: grid;
+          place-items: center;
+          border-radius: 10px;
+        }
+
+        .co-page-number.is-active {
+          border-color: transparent;
+          color: #fff;
+          background: linear-gradient(135deg, #4d77dd 0%, #2eb2b9 100%);
+        }
+
+        .co-page-button:hover:not(:disabled),
+        .co-page-number:hover:not(:disabled) {
+          transform: translateY(-1px);
+          border-color: rgba(46,178,185,.42);
+        }
+
+        .co-page-button:disabled,
+        .co-page-number:disabled {
+          opacity: .5;
+          cursor: not-allowed;
+          transform: none;
+        }
+
+        .co-page-ellipsis {
+          width: 18px;
+          text-align: center;
+          color: #7b88a5;
+          font-weight: 900;
+        }
+
+        .co-page-indicator {
+          min-width: 82px;
+          color: var(--co-copy);
+          font-size: 10px;
+          font-weight: 900;
+          text-align: center;
+          white-space: nowrap;
         }
 
         .co-credit-grid {
           display: grid;
           grid-template-columns: repeat(2, minmax(0, 1fr));
-          gap: 18px;
+          gap: 16px;
+          padding: clamp(16px, 2vw, 24px);
         }
 
         .co-credit-card {
           position: relative;
           overflow: hidden;
+          min-width: 0;
           display: grid;
-          gap: 17px;
-          padding: 22px;
-          border-radius: 25px;
+          gap: 16px;
+          padding: 20px;
+          border: 1px solid rgba(171,181,211,.66);
+          border-radius: 20px;
+          background: #fff;
+          box-shadow: 0 14px 28px rgba(34,38,110,.07);
+        }
+
+        .co-credit-card.is-active,
+        .co-credit-card.is-upcoming {
+          background: #f7fbff;
+        }
+
+        .co-credit-card.is-claimed {
+          background: #f4fbf8;
+        }
+
+        .co-credit-card.is-expired {
+          background: #fff8f9;
         }
 
         .co-credit-card::before {
           content: '';
           position: absolute;
           inset: 0 auto 0 0;
-          width: 5px;
-          background: var(--co-purple);
+          width: 4px;
+          background: var(--co-blue);
         }
 
         .co-credit-card.is-claimed::before {
@@ -679,21 +1459,21 @@ export default function CompOffCredits() {
         }
 
         .co-credit-title {
+          min-width: 0;
           display: flex;
           align-items: flex-start;
           gap: 12px;
-          min-width: 0;
         }
 
         .co-credit-icon {
+          width: 42px;
+          height: 42px;
+          flex: 0 0 auto;
           display: grid;
           place-items: center;
-          width: 44px;
-          height: 44px;
-          flex: 0 0 auto;
-          border-radius: 15px;
-          color: var(--co-purple-dark);
-          background: #eeecff;
+          border-radius: 13px;
+          color: #4767b4;
+          background: #edf6ff;
         }
 
         .co-credit-card.is-claimed .co-credit-icon {
@@ -709,6 +1489,7 @@ export default function CompOffCredits() {
         .co-credit-title h3 {
           margin: 0;
           overflow-wrap: anywhere;
+          color: var(--co-ink);
           font-size: 18px;
         }
 
@@ -722,12 +1503,13 @@ export default function CompOffCredits() {
           flex: 0 0 auto;
           padding: 7px 10px;
           border-radius: 999px;
-          color: var(--co-purple-dark);
-          background: #eeecff;
+          color: #4767b4;
+          background: #edf6ff;
           font-size: 10px;
           font-weight: 900;
           letter-spacing: .06em;
           text-transform: uppercase;
+          white-space: nowrap;
         }
 
         .co-status-badge.is-claimed {
@@ -750,8 +1532,8 @@ export default function CompOffCredits() {
           min-width: 0;
           padding: 12px;
           border: 1px solid #e3e7ef;
-          border-radius: 16px;
-          background: #fafbff;
+          border-radius: 14px;
+          background: rgba(255,255,255,.84);
         }
 
         .co-date-box span,
@@ -770,15 +1552,16 @@ export default function CompOffCredits() {
         .co-date-box strong {
           margin-top: 5px;
           overflow-wrap: anywhere;
+          color: var(--co-ink);
           font-size: 12px;
         }
 
         .co-countdown {
           display: grid;
           gap: 9px;
-          padding: 14px;
-          border-radius: 17px;
-          background: linear-gradient(135deg, #f0efff, #f4fbff);
+          padding: 13px;
+          border-radius: 14px;
+          background: linear-gradient(135deg, #f0f5ff, #eefcfb);
         }
 
         .co-countdown-head {
@@ -792,7 +1575,7 @@ export default function CompOffCredits() {
           display: flex;
           align-items: center;
           gap: 7px;
-          color: var(--co-purple-dark);
+          color: #4767b4;
           font-size: 12px;
           font-weight: 900;
         }
@@ -802,16 +1585,16 @@ export default function CompOffCredits() {
         }
 
         .co-progress-track {
+          height: 7px;
           overflow: hidden;
-          height: 8px;
           border-radius: 999px;
-          background: rgba(102, 87, 220, .14);
+          background: rgba(77,119,221,.14);
         }
 
         .co-progress-bar {
           height: 100%;
           border-radius: inherit;
-          background: linear-gradient(90deg, var(--co-purple-dark), #8071ef);
+          background: linear-gradient(90deg, #4d77dd 0%, #2eb2b9 100%);
           transition: width .3s ease;
         }
 
@@ -837,13 +1620,8 @@ export default function CompOffCredits() {
           color: var(--co-ink);
         }
 
-        .co-claim-btn {
-          min-height: 42px;
-          padding: 10px 16px;
-          border-radius: 999px;
-          color: #fff;
-          background: linear-gradient(135deg, var(--co-purple-dark), var(--co-purple));
-          box-shadow: 0 10px 20px rgba(79, 68, 176, .23);
+        .co-card-feedback {
+          grid-column: 1 / -1;
         }
 
         .co-history-note {
@@ -856,14 +1634,17 @@ export default function CompOffCredits() {
         }
 
         .co-empty-state {
-          min-height: 260px;
+          min-height: 250px;
+          margin: clamp(16px, 2vw, 24px);
+          padding: 30px;
+          border: 1px dashed rgba(77,119,221,.30);
+          border-radius: 20px;
           display: grid;
           place-items: center;
           align-content: center;
           gap: 9px;
-          padding: 30px;
-          border-radius: 25px;
           color: var(--co-copy);
+          background: linear-gradient(145deg, #f8fbff, #f8f7ff);
           text-align: center;
         }
 
@@ -881,49 +1662,75 @@ export default function CompOffCredits() {
         .co-skeleton-grid {
           display: grid;
           grid-template-columns: repeat(2, minmax(0, 1fr));
-          gap: 18px;
+          gap: 16px;
+          padding: clamp(16px, 2vw, 24px);
         }
 
         .co-skeleton {
           min-height: 285px;
-          border-radius: 25px;
-          background: linear-gradient(90deg, #eef1f7 25%, #f8f9fc 50%, #eef1f7 75%);
+          border-radius: 20px;
+          background:
+            linear-gradient(
+              90deg,
+              #eef1f7 25%,
+              #f8f9fc 50%,
+              #eef1f7 75%
+            );
           background-size: 200% 100%;
           animation: co-shimmer 1.2s infinite linear;
         }
 
         .co-dialog-backdrop {
           position: fixed;
-          z-index: 9999;
           inset: 0;
+          z-index: 10000;
+          width: 100vw;
+          height: 100dvh;
+          padding:
+            max(14px, env(safe-area-inset-top))
+            max(14px, env(safe-area-inset-right))
+            max(14px, env(safe-area-inset-bottom))
+            max(14px, env(safe-area-inset-left));
           display: grid;
           place-items: center;
-          padding: 18px;
-          background: rgba(15, 23, 42, .58);
-          backdrop-filter: blur(7px);
+          overflow: hidden;
+          background: rgba(15,23,42,.48);
+          backdrop-filter: blur(8px);
+          -webkit-backdrop-filter: blur(8px);
         }
 
         .co-dialog {
-          width: min(100%, 560px);
-          max-height: calc(100vh - 36px);
+          width: min(100%, 580px);
+          max-height: calc(100dvh - 28px);
           overflow-y: auto;
-          padding: clamp(22px, 4vw, 32px);
-          border: 1px solid rgba(255, 255, 255, .7);
+          overscroll-behavior: contain;
+          border: 1px solid rgba(255,255,255,.62);
           border-radius: 28px;
           background: #fff;
-          box-shadow: 0 30px 80px rgba(15, 23, 42, .3);
+          box-shadow: 0 34px 90px rgba(9,16,35,.28);
+          -webkit-overflow-scrolling: touch;
         }
 
         .co-dialog-head {
+          position: sticky;
+          top: 0;
+          z-index: 4;
+          padding: 18px 20px;
           display: flex;
           align-items: flex-start;
           justify-content: space-between;
           gap: 16px;
+          border-bottom: 1px solid rgba(65,55,161,.10);
+          background: linear-gradient(135deg, #f0f5ff 0%, #eefcfb 100%);
         }
 
         .co-dialog-head h2 {
           margin: 0;
+          color: var(--co-ink);
+          font-family: var(--yc-display, Georgia, "Times New Roman", serif);
           font-size: clamp(24px, 4vw, 32px);
+          font-weight: 760;
+          letter-spacing: -.035em;
         }
 
         .co-dialog-head p {
@@ -934,21 +1741,29 @@ export default function CompOffCredits() {
 
         .co-dialog-close {
           width: 40px;
+          min-width: 40px;
           height: 40px;
-          flex: 0 0 auto;
-          border-radius: 50%;
-          color: #536078;
-          background: #f0f2f7;
+          padding: 0;
+          border: 1px solid rgba(77,119,221,.18);
+          border-radius: 13px;
+          display: grid;
+          place-items: center;
+          color: #40348d;
+          background: #fff;
+        }
+
+        .co-dialog-body {
+          padding: clamp(18px, 3vw, 26px);
         }
 
         .co-dialog-summary {
           display: grid;
           grid-template-columns: repeat(2, minmax(0, 1fr));
           gap: 10px;
-          margin: 20px 0;
+          margin: 0 0 20px;
           padding: 14px;
-          border-radius: 18px;
-          background: linear-gradient(135deg, #f1efff, #f3fbff);
+          border-radius: 16px;
+          background: linear-gradient(135deg, #f0f5ff, #eefcfb);
         }
 
         .co-dialog-summary span,
@@ -987,20 +1802,14 @@ export default function CompOffCredits() {
         .co-field input,
         .co-field textarea {
           width: 100%;
-          box-sizing: border-box;
+          min-width: 0;
+          padding: 12px 13px;
           border: 1px solid #d7dce9;
-          border-radius: 15px;
+          border-radius: 14px;
           outline: none;
           color: var(--co-ink);
           background: #fff;
-          padding: 12px 13px;
           font: inherit;
-        }
-
-        .co-field input:focus,
-        .co-field textarea:focus {
-          border-color: rgba(102, 87, 220, .62);
-          box-shadow: 0 0 0 4px rgba(102, 87, 220, .1);
         }
 
         .co-field textarea {
@@ -1013,29 +1822,17 @@ export default function CompOffCredits() {
           line-height: 1.4;
         }
 
+        .co-dialog-action-stack {
+          display: grid;
+          gap: 9px;
+          width: 100%;
+        }
+
         .co-dialog-actions {
           display: flex;
           justify-content: flex-end;
           gap: 10px;
           margin-top: 4px;
-        }
-
-        .co-cancel-btn,
-        .co-submit-btn {
-          min-height: 44px;
-          padding: 11px 17px;
-          border-radius: 999px;
-        }
-
-        .co-cancel-btn {
-          color: #536078;
-          background: #eef1f6;
-        }
-
-        .co-submit-btn {
-          color: #fff;
-          background: linear-gradient(135deg, var(--co-purple-dark), var(--co-purple));
-          box-shadow: 0 11px 22px rgba(79, 68, 176, .24);
         }
 
         @keyframes co-spin {
@@ -1046,9 +1843,37 @@ export default function CompOffCredits() {
           to { background-position: -200% 0; }
         }
 
+        @media (max-width: 1180px) {
+          .co-summary-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
+          .co-pagination {
+            align-items: flex-start;
+            flex-direction: column;
+          }
+
+          .co-pagination-controls {
+            width: 100%;
+            justify-content: flex-start;
+          }
+        }
+
         @media (max-width: 900px) {
           .co-hero {
             grid-template-columns: 1fr;
+          }
+
+          .co-policy-card {
+            width: min(520px, 100%);
+          }
+
+          .co-controls {
+            grid-template-columns: 1fr;
+          }
+
+          .co-filters {
+            justify-content: flex-start;
           }
 
           .co-credit-grid,
@@ -1058,6 +1883,21 @@ export default function CompOffCredits() {
         }
 
         @media (max-width: 680px) {
+          .comp-off-page {
+            gap: 15px;
+          }
+
+          .co-hero {
+            min-height: 0;
+            padding: 20px;
+            border-radius: 26px;
+            box-shadow: 0 18px 30px rgba(34,38,110,.09);
+          }
+
+          .co-hero h1 {
+            font-size: clamp(36px, 10vw, 52px);
+          }
+
           .co-summary-grid {
             grid-template-columns: 1fr;
           }
@@ -1068,8 +1908,52 @@ export default function CompOffCredits() {
             flex-direction: column;
           }
 
+          .co-refresh-stack,
           .co-refresh-btn,
           .co-claim-btn {
+            width: 100%;
+          }
+
+          .co-filters {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
+          .co-filter-btn {
+            width: 100%;
+          }
+
+          .co-pagination {
+            padding: 12px;
+          }
+
+          .co-pagination-controls {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            align-items: stretch;
+          }
+
+          .co-page-size,
+          .co-page-numbers,
+          .co-page-indicator {
+            grid-column: 1 / -1;
+            justify-self: stretch;
+          }
+
+          .co-page-size {
+            justify-content: space-between;
+          }
+
+          .co-page-size select {
+            flex: 1 1 auto;
+          }
+
+          .co-page-numbers {
+            justify-content: center;
+            flex-wrap: wrap;
+          }
+
+          .co-page-nav {
             width: 100%;
           }
 
@@ -1082,19 +1966,37 @@ export default function CompOffCredits() {
             flex-direction: column;
           }
 
-          .co-status-badge {
-            margin-left: 56px;
+          .co-dialog-backdrop {
+            align-items: stretch;
+            padding: 0;
+          }
+
+          .co-dialog {
+            width: 100%;
+            max-width: 100%;
+            height: 100dvh;
+            max-height: 100dvh;
+            margin: 0;
+            border-radius: 0;
+            box-shadow: none;
+          }
+
+          .co-dialog-body {
+            padding: 16px;
           }
         }
 
         @media (max-width: 480px) {
-          .co-hero,
-          .co-list-section {
-            border-radius: 23px;
+          .co-hero {
+            padding: 16px;
           }
 
           .co-hero h1 {
-            font-size: 38px;
+            font-size: clamp(32px, 11vw, 44px);
+          }
+
+          .co-filters {
+            grid-template-columns: 1fr;
           }
 
           .co-dialog-summary {
@@ -1109,31 +2011,40 @@ export default function CompOffCredits() {
           .co-submit-btn {
             width: 100%;
           }
+
+          .co-page-number {
+            width: 34px;
+            height: 34px;
+          }
+        }
+
+        @media (orientation: landscape) and (max-height: 600px) {
+          .co-dialog {
+            max-height: 100dvh;
+          }
         }
 
         @media (prefers-reduced-motion: reduce) {
-          .co-refresh-btn,
-          .co-claim-btn,
-          .co-submit-btn,
-          .co-progress-bar {
-            transition: none;
-          }
-
-          .co-skeleton,
-          .co-refresh-btn svg.is-spinning {
-            animation: none;
+          .comp-off-page *,
+          .comp-off-page *::before,
+          .comp-off-page *::after {
+            animation: none !important;
+            transition: none !important;
           }
         }
       `}</style>
 
       <section className="co-hero">
-        <div>
+        <div className="co-hero-copy">
           <span className="co-kicker">
-            <Gift size={14} /> Earned Benefit
+            <Gift size={14} />
+            Earned Benefit
           </span>
+
           <h1>
             My Comp-Off <em>Credits</em>
           </h1>
+
           <p>
             A Comp-Off credit is generated after approved holiday work attendance.
             View every available credit, follow its seven-working-day countdown,
@@ -1143,8 +2054,10 @@ export default function CompOffCredits() {
 
         <div className="co-policy-card">
           <strong>
-            <ShieldCheck size={19} /> Automatic and verified
+            <ShieldCheck size={19} />
+            Automatic and verified
           </strong>
+
           <span>
             Credits cannot be added manually. Each credit remains linked to
             verified holiday work and can be used for one day of Comp-Off leave.
@@ -1154,33 +2067,27 @@ export default function CompOffCredits() {
 
       <section className="co-summary-grid" aria-label="Comp-Off summary">
         <article className="co-summary-card">
-          <span className="co-summary-icon">
-            <Gift size={23} />
-          </span>
-          <div>
-            <span>Available Credits</span>
-            <strong>{counts.available}</strong>
-          </div>
+          <span>Total Credits</span>
+          <strong>{counts.total}</strong>
+          <small>All credits in your Comp-Off wallet</small>
         </article>
 
-        <article className="co-summary-card is-claimed">
-          <span className="co-summary-icon">
-            <CheckCircle2 size={23} />
-          </span>
-          <div>
-            <span>Claimed Credits</span>
-            <strong>{counts.claimed}</strong>
-          </div>
+        <article className="co-summary-card">
+          <span>Available Credits</span>
+          <strong>{counts.available}</strong>
+          <small>Credits that may still be claimed</small>
         </article>
 
-        <article className="co-summary-card is-expired">
-          <span className="co-summary-icon">
-            <XCircle size={23} />
-          </span>
-          <div>
-            <span>Expired Credits</span>
-            <strong>{counts.expired}</strong>
-          </div>
+        <article className="co-summary-card">
+          <span>Claimed Credits</span>
+          <strong>{counts.claimed}</strong>
+          <small>Credits already submitted for leave</small>
+        </article>
+
+        <article className="co-summary-card">
+          <span>Expired Credits</span>
+          <strong>{counts.expired}</strong>
+          <small>Credits whose claim window has ended</small>
         </article>
       </section>
 
@@ -1194,38 +2101,83 @@ export default function CompOffCredits() {
             </p>
           </div>
 
-          <button
-            type="button"
-            className="co-refresh-btn"
-            onClick={() => loadCredits({ silent: true })}
-            disabled={loading || refreshing}
-          >
-            <RefreshCcw
-              size={16}
-              className={refreshing ? 'is-spinning' : ''}
-            />
-            {refreshing ? 'Refreshing...' : 'Refresh'}
-          </button>
-        </div>
-
-        <div className="co-filters" aria-label="Filter Comp-Off credits">
-          {[
-            ['all', 'All', counts.total],
-            ['available', 'Available', counts.available],
-            ['claimed', 'Claimed', counts.claimed],
-            ['expired', 'Expired', counts.expired],
-          ].map(([value, label, count]) => (
+          <div className="co-refresh-stack">
             <button
               type="button"
-              className={`co-filter-btn ${filter === value ? 'is-active' : ''}`}
-              onClick={() => setFilter(value)}
-              key={value}
-              aria-pressed={filter === value}
+              className="co-refresh-btn"
+              onClick={() =>
+                loadCredits({
+                  silent: true,
+                  feedbackScope: 'refresh',
+                })
+              }
+              disabled={loading || refreshing}
             >
-              {label} ({count})
+              <RefreshCcw
+                size={16}
+                className={refreshing ? 'is-spinning' : ''}
+              />
+              {refreshing ? 'Refreshing...' : 'Refresh'}
             </button>
-          ))}
+
+            <CompOffInlineMessage
+              message={feedbackMap.refresh}
+              onClose={() => clearFeedback('refresh')}
+            />
+          </div>
         </div>
+
+        <div className="co-controls">
+          <div className="co-search-wrap">
+            <Search size={17} />
+            <input
+              type="search"
+              value={searchInput}
+              onChange={(event) => setSearchInput(event.target.value)}
+              placeholder="Search holiday, status, date or claim..."
+              aria-label="Search Comp-Off credits"
+            />
+          </div>
+
+          <div className="co-filters" aria-label="Filter Comp-Off credits">
+            {[
+              ['all', 'All', counts.total],
+              ['available', 'Available', counts.available],
+              ['claimed', 'Claimed', counts.claimed],
+              ['expired', 'Expired', counts.expired],
+            ].map(([value, label, count]) => (
+              <button
+                type="button"
+                className={`co-filter-btn ${filter === value ? 'is-active' : ''}`}
+                onClick={() => setFilter(value)}
+                key={value}
+                aria-pressed={filter === value}
+              >
+                {label} ({count})
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {feedbackMap.wallet ? (
+          <div className="co-wallet-feedback">
+            <CompOffInlineMessage
+              message={feedbackMap.wallet}
+              onClose={() => clearFeedback('wallet')}
+            />
+          </div>
+        ) : null}
+
+        <CompOffPagination
+          total={visibleCredits.length}
+          page={safePage}
+          pageSize={pageSize}
+          onPageChange={setPage}
+          onPageSizeChange={(value) => {
+            setPage(1);
+            setPageSize(value);
+          }}
+        />
 
         {loading ? (
           <div className="co-skeleton-grid" aria-label="Loading Comp-Off credits">
@@ -1236,19 +2188,23 @@ export default function CompOffCredits() {
           <div className="co-empty-state">
             <CalendarDays size={38} />
             <h3>
-              {filter === 'all'
-                ? 'No Comp-Off credits yet'
-                : `No ${statusLabel(filter)} credits`}
+              {searchInput
+                ? 'No matching Comp-Off credits'
+                : filter === 'all'
+                  ? 'No Comp-Off credits yet'
+                  : `No ${statusLabel(filter)} credits`}
             </h3>
             <p>
-              {filter === 'all'
-                ? 'A credit will appear here automatically after approved holiday work attendance and checkout.'
-                : 'There are no credits in this status.'}
+              {searchInput
+                ? 'No credit matches the current search and status filter.'
+                : filter === 'all'
+                  ? 'A credit will appear here automatically after approved holiday work attendance and checkout.'
+                  : 'There are no credits in this status.'}
             </p>
           </div>
         ) : (
           <div className="co-credit-grid" aria-live="polite">
-            {visibleCredits.map((credit, index) => {
+            {pagedCredits.map((credit, index) => {
               const storedStatus = normalizeStatus(credit.status);
               const windowStatus = claimWindowStatus(credit);
               const displayStatus =
@@ -1264,19 +2220,22 @@ export default function CompOffCredits() {
               );
               const claimable = canClaimCredit(credit);
               const StatusIcon = statusIcon(displayStatus);
+              const rowKey = creditKey(credit, pageStart + index);
+              const rowFeedback = feedbackMap[`credit-${rowKey}`];
 
               return (
                 <article
                   className={`co-credit-card is-${
                     storedStatus === 'available' ? displayStatus : storedStatus
                   }`}
-                  key={creditKey(credit, index)}
+                  key={rowKey}
                 >
                   <div className="co-credit-top">
                     <div className="co-credit-title">
                       <span className="co-credit-icon">
                         <StatusIcon size={21} />
                       </span>
+
                       <div>
                         <h3>{creditTitle(credit)}</h3>
                         <p>Earned through approved holiday attendance</p>
@@ -1299,10 +2258,12 @@ export default function CompOffCredits() {
                       <span>Earned On</span>
                       <strong>{formatDate(credit.earned_date)}</strong>
                     </div>
+
                     <div className="co-date-box">
                       <span>Claim From</span>
                       <strong>{formatDate(credit.available_from)}</strong>
                     </div>
+
                     <div className="co-date-box">
                       <span>Valid Until</span>
                       <strong>
@@ -1315,18 +2276,22 @@ export default function CompOffCredits() {
                     <div className="co-countdown">
                       <div className="co-countdown-head">
                         <span className="co-countdown-label">
-                          <Timer size={16} /> Claim countdown
+                          <Timer size={16} />
+                          Claim countdown
                         </span>
+
                         <strong>
                           {remaining} working {remaining === 1 ? 'day' : 'days'} left
                         </strong>
                       </div>
+
                       <div className="co-progress-track" aria-hidden="true">
                         <div
                           className="co-progress-bar"
                           style={{ width: `${progress}%` }}
                         />
                       </div>
+
                       <small>
                         {displayStatus === 'upcoming'
                           ? `Claiming opens on ${formatDate(credit.available_from)}.`
@@ -1348,7 +2313,8 @@ export default function CompOffCredits() {
 
                   <div className="co-credit-footer">
                     <span className="co-days-credit">
-                      Credit value: <strong>{Number(credit.leave_days) || 1} day</strong>
+                      Credit value:{' '}
+                      <strong>{Number(credit.leave_days) || 1} day</strong>
                     </span>
 
                     {storedStatus === 'available' && (
@@ -1368,6 +2334,15 @@ export default function CompOffCredits() {
                       </button>
                     )}
                   </div>
+
+                  {rowFeedback ? (
+                    <div className="co-card-feedback">
+                      <CompOffInlineMessage
+                        message={rowFeedback}
+                        onClose={() => clearFeedback(`credit-${rowKey}`)}
+                      />
+                    </div>
+                  ) : null}
                 </article>
               );
             })}
@@ -1406,20 +2381,22 @@ export default function CompOffCredits() {
               </button>
             </div>
 
-            <div className="co-dialog-summary">
-              <div>
-                <span>Earned On</span>
-                <strong>{formatDate(selectedCredit.earned_date)}</strong>
-              </div>
-              <div>
-                <span>Time Remaining</span>
-                <strong>
-                  {remainingWorkingDays(selectedCredit)} working days
-                </strong>
-              </div>
-            </div>
+            <div className="co-dialog-body">
+              <div className="co-dialog-summary">
+                <div>
+                  <span>Earned On</span>
+                  <strong>{formatDate(selectedCredit.earned_date)}</strong>
+                </div>
 
-            <form className="co-claim-form" onSubmit={submitClaim}>
+                <div>
+                  <span>Time Remaining</span>
+                  <strong>
+                    {remainingWorkingDays(selectedCredit)} working days
+                  </strong>
+                </div>
+              </div>
+
+              <form className="co-claim-form" onSubmit={submitClaim}>
               <div className="co-field">
                 <label htmlFor="co-claim-date">Comp-Off Leave Date</label>
                 <input
@@ -1449,25 +2426,34 @@ export default function CompOffCredits() {
                 />
               </div>
 
-              <div className="co-dialog-actions">
-                <button
-                  type="button"
-                  className="co-cancel-btn"
-                  onClick={closeClaimDialog}
-                  disabled={claiming}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="co-submit-btn"
-                  disabled={claiming || !claimDate}
-                >
-                  <CalendarCheck size={17} />
-                  {claiming ? 'Submitting...' : 'Submit Claim'}
-                </button>
+              <div className="co-dialog-action-stack">
+                <div className="co-dialog-actions">
+                  <button
+                    type="button"
+                    className="co-cancel-btn"
+                    onClick={closeClaimDialog}
+                    disabled={claiming}
+                  >
+                    Cancel
+                  </button>
+
+                  <button
+                    type="submit"
+                    className="co-submit-btn"
+                    disabled={claiming || !claimDate}
+                  >
+                    <CalendarCheck size={17} />
+                    {claiming ? 'Submitting...' : 'Submit Claim'}
+                  </button>
+                </div>
+
+                <CompOffInlineMessage
+                  message={feedbackMap['claim-modal']}
+                  onClose={() => clearFeedback('claim-modal')}
+                />
               </div>
             </form>
+            </div>
           </section>
         </div>
       )}

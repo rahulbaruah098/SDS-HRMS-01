@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   BadgeCheck,
@@ -17,10 +17,10 @@ import {
   Sparkles,
   UserRound,
   WalletCards,
+  X,
 } from 'lucide-react';
 
 import { api, getApiUrl, getToken } from '../api/client';
-import { useCustomAlert } from '../components/CustomAlertProvider.jsx';
 
 const DEFAULT_LIMIT = 1000;
 
@@ -384,8 +384,51 @@ async function readPdfError(response) {
   }
 }
 
+
+function PayslipFeedbackLine({ feedback, onClose, className = '' }) {
+  if (!feedback?.message) {
+    return null;
+  }
+
+  const type = ['success', 'warning', 'error', 'info'].includes(feedback.type)
+    ? feedback.type
+    : 'info';
+
+  const Icon =
+    type === 'success'
+      ? CheckCircle2
+      : type === 'error' || type === 'warning'
+        ? AlertTriangle
+        : ShieldCheck;
+
+  return (
+    <div
+      className={`payslip-feedback ${type} ${className}`.trim()}
+      role={type === 'error' ? 'alert' : 'status'}
+      aria-live={type === 'error' ? 'assertive' : 'polite'}
+    >
+      <span className="payslip-feedback-icon" aria-hidden="true">
+        {feedback.loading ? <Loader2 size={16} className="spin" /> : <Icon size={16} />}
+      </span>
+
+      <span className="payslip-feedback-copy">
+        {feedback.title ? <strong>{feedback.title}</strong> : null}
+        <span>{feedback.message}</span>
+      </span>
+
+      <button
+        type="button"
+        className="payslip-feedback-close"
+        onClick={onClose}
+        aria-label="Dismiss notification"
+      >
+        <X size={15} />
+      </button>
+    </div>
+  );
+}
+
 export default function Payslips({ user = {}, setPage = () => {} }) {
-  const alerts = useCustomAlert();
   const privileged = hasPrivilegedAccess(user);
   const superAdmin = isSuperAdmin(user);
 
@@ -404,6 +447,119 @@ export default function Payslips({ user = {}, setPage = () => {} }) {
   const [loadingEmployees, setLoadingEmployees] = useState(false);
   const [loadingPayslips, setLoadingPayslips] = useState(false);
   const [pdfActionKey, setPdfActionKey] = useState('');
+  const [feedback, setFeedback] = useState({});
+  const feedbackTimersRef = useRef({});
+  const manualRefreshStatusRef = useRef({
+    active: false,
+    failed: false,
+  });
+
+  function clearPayslipFeedback(scopeKey) {
+    if (!scopeKey) {
+      return;
+    }
+
+    const timer = feedbackTimersRef.current[scopeKey];
+    if (timer) {
+      window.clearTimeout(timer);
+      delete feedbackTimersRef.current[scopeKey];
+    }
+
+    setFeedback((current) => {
+      if (!Object.prototype.hasOwnProperty.call(current, scopeKey)) {
+        return current;
+      }
+
+      const next = { ...current };
+      delete next[scopeKey];
+      return next;
+    });
+  }
+
+  function showPayslipFeedback(
+    scopeKey,
+    type,
+    message,
+    title = '',
+    options = {},
+  ) {
+    if (!scopeKey) {
+      return;
+    }
+
+    const timer = feedbackTimersRef.current[scopeKey];
+    if (timer) {
+      window.clearTimeout(timer);
+      delete feedbackTimersRef.current[scopeKey];
+    }
+
+    setFeedback((current) => ({
+      ...current,
+      [scopeKey]: {
+        type,
+        message,
+        title,
+        loading: Boolean(options.loading),
+      },
+    }));
+
+    if (!options.loading) {
+      feedbackTimersRef.current[scopeKey] = window.setTimeout(() => {
+        setFeedback((current) => {
+          const next = { ...current };
+          delete next[scopeKey];
+          return next;
+        });
+        delete feedbackTimersRef.current[scopeKey];
+      }, 4200);
+    }
+  }
+
+  useEffect(() => {
+    return () => {
+      Object.values(feedbackTimersRef.current).forEach((timer) => {
+        window.clearTimeout(timer);
+      });
+      feedbackTimersRef.current = {};
+    };
+  }, []);
+
+  useEffect(() => {
+    const visibleFeedbackKeys = Object.keys(feedback);
+
+    if (!visibleFeedbackKeys.length) {
+      return undefined;
+    }
+
+    function dismissVisibleFeedbackOnScreenClick() {
+      visibleFeedbackKeys.forEach((scopeKey) => {
+        const timer = feedbackTimersRef.current[scopeKey];
+
+        if (timer) {
+          window.clearTimeout(timer);
+          delete feedbackTimersRef.current[scopeKey];
+        }
+      });
+
+      setFeedback((current) => {
+        if (!Object.keys(current).length) {
+          return current;
+        }
+
+        return {};
+      });
+    }
+
+    document.addEventListener('pointerdown', dismissVisibleFeedbackOnScreenClick);
+
+    return () => {
+      document.removeEventListener(
+        'pointerdown',
+        dismissVisibleFeedbackOnScreenClick,
+      );
+    };
+  }, [feedback]);
+
 
   function tenantParams() {
     if (!superAdmin || !tenantId.trim()) {
@@ -415,7 +571,9 @@ export default function Payslips({ user = {}, setPage = () => {} }) {
 
   function assertTenant() {
     if (superAdmin && !tenantId.trim()) {
-      alerts.warning(
+      showPayslipFeedback(
+        'filters',
+        'warning',
         'Enter the company tenant ID before loading payslips.',
         'Tenant Required',
       );
@@ -518,8 +676,14 @@ export default function Payslips({ user = {}, setPage = () => {} }) {
     } catch (error) {
       setEmployees([]);
 
+      if (manualRefreshStatusRef.current.active) {
+        manualRefreshStatusRef.current.failed = true;
+      }
+
       if (!silent) {
-        alerts.error(
+        showPayslipFeedback(
+          'filters',
+          'error',
           error.message || 'Unable to load employees.',
           'Employee Load Failed',
         );
@@ -570,8 +734,14 @@ export default function Payslips({ user = {}, setPage = () => {} }) {
       setPayslips([]);
       setSelectedPayslip(null);
 
+      if (manualRefreshStatusRef.current.active) {
+        manualRefreshStatusRef.current.failed = true;
+      }
+
       if (!silent) {
-        alerts.error(
+        showPayslipFeedback(
+          'results',
+          'error',
           error.message || 'Unable to load payslips.',
           'Payslip Load Failed',
         );
@@ -591,6 +761,56 @@ export default function Payslips({ user = {}, setPage = () => {} }) {
     }
 
     await Promise.all(tasks);
+  }
+
+  async function handleManualRefresh() {
+    if (superAdmin && !tenantId.trim()) {
+      showPayslipFeedback(
+        'actions',
+        'warning',
+        'Enter the company tenant ID before refreshing payslip data.',
+        'Tenant Required',
+      );
+      return;
+    }
+
+    manualRefreshStatusRef.current = {
+      active: true,
+      failed: false,
+    };
+
+    showPayslipFeedback(
+      'actions',
+      'info',
+      'Refreshing payslip and employee data with the current filters...',
+      'Refreshing Payslips',
+      { loading: true },
+    );
+
+    try {
+      await refreshAll({ silent: false });
+
+      if (manualRefreshStatusRef.current.failed) {
+        showPayslipFeedback(
+          'actions',
+          'error',
+          'Some payslip data could not be refreshed. Review the related message below and try again.',
+          'Refresh Incomplete',
+        );
+      } else {
+        showPayslipFeedback(
+          'actions',
+          'success',
+          'Payslip and employee data were refreshed successfully.',
+          'Refresh Complete',
+        );
+      }
+    } finally {
+      manualRefreshStatusRef.current = {
+        active: false,
+        failed: false,
+      };
+    }
   }
 
   useEffect(() => {
@@ -613,7 +833,9 @@ export default function Payslips({ user = {}, setPage = () => {} }) {
     const month = Number(monthText);
 
     if (!employee || !year || !month) {
-      alerts.warning(
+      showPayslipFeedback(
+        'pdf',
+        'warning',
         'This payslip does not contain a valid employee and payroll period.',
         'Payslip PDF Unavailable',
       );
@@ -627,7 +849,9 @@ export default function Payslips({ user = {}, setPage = () => {} }) {
       previewWindow = window.open('', '_blank');
 
       if (!previewWindow) {
-        alerts.warning(
+        showPayslipFeedback(
+          'pdf',
+          'warning',
           'Allow pop-ups for this HRMS site, then try again.',
           'Preview Blocked',
         );
@@ -642,6 +866,15 @@ export default function Payslips({ user = {}, setPage = () => {} }) {
 
     try {
       setPdfActionKey(actionKey);
+      showPayslipFeedback(
+        'pdf',
+        'info',
+        mode === 'preview'
+          ? 'Preparing the server-generated payslip preview...'
+          : 'Preparing the payslip PDF download...',
+        mode === 'preview' ? 'Preparing Preview' : 'Preparing Download',
+        { loading: true },
+      );
 
       const token = getToken();
       const query = buildQuery({
@@ -680,6 +913,7 @@ export default function Payslips({ user = {}, setPage = () => {} }) {
       if (mode === 'preview') {
         previewWindow.location.replace(objectUrl);
         window.setTimeout(() => URL.revokeObjectURL(objectUrl), 120000);
+        clearPayslipFeedback('pdf');
       } else {
         const link = document.createElement('a');
         link.href = objectUrl;
@@ -689,7 +923,9 @@ export default function Payslips({ user = {}, setPage = () => {} }) {
         link.remove();
         window.setTimeout(() => URL.revokeObjectURL(objectUrl), 30000);
 
-        alerts.success(
+        showPayslipFeedback(
+          'pdf',
+          'success',
           `${filename} was downloaded successfully.`,
           'Payslip Downloaded',
         );
@@ -699,7 +935,9 @@ export default function Payslips({ user = {}, setPage = () => {} }) {
         previewWindow.close();
       }
 
-      alerts.error(
+      showPayslipFeedback(
+        'pdf',
+        'error',
         error.message || 'Unable to generate the payslip PDF.',
         mode === 'preview'
           ? 'Payslip Preview Failed'
@@ -763,118 +1001,154 @@ export default function Payslips({ user = {}, setPage = () => {} }) {
       <style>{`
         .payslips-page {
           --payslip-ink: #101a3a;
-          --payslip-muted: #5d6d8d;
-          --payslip-primary: #6658dc;
+          --payslip-heading: #17213d;
+          --payslip-muted: #64738f;
+          --payslip-primary: #5145d8;
           --payslip-primary-dark: #40348d;
-          --payslip-blue: #3766db;
-          --payslip-cyan: #18b5c8;
-          --payslip-teal: #34c9c4;
-          --payslip-yellow: #d8ff43;
-          --payslip-border: rgba(16, 26, 58, .14);
+          --payslip-blue: #4c79df;
+          --payslip-cyan: #2bb6c6;
+          --payslip-teal: #13a77a;
+          --payslip-amber: #c48616;
+          --payslip-rose: #c1546d;
+          --payslip-border: rgba(166, 177, 213, .66);
+          --payslip-soft-border: rgba(171, 181, 211, .46);
           --payslip-card: #ffffff;
-          display: grid;
-          gap: clamp(18px, 2vw, 26px);
+
+          width: min(1280px, calc(100% - 48px));
+          max-width: 1280px;
           min-width: 0;
+          margin: 0 auto;
+          display: grid;
+          gap: 22px;
           color: var(--payslip-ink);
         }
 
-        .payslips-page * {
+        .payslips-page *,
+        .payslips-page *::before,
+        .payslips-page *::after {
           box-sizing: border-box;
         }
 
         .payslip-hero {
           position: relative;
           isolation: isolate;
-          overflow: hidden;
           display: grid;
           grid-template-columns: minmax(0, 1fr) auto;
           align-items: center;
-          gap: clamp(22px, 3vw, 40px);
-          min-height: 275px;
-          padding: clamp(25px, 3vw, 42px);
-          border: 1px solid rgba(154, 164, 205, .58);
-          border-radius: clamp(28px, 2.7vw, 40px);
+          gap: 30px;
+          min-height: 255px;
+          padding: clamp(28px, 3.2vw, 44px);
+          overflow: hidden;
+          border: 1px solid rgba(155, 171, 216, .62);
+          border-radius: 32px;
           background:
-            radial-gradient(circle at 8% 6%, rgba(105, 217, 208, .26), transparent 29%),
-            radial-gradient(circle at 95% 4%, rgba(153, 164, 245, .24), transparent 31%),
-            linear-gradient(135deg, #eef9ff 0%, #f8f3ff 52%, #effbf8 100%);
+            linear-gradient(
+              90deg,
+              #d9f6ff 0%,
+              #edfaff 27%,
+              #ffffff 51%,
+              #f7f3ff 73%,
+              #ebe5ff 100%
+            );
           box-shadow:
-            12px 14px 0 #c6d8f7,
-            0 28px 48px rgba(34, 38, 110, .13);
-        }
-
-        .payslip-hero::before {
-          content: "";
-          position: absolute;
-          z-index: -1;
-          width: 175px;
-          height: 175px;
-          right: 8%;
-          bottom: -98px;
-          border-radius: 38% 62% 58% 42% / 48% 43% 57% 52%;
-          background: linear-gradient(
-            145deg,
-            rgba(105, 217, 208, .30),
-            rgba(132, 181, 241, .28)
-          );
-          transform: rotate(-18deg);
+            10px 12px 0 #b9d5ff,
+            0 28px 54px rgba(34, 38, 110, .10);
         }
 
         .payslip-hero-content,
         .payslip-hero-actions {
           position: relative;
           z-index: 1;
+          min-width: 0;
         }
 
-        .payslip-kicker {
+        .payslip-kicker,
+        .payslip-section-kicker {
           display: inline-flex;
           align-items: center;
           gap: 8px;
           width: max-content;
           max-width: 100%;
-          margin-bottom: 15px;
-          padding: 9px 13px;
           border-radius: 999px;
-          color: #fff;
-          background: #342b78;
-          box-shadow: 4px 5px 0 #18b5c8;
-          font-size: 9px;
           font-weight: 950;
           line-height: 1;
-          letter-spacing: .12em;
+          letter-spacing: .10em;
           text-transform: uppercase;
         }
 
+        .payslip-kicker {
+          margin-bottom: 17px;
+          padding: 10px 14px;
+          color: #ffffff;
+          background: linear-gradient(135deg, #4f7de2 0%, #2db6c5 100%);
+          box-shadow: 5px 6px 0 #504694;
+          font-size: 9px;
+        }
+
+        .payslip-section-kicker {
+          margin-bottom: 7px;
+          color: #4d46a8;
+          font-size: 9px;
+        }
+
         .payslip-hero h1 {
-          max-width: 900px;
+          max-width: 820px;
           margin: 0;
           color: var(--payslip-ink);
           font-family: var(--yc-display, Georgia, "Times New Roman", serif);
-          font-size: clamp(44px, 5.2vw, 77px);
+          font-size: clamp(46px, 5.2vw, 76px);
           font-weight: 760;
-          line-height: .94;
-          letter-spacing: -.058em;
+          line-height: .96;
+          letter-spacing: -.055em;
         }
 
         .payslip-hero h1 em {
-          color: var(--payslip-primary);
-          font-family: Georgia, "Times New Roman", serif;
+          color: #41398e;
+          font-family: inherit;
+          font-style: normal;
           font-weight: 500;
         }
 
         .payslip-hero p {
-          max-width: 840px;
-          margin: 17px 0 0;
-          color: var(--payslip-muted);
-          font-size: clamp(13px, 1vw, 16px);
-          line-height: 1.68;
+          max-width: 860px;
+          margin: 18px 0 0;
+          color: #617394;
+          font-size: clamp(13px, 1.12vw, 16px);
+          line-height: 1.7;
         }
 
         .payslip-hero-actions {
+          display: grid;
+          justify-items: end;
+          align-content: center;
+          gap: 11px;
+          width: min(100%, 430px);
+          max-width: 430px;
+        }
+
+        .payslip-hero-action-buttons {
           display: flex;
           flex-wrap: wrap;
           justify-content: flex-end;
-          gap: 10px;
+          align-items: center;
+          gap: 12px;
+          width: 100%;
+        }
+
+        .payslip-hero-action-buttons > .payslip-btn {
+          flex: 0 0 auto;
+        }
+
+        .payslip-hero-action-buttons .payslip-pdf-actions {
+          margin-top: 0;
+        }
+
+        .payslip-hero-action-feedbacks {
+          display: grid;
+          gap: 9px;
+          width: 100%;
+          min-width: 0;
+          min-height: 0;
         }
 
         .payslip-btn {
@@ -882,21 +1156,23 @@ export default function Payslips({ user = {}, setPage = () => {} }) {
           align-items: center;
           justify-content: center;
           gap: 8px;
-          min-height: 44px;
-          padding: 10px 15px;
+          min-height: 46px;
+          max-width: 100%;
+          padding: 11px 16px;
           border: 1px solid transparent;
-          border-radius: 15px;
+          border-radius: 16px;
           font: inherit;
-          font-size: 13px;
+          font-size: 12px;
           font-weight: 900;
           line-height: 1;
+          white-space: nowrap;
           cursor: pointer;
           transition:
-            transform 190ms cubic-bezier(.22,1,.36,1),
-            box-shadow 190ms ease,
-            background 190ms ease,
-            opacity 190ms ease,
-            filter 190ms ease;
+            transform 180ms cubic-bezier(.22,1,.36,1),
+            box-shadow 180ms ease,
+            border-color 180ms ease,
+            opacity 180ms ease,
+            filter 180ms ease;
         }
 
         .payslip-btn:hover:not(:disabled) {
@@ -904,36 +1180,171 @@ export default function Payslips({ user = {}, setPage = () => {} }) {
           filter: saturate(1.04);
         }
 
+        .payslip-btn:focus-visible,
+        .payslip-module-link:focus-visible,
+        .payslip-row:focus-visible,
+        .payslip-feedback-close:focus-visible,
+        .payslip-field input:focus-visible,
+        .payslip-field select:focus-visible {
+          outline: 3px solid rgba(79, 101, 215, .20);
+          outline-offset: 3px;
+        }
+
         .payslip-btn:disabled {
           cursor: not-allowed;
           opacity: .55;
+          transform: none;
         }
 
         .payslip-btn-primary {
-          color: #fff;
-          background: linear-gradient(135deg, #342b78, #4f65d7 58%, #18b5c8);
+          color: #ffffff;
+          background: linear-gradient(135deg, #4d7de1 0%, #29b3c2 100%);
           box-shadow:
-            5px 6px 0 #a9d6f5,
-            0 14px 25px rgba(36, 74, 128, .16);
+            5px 6px 0 #51488f,
+            0 13px 24px rgba(56, 82, 165, .16);
         }
 
         .payslip-btn-success {
-          color: #fff;
-          background: linear-gradient(135deg, #16835f, #34c9c4);
-          box-shadow: 4px 5px 0 #aee6d9;
+          color: #ffffff;
+          background: linear-gradient(135deg, #118760, #30ba9c);
+          box-shadow: 4px 5px 0 #a8dfcf;
         }
 
         .payslip-btn-secondary {
           color: #40348d;
-          background: rgba(255,255,255,.92);
-          border-color: rgba(65,55,161,.18);
-          box-shadow: 3px 4px 0 rgba(52,43,120,.10);
+          border-color: rgba(86, 79, 190, .22);
+          background: rgba(255, 255, 255, .94);
+          box-shadow:
+            4px 5px 0 #ddd7ff,
+            0 11px 21px rgba(52, 43, 120, .08);
+        }
+
+        .payslip-feedback-zone {
+          position: relative;
+          z-index: 4;
+          width: 100%;
+          min-width: 0;
+        }
+
+        .payslip-hero-action-feedbacks .payslip-feedback {
+          min-height: 62px;
+          padding: 10px 11px;
+          border-radius: 15px;
+          box-shadow:
+            4px 5px 0 rgba(184, 207, 244, .72),
+            0 10px 20px rgba(34, 38, 110, .06);
+        }
+
+        .payslip-hero-action-feedbacks .payslip-feedback.success {
+          box-shadow: 4px 5px 0 #b5e6d8;
+        }
+
+        .payslip-hero-action-feedbacks .payslip-feedback.warning {
+          box-shadow: 4px 5px 0 #ffe0a3;
+        }
+
+        .payslip-hero-action-feedbacks .payslip-feedback.error {
+          box-shadow: 4px 5px 0 #f2c2cd;
+        }
+
+        .payslip-hero-action-feedbacks .payslip-feedback.info {
+          box-shadow: 4px 5px 0 #cbc4ff;
+        }
+
+        .payslip-feedback {
+          display: grid;
+          grid-template-columns: auto minmax(0, 1fr) auto;
+          align-items: start;
+          gap: 10px;
+          width: 100%;
+          min-width: 0;
+          padding: 12px 13px;
+          border: 1px solid rgba(113, 133, 175, .26);
+          border-radius: 16px;
+          background: #eef6ff;
+          box-shadow:
+            4px 5px 0 rgba(184, 207, 244, .78),
+            0 12px 24px rgba(34, 38, 110, .06);
+          animation: payslip-feedback-in 180ms ease-out;
+        }
+
+        .payslip-feedback.success {
+          color: #087659;
+          border-color: rgba(21, 154, 112, .24);
+          background: #e8f8f2;
+          box-shadow: 4px 5px 0 #b5e6d8;
+        }
+
+        .payslip-feedback.warning {
+          color: #966111;
+          border-color: rgba(207, 146, 32, .28);
+          background: #fff6df;
+          box-shadow: 4px 5px 0 #ffe0a3;
+        }
+
+        .payslip-feedback.error {
+          color: #a53d59;
+          border-color: rgba(191, 76, 104, .24);
+          background: #fff0f3;
+          box-shadow: 4px 5px 0 #f2c2cd;
+        }
+
+        .payslip-feedback.info {
+          color: #40348d;
+          border-color: rgba(86, 79, 190, .22);
+          background: #f0efff;
+          box-shadow: 4px 5px 0 #cbc4ff;
+        }
+
+        .payslip-feedback-icon {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          width: 30px;
+          height: 30px;
+          border-radius: 10px;
+          background: rgba(255, 255, 255, .68);
+        }
+
+        .payslip-feedback-copy {
+          display: grid;
+          gap: 3px;
+          min-width: 0;
+          font-size: 11px;
+          line-height: 1.45;
+        }
+
+        .payslip-feedback-copy strong {
+          font-size: 11px;
+          font-weight: 950;
+        }
+
+        .payslip-feedback-copy span {
+          overflow-wrap: anywhere;
+        }
+
+        .payslip-feedback-close {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          width: 30px;
+          height: 30px;
+          padding: 0;
+          border: 0;
+          border-radius: 10px;
+          color: currentColor;
+          background: rgba(255, 255, 255, .58);
+          cursor: pointer;
+        }
+
+        .payslip-feedback-inline {
+          margin-top: 14px;
         }
 
         .payslip-module-links {
           display: grid;
-          grid-template-columns: repeat(4, minmax(150px, 1fr));
-          gap: 13px;
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+          gap: 15px;
         }
 
         .payslip-module-link {
@@ -941,55 +1352,53 @@ export default function Payslips({ user = {}, setPage = () => {} }) {
           align-items: center;
           gap: 11px;
           min-width: 0;
-          min-height: 64px;
-          padding: 13px 15px;
-          border: 1px solid rgba(171,181,211,.66);
-          border-radius: 19px;
-          background: #edf6ff;
+          min-height: 72px;
+          padding: 15px 16px;
+          border: 1px solid var(--payslip-border);
+          border-radius: 20px;
           color: var(--payslip-ink);
-          box-shadow: 5px 6px 0 #b9d7ff;
+          background: #e6f2ff;
+          box-shadow:
+            5px 6px 0 #b8d7ff,
+            0 14px 24px rgba(34, 38, 110, .06);
           font: inherit;
           font-size: 12px;
           font-weight: 900;
           text-align: left;
           cursor: pointer;
           transition:
-            transform 190ms ease,
-            border-color 190ms ease,
-            box-shadow 190ms ease;
+            transform 180ms ease,
+            box-shadow 180ms ease,
+            border-color 180ms ease;
         }
 
         .payslip-module-link:nth-child(2) {
-          background: #eaf8f4;
-          box-shadow: 5px 6px 0 #aee6d9;
+          background: #e7f8f2;
+          box-shadow: 5px 6px 0 #b3e6d7;
         }
 
         .payslip-module-link:nth-child(3) {
-          background: #fff4d5;
-          box-shadow: 5px 6px 0 #ffe0a5;
+          background: #fff2cf;
+          box-shadow: 5px 6px 0 #ffdda0;
         }
 
         .payslip-module-link:nth-child(4) {
-          background: #f1efff;
-          box-shadow: 5px 6px 0 #c9c0ff;
+          background: #efecff;
+          box-shadow: 5px 6px 0 #c8c0ff;
         }
 
         .payslip-module-link:hover {
-          transform: translateY(-3px);
-          border-color: rgba(102,88,220,.30);
+          transform: translateY(-2px);
+          border-color: rgba(81, 69, 216, .32);
         }
 
         .payslip-module-link svg {
           flex: 0 0 auto;
           color: var(--payslip-primary);
-          animation: payslip-icon-float 3.2s ease-in-out infinite;
         }
 
-        .payslip-module-link:nth-child(2) svg { animation-delay: -.7s; }
-        .payslip-module-link:nth-child(3) svg { animation-delay: -1.4s; }
-        .payslip-module-link:nth-child(4) svg { animation-delay: -2.1s; }
-
         .payslip-module-link span {
+          min-width: 0;
           overflow: hidden;
           text-overflow: ellipsis;
           white-space: nowrap;
@@ -997,31 +1406,72 @@ export default function Payslips({ user = {}, setPage = () => {} }) {
 
         .payslip-panel {
           min-width: 0;
-          padding: clamp(20px, 2vw, 28px);
-          border: 1px solid rgba(171,181,211,.70);
-          border-radius: clamp(26px, 2.2vw, 36px);
-          background: linear-gradient(145deg, #ffffff, #f7fbff);
+          padding: clamp(20px, 2.1vw, 28px);
+          border: 1px solid var(--payslip-border);
+          border-radius: 28px;
+          background: #ffffff;
           box-shadow:
-            8px 10px 0 #c4ccff,
-            0 24px 42px rgba(34,38,110,.10);
-          transition:
-            transform 210ms cubic-bezier(.22,1,.36,1),
-            box-shadow 210ms ease,
-            border-color 210ms ease;
+            8px 10px 0 #cbd2ff,
+            0 23px 42px rgba(34, 38, 110, .08);
         }
 
-        .payslip-panel:hover {
-          border-color: rgba(102,88,220,.28);
-          transform: translateY(-3px);
-          box-shadow:
-            10px 12px 0 #c4ccff,
-            0 30px 50px rgba(34,38,110,.14);
+        .payslip-filter-panel {
+          background:
+            linear-gradient(
+              145deg,
+              rgba(255,255,255,.99) 0%,
+              rgba(247,249,255,.98) 100%
+            );
+        }
+
+        .payslip-panel-heading,
+        .payslip-section-head,
+        .payslip-detail-head {
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 16px;
+        }
+
+        .payslip-panel-heading {
+          margin-bottom: 18px;
+        }
+
+        .payslip-panel-heading h2,
+        .payslip-section-head h2,
+        .payslip-detail-head h2 {
+          margin: 0;
+          color: var(--payslip-heading);
+          font-family: var(--yc-display, Georgia, "Times New Roman", serif);
+          font-weight: 760;
+          line-height: 1.08;
+          letter-spacing: -.035em;
+        }
+
+        .payslip-panel-heading h2 {
+          font-size: clamp(22px, 2vw, 30px);
+        }
+
+        .payslip-panel-count {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          min-height: 38px;
+          padding: 8px 12px;
+          border: 1px solid rgba(81, 69, 216, .18);
+          border-radius: 999px;
+          color: #443c95;
+          background: #f0efff;
+          box-shadow: 3px 4px 0 #d5d0ff;
+          font-size: 10px;
+          font-weight: 950;
+          white-space: nowrap;
         }
 
         .payslip-toolbar {
           display: grid;
-          grid-template-columns: minmax(240px, 1.2fr) repeat(4, minmax(150px, .7fr));
-          gap: 12px;
+          grid-template-columns: minmax(250px, 1.35fr) repeat(4, minmax(150px, .72fr));
+          gap: 13px;
           align-items: end;
         }
 
@@ -1032,36 +1482,38 @@ export default function Payslips({ user = {}, setPage = () => {} }) {
         }
 
         .payslip-field label {
-          color: #303b5b;
-          font-size: 11px;
-          font-weight: 900;
+          color: #4e5d7c;
+          font-size: 9px;
+          font-weight: 950;
+          letter-spacing: .06em;
+          text-transform: uppercase;
         }
 
         .payslip-field input,
         .payslip-field select {
           width: 100%;
           min-width: 0;
-          min-height: 47px;
-          padding: 10px 13px;
-          border: 1px solid rgba(151,161,197,.58);
-          border-radius: 15px;
+          min-height: 50px;
+          padding: 10px 14px;
+          border: 1px solid rgba(157, 170, 209, .66);
+          border-radius: 16px;
           outline: none;
-          background: rgba(255,255,255,.94);
           color: var(--payslip-ink);
+          background: #ffffff;
           font: inherit;
-          font-size: 14px;
+          font-size: 13px;
           transition:
-            border-color 170ms ease,
-            box-shadow 170ms ease,
-            transform 170ms ease;
+            border-color 160ms ease,
+            box-shadow 160ms ease,
+            transform 160ms ease;
         }
 
         .payslip-field input:focus,
         .payslip-field select:focus {
-          border-color: rgba(102,88,220,.65);
+          border-color: rgba(81, 69, 216, .64);
           box-shadow:
-            4px 5px 0 rgba(102,88,220,.14),
-            0 0 0 4px rgba(102,88,220,.08);
+            0 0 0 4px rgba(81, 69, 216, .08),
+            4px 5px 0 rgba(196, 204, 255, .52);
           transform: translateY(-1px);
         }
 
@@ -1071,60 +1523,65 @@ export default function Payslips({ user = {}, setPage = () => {} }) {
 
         .payslip-search svg {
           position: absolute;
+          z-index: 1;
           top: 50%;
-          left: 12px;
-          color: var(--payslip-primary);
+          left: 15px;
+          width: 18px;
+          height: 18px;
+          color: #6558dc;
           transform: translateY(-50%);
           pointer-events: none;
         }
 
         .payslip-search input {
-          padding-left: 38px;
+          padding-left: 46px;
         }
 
         .payslip-metrics {
           display: grid;
-          grid-template-columns: repeat(6, minmax(140px, 1fr));
-          gap: 13px;
+          grid-template-columns: repeat(6, minmax(0, 1fr));
+          gap: 15px;
         }
 
         .payslip-metric {
+          container-type: inline-size;
+          display: grid;
+          align-content: start;
           min-width: 0;
-          padding: 17px;
-          border: 1px solid rgba(171,181,211,.66);
-          border-radius: 20px;
-          background: #edf6ff;
-          box-shadow: 5px 6px 0 #b9d7ff;
-          transition: transform 190ms ease;
+          min-height: 145px;
+          padding: 18px;
+          overflow: hidden;
+          border: 1px solid var(--payslip-border);
+          border-radius: 22px;
+          background: #e5f2ff;
+          box-shadow:
+            6px 7px 0 #afd4ff,
+            0 15px 28px rgba(31, 41, 92, .06);
         }
 
         .payslip-metric:nth-child(2) {
-          background: #eaf8f4;
-          box-shadow: 5px 6px 0 #aee6d9;
+          background: #e5f7f0;
+          box-shadow: 6px 7px 0 #b1e5d6;
         }
 
         .payslip-metric:nth-child(3) {
-          background: #fff0f2;
-          box-shadow: 5px 6px 0 #f2c2cc;
+          background: #fff0f3;
+          box-shadow: 6px 7px 0 #f2c2cc;
         }
 
         .payslip-metric:nth-child(4) {
-          background: #f1efff;
-          box-shadow: 5px 6px 0 #c9c0ff;
+          background: #efecff;
+          box-shadow: 6px 7px 0 #c8c0ff;
         }
 
         .payslip-metric:nth-child(5) {
-          background: #fff4d5;
-          box-shadow: 5px 6px 0 #ffe0a5;
+          background: #fff2cf;
+          box-shadow: 6px 7px 0 #ffdda0;
         }
 
         .payslip-metric:nth-child(6) {
-          background: #eaf8f4;
-          box-shadow: 5px 6px 0 #aee6d9;
-        }
-
-        .payslip-metric:hover {
-          transform: translateY(-3px);
+          background: #e5f7f0;
+          box-shadow: 6px 7px 0 #b1e5d6;
         }
 
         .payslip-metric-head {
@@ -1132,99 +1589,134 @@ export default function Payslips({ user = {}, setPage = () => {} }) {
           align-items: center;
           justify-content: space-between;
           gap: 10px;
-          margin-bottom: 10px;
-          color: #5d6785;
+          margin-bottom: 16px;
+          color: #5f6b88;
           font-size: 9px;
           font-weight: 950;
-          letter-spacing: .08em;
+          letter-spacing: .07em;
           text-transform: uppercase;
         }
 
         .payslip-metric-head svg {
-          color: var(--payslip-primary);
-          animation: payslip-icon-float 3.2s ease-in-out infinite;
+          flex: 0 0 auto;
+          color: #5b50d4;
         }
 
         .payslip-metric strong {
           display: block;
-          overflow: hidden;
+          width: 100%;
+          min-width: 0;
+          max-width: 100%;
+          overflow: visible;
           color: var(--payslip-ink);
-          font-family: Georgia, "Times New Roman", serif;
-          font-size: clamp(21px, 2.2vw, 31px);
-          line-height: 1.15;
-          text-overflow: ellipsis;
+          font-family: var(--yc-display, Georgia, "Times New Roman", serif);
+          font-size: clamp(15px, 1.4vw, 28px);
+          font-size: clamp(14px, 8.6cqi, 30px);
+          font-weight: 760;
+          font-variant-numeric: tabular-nums;
+          line-height: 1.02;
+          letter-spacing: -.045em;
           white-space: nowrap;
+          word-break: keep-all;
         }
 
         .payslip-main-grid {
           display: grid;
-          grid-template-columns: minmax(0, 1.28fr) minmax(360px, .72fr);
+          grid-template-columns: minmax(0, 1.08fr) minmax(390px, .92fr);
           gap: 22px;
           align-items: start;
         }
 
-        .payslip-section-head {
-          display: flex;
-          align-items: flex-start;
-          justify-content: space-between;
-          gap: 14px;
-          margin-bottom: 16px;
+        .payslip-main-grid > * {
+          min-width: 0;
         }
 
-        .payslip-section-head h2,
-        .payslip-section-head h3,
-        .payslip-detail-head h2 {
-          margin: 0 0 5px;
-          color: var(--payslip-ink);
-          font-family: var(--yc-display, Georgia, "Times New Roman", serif);
-          font-weight: 760;
-          letter-spacing: -.04em;
+        .payslip-section-head {
+          align-items: center;
+          margin-bottom: 18px;
         }
 
         .payslip-section-head h2 {
-          font-size: clamp(25px, 2.3vw, 36px);
+          margin-bottom: 5px;
+          font-size: clamp(25px, 2.4vw, 35px);
         }
 
         .payslip-section-head p,
         .payslip-detail-head p {
           margin: 0;
           color: var(--payslip-muted);
-          font-size: 13px;
+          font-size: 12px;
           line-height: 1.5;
+        }
+
+        .payslip-list-panel {
+          display: flex;
+          flex-direction: column;
+          min-height: 0;
+          max-height: calc(100dvh - 36px);
+          overflow: hidden;
+        }
+
+        .payslip-list-panel > .payslip-section-head,
+        .payslip-list-panel > .payslip-feedback {
+          flex: 0 0 auto;
         }
 
         .payslip-list {
           display: grid;
-          gap: 13px;
+          gap: 14px;
+          min-height: 0;
+          overflow-x: hidden;
+          overflow-y: auto;
+          overscroll-behavior: contain;
+          padding: 2px 7px 7px 2px;
+          scrollbar-width: thin;
+          scrollbar-color: rgba(101, 88, 220, .30) transparent;
+        }
+
+        .payslip-list::-webkit-scrollbar {
+          width: 7px;
+        }
+
+        .payslip-list::-webkit-scrollbar-thumb {
+          border-radius: 999px;
+          background: rgba(101, 88, 220, .28);
         }
 
         .payslip-row {
           display: grid;
-          grid-template-columns: minmax(0, 1fr) auto;
-          gap: 14px;
-          padding: 16px;
-          border: 1px solid rgba(171,181,211,.62);
-          border-radius: 19px;
-          background: #fff;
-          box-shadow: 4px 5px 0 rgba(52,43,120,.08);
+          grid-template-columns: minmax(0, 1fr) minmax(150px, auto);
+          gap: 16px;
+          align-items: center;
+          min-width: 0;
+          padding: 17px;
+          border: 1px solid rgba(171, 181, 211, .58);
+          border-radius: 20px;
+          background: #f8fbff;
+          box-shadow: 4px 5px 0 #dfe8f7;
           cursor: pointer;
           transition:
-            border-color 190ms ease,
-            box-shadow 190ms ease,
-            transform 190ms ease;
+            border-color 170ms ease,
+            box-shadow 170ms ease,
+            transform 170ms ease,
+            background 170ms ease;
+        }
+
+        .payslip-row:nth-child(even) {
+          background: #fbfaff;
         }
 
         .payslip-row:hover {
-          border-color: rgba(102,88,220,.30);
+          border-color: rgba(81, 69, 216, .31);
           transform: translateY(-2px);
         }
 
         .payslip-row.is-selected {
-          border-color: rgba(102,88,220,.65);
-          background: linear-gradient(145deg, #f8f7ff, #effbf8);
+          border-color: rgba(81, 69, 216, .55);
+          background: linear-gradient(135deg, #eef5ff 0%, #f1efff 100%);
           box-shadow:
             5px 6px 0 #c9c0ff,
-            0 15px 30px rgba(34,38,110,.10);
+            0 13px 26px rgba(34, 38, 110, .07);
         }
 
         .payslip-row-title {
@@ -1232,20 +1724,22 @@ export default function Payslips({ user = {}, setPage = () => {} }) {
           flex-wrap: wrap;
           align-items: center;
           gap: 8px;
-          margin-bottom: 7px;
+          margin-bottom: 8px;
         }
 
         .payslip-row-title strong {
+          min-width: 0;
           color: var(--payslip-ink);
-          font-size: 15px;
+          font-size: 14px;
+          overflow-wrap: anywhere;
         }
 
         .payslip-row-meta {
           display: flex;
           flex-wrap: wrap;
-          gap: 7px 14px;
+          gap: 7px 13px;
           color: var(--payslip-muted);
-          font-size: 12px;
+          font-size: 11px;
         }
 
         .payslip-row-meta span {
@@ -1255,161 +1749,207 @@ export default function Payslips({ user = {}, setPage = () => {} }) {
         }
 
         .payslip-row-end {
-          min-width: 175px;
+          min-width: 180px;
           text-align: right;
         }
 
         .payslip-row-end strong {
           display: block;
-          margin-bottom: 4px;
+          margin-bottom: 5px;
           color: var(--payslip-ink);
-          font-family: Georgia, "Times New Roman", serif;
-          font-size: 20px;
+          font-family: var(--yc-display, Georgia, "Times New Roman", serif);
+          font-size: 19px;
+          white-space: nowrap;
         }
 
         .payslip-row-end small {
           display: block;
           color: var(--payslip-muted);
-          font-size: 11px;
+          font-size: 10px;
+          line-height: 1.45;
+          white-space: nowrap;
         }
 
         .payslip-status {
           display: inline-flex;
           align-items: center;
           gap: 5px;
+          min-height: 28px;
           padding: 6px 10px;
           border-radius: 999px;
-          font-size: 10px;
-          font-weight: 900;
+          font-size: 9px;
+          font-weight: 950;
           white-space: nowrap;
-          box-shadow: 2px 3px 0 rgba(52,43,120,.07);
         }
 
         .payslip-status-success {
-          color: #047857;
-          background: #eaf8f4;
-          box-shadow: 2px 3px 0 #aee6d9;
+          color: #087659;
+          border: 1px solid rgba(24, 177, 126, .23);
+          background: #e8f8f2;
         }
 
         .payslip-status-primary {
           color: #40348d;
-          background: #f1efff;
-          box-shadow: 2px 3px 0 #c9c0ff;
+          border: 1px solid rgba(81, 69, 216, .20);
+          background: #efedff;
         }
 
         .payslip-status-blue {
           color: #245da8;
-          background: #edf6ff;
-          box-shadow: 2px 3px 0 #b9d7ff;
+          border: 1px solid rgba(56, 111, 201, .20);
+          background: #eaf3ff;
         }
 
         .payslip-status-warning {
-          color: #9a6817;
-          background: #fff4d5;
-          box-shadow: 2px 3px 0 #ffe0a5;
+          color: #93600e;
+          border: 1px solid rgba(204, 142, 28, .24);
+          background: #fff5dc;
         }
 
         .payslip-status-neutral {
-          color: #475569;
-          background: #f1f5f9;
-          box-shadow: 2px 3px 0 #dbe1e8;
+          color: #56627c;
+          border: 1px solid rgba(112, 126, 154, .18);
+          background: #f2f5f9;
         }
 
         .payslip-pdf-actions {
           display: flex;
           flex-wrap: wrap;
           gap: 8px;
-          margin-top: 13px;
+          margin-top: 14px;
         }
 
         .payslip-pdf-actions .payslip-btn {
-          min-height: 36px;
+          min-height: 38px;
           padding: 8px 11px;
-          font-size: 12px;
+          font-size: 10px;
         }
 
         .payslip-detail {
           position: sticky;
           top: 18px;
           min-width: 0;
+          max-height: calc(100dvh - 36px);
+          overflow-x: hidden;
+          overflow-y: auto;
+          overscroll-behavior: contain;
+          scrollbar-width: thin;
+          scrollbar-color: rgba(101, 88, 220, .30) transparent;
+        }
+
+        .payslip-detail::-webkit-scrollbar,
+        .payslip-timeline::-webkit-scrollbar {
+          width: 7px;
+        }
+
+        .payslip-detail::-webkit-scrollbar-thumb,
+        .payslip-timeline::-webkit-scrollbar-thumb {
+          border-radius: 999px;
+          background: rgba(101, 88, 220, .28);
         }
 
         .payslip-detail-head {
-          display: flex;
-          align-items: flex-start;
-          justify-content: space-between;
-          gap: 12px;
-          padding-bottom: 15px;
-          border-bottom: 1px solid rgba(171,181,211,.48);
+          position: sticky;
+          z-index: 3;
+          top: -1px;
+          margin: -2px -2px 18px;
+          padding: 16px 17px;
+          border: 1px solid rgba(171, 181, 211, .48);
+          border-radius: 19px;
+          background:
+            linear-gradient(
+              90deg,
+              rgba(231,247,255,.98) 0%,
+              rgba(255,255,255,.98) 52%,
+              rgba(240,236,255,.98) 100%
+            );
+          box-shadow:
+            4px 5px 0 #d2d9ff,
+            0 12px 24px rgba(34, 38, 110, .05);
+          backdrop-filter: blur(10px);
+          -webkit-backdrop-filter: blur(10px);
         }
 
         .payslip-detail-head h2 {
+          margin-bottom: 5px;
           font-size: 24px;
+          overflow-wrap: anywhere;
         }
 
         .payslip-detail-stats {
           display: grid;
           grid-template-columns: repeat(2, minmax(0, 1fr));
           gap: 10px;
-          margin: 15px 0;
+          margin: 16px 0;
         }
 
         .payslip-detail-stat {
           min-width: 0;
+          min-height: 92px;
           padding: 13px;
-          border: 1px solid rgba(171,181,211,.46);
-          border-radius: 16px;
-          background: #edf6ff;
-          box-shadow: 3px 4px 0 #b9d7ff;
+          border: 1px solid var(--payslip-soft-border);
+          border-radius: 18px;
+          background: #e7f2ff;
+          box-shadow: 3px 4px 0 rgba(185, 215, 255, .58);
         }
 
         .payslip-detail-stat:nth-child(2) {
-          background: #fff0f2;
-          box-shadow: 3px 4px 0 #f2c2cc;
+          background: #fff0f3;
         }
 
         .payslip-detail-stat:nth-child(3) {
-          background: #fff4d5;
-          box-shadow: 3px 4px 0 #ffe0a5;
+          background: #fff3d4;
         }
 
         .payslip-detail-stat:nth-child(4) {
-          background: #eaf8f4;
-          box-shadow: 3px 4px 0 #aee6d9;
+          background: #e7f8f2;
         }
 
-        .payslip-detail-stat span {
+        .payslip-detail-stat span,
+        .payslip-info span {
           display: block;
           margin-bottom: 5px;
-          color: #5d6785;
-          font-size: 9px;
+          color: #68738f;
+          font-size: 8px;
           font-weight: 950;
-          letter-spacing: .07em;
+          letter-spacing: .065em;
           text-transform: uppercase;
         }
 
         .payslip-detail-stat strong {
           display: block;
-          overflow: hidden;
+          min-width: 0;
           color: var(--payslip-ink);
-          font-size: 14px;
-          text-overflow: ellipsis;
+          font-family: var(--yc-display, Georgia, "Times New Roman", serif);
+          font-size: clamp(14px, 1.15vw, 19px);
+          font-weight: 760;
+          line-height: 1.08;
+          white-space: nowrap;
         }
 
         .payslip-subsection {
           margin-top: 18px;
+          padding: 18px;
+          border: 1px solid rgba(171, 181, 211, .44);
+          border-radius: 19px;
+          background: #fbfcff;
+        }
+
+        .payslip-subsection:nth-of-type(even) {
+          background: #faf8ff;
         }
 
         .payslip-subsection h3 {
-          margin: 0 0 10px;
-          color: var(--payslip-ink);
+          margin: 0 0 13px;
+          color: var(--payslip-heading);
           font-family: var(--yc-display, Georgia, "Times New Roman", serif);
-          font-size: 17px;
+          font-size: clamp(17px, 1.6vw, 21px);
           font-weight: 760;
         }
 
         .payslip-line-list {
           display: grid;
+          grid-template-columns: 1fr;
           gap: 8px;
         }
 
@@ -1418,21 +1958,25 @@ export default function Payslips({ user = {}, setPage = () => {} }) {
           align-items: flex-start;
           justify-content: space-between;
           gap: 12px;
+          min-width: 0;
           padding: 10px 11px;
-          border: 1px solid rgba(171,181,211,.48);
+          border: 1px solid var(--payslip-soft-border);
           border-radius: 13px;
-          background: rgba(255,255,255,.88);
-          box-shadow: 2px 3px 0 rgba(52,43,120,.06);
-          font-size: 12px;
+          background: #fbfcff;
+          font-size: 11px;
         }
 
         .payslip-line span {
+          min-width: 0;
           color: var(--payslip-muted);
+          overflow-wrap: anywhere;
         }
 
         .payslip-line strong {
+          flex: 0 0 auto;
           color: var(--payslip-ink);
           text-align: right;
+          white-space: nowrap;
         }
 
         .payslip-info-grid {
@@ -1443,45 +1987,48 @@ export default function Payslips({ user = {}, setPage = () => {} }) {
 
         .payslip-info {
           min-width: 0;
+          min-height: 72px;
           padding: 11px;
-          border: 1px solid rgba(171,181,211,.48);
-          border-radius: 13px;
-          background: rgba(255,255,255,.88);
-          box-shadow: 2px 3px 0 rgba(52,43,120,.06);
+          border: 1px solid var(--payslip-soft-border);
+          border-radius: 15px;
+          background: #ffffff;
         }
 
-        .payslip-info span {
-          display: block;
-          margin-bottom: 5px;
-          color: #5d6785;
-          font-size: 9px;
-          font-weight: 950;
-          letter-spacing: .07em;
-          text-transform: uppercase;
+        .payslip-info:nth-child(4n + 2) {
+          background: #faf8ff;
+        }
+
+        .payslip-info:nth-child(4n + 3) {
+          background: #f3fbf8;
+        }
+
+        .payslip-info:nth-child(4n + 4) {
+          background: #fff9eb;
         }
 
         .payslip-info strong {
           display: block;
+          min-width: 0;
           color: var(--payslip-ink);
           overflow-wrap: anywhere;
-          font-size: 12px;
+          font-size: 11px;
+          line-height: 1.4;
         }
 
         .payslip-timeline {
           display: grid;
           gap: 0;
-          max-height: 270px;
+          max-height: 265px;
           overflow: auto;
           padding: 4px 13px;
-          border: 1px solid rgba(171,181,211,.48);
+          border: 1px solid var(--payslip-soft-border);
           border-radius: 15px;
-          background: rgba(255,255,255,.88);
-          box-shadow: 3px 4px 0 rgba(52,43,120,.07);
+          background: #fbfcff;
         }
 
         .payslip-timeline-item {
           padding: 11px 0;
-          border-bottom: 1px solid rgba(226,232,240,.9);
+          border-bottom: 1px solid rgba(226, 232, 240, .9);
         }
 
         .payslip-timeline-item:last-child {
@@ -1492,7 +2039,7 @@ export default function Payslips({ user = {}, setPage = () => {} }) {
           display: block;
           margin-bottom: 3px;
           color: var(--payslip-ink);
-          font-size: 12px;
+          font-size: 11px;
         }
 
         .payslip-timeline-item p,
@@ -1500,8 +2047,9 @@ export default function Payslips({ user = {}, setPage = () => {} }) {
           display: block;
           margin: 0;
           color: var(--payslip-muted);
-          font-size: 11px;
+          font-size: 10px;
           line-height: 1.45;
+          overflow-wrap: anywhere;
         }
 
         .payslip-empty {
@@ -1509,12 +2057,24 @@ export default function Payslips({ user = {}, setPage = () => {} }) {
           place-items: center;
           min-height: 220px;
           padding: 30px;
-          border: 1px dashed rgba(102,88,220,.34);
+          border: 1px dashed rgba(81, 69, 216, .32);
           border-radius: 20px;
           color: var(--payslip-muted);
-          background: linear-gradient(145deg, #f8f7ff, #effbf8);
-          box-shadow: 4px 5px 0 rgba(52,43,120,.07);
+          background: linear-gradient(145deg, #f8f7ff, #eef8ff);
           text-align: center;
+        }
+
+        .payslip-empty strong {
+          display: block;
+          margin-bottom: 5px;
+          color: var(--payslip-ink);
+          font-size: 14px;
+        }
+
+        .payslip-empty p {
+          margin: 0;
+          font-size: 11px;
+          line-height: 1.5;
         }
 
         .payslip-empty svg {
@@ -1525,34 +2085,46 @@ export default function Payslips({ user = {}, setPage = () => {} }) {
         .payslip-notice {
           display: flex;
           align-items: flex-start;
-          gap: 9px;
-          padding: 13px 14px;
-          border: 1px solid rgba(102,88,220,.20);
-          border-radius: 15px;
-          background: linear-gradient(145deg, #f1efff, #eef9ff);
+          gap: 10px;
+          min-width: 0;
+          padding: 14px 15px;
+          border: 1px solid rgba(81, 69, 216, .20);
+          border-radius: 17px;
           color: #40348d;
-          box-shadow: 4px 5px 0 #c9c0ff;
-          font-size: 12px;
+          background: #f0efff;
+          box-shadow: 4px 5px 0 #cbc4ff;
+          font-size: 11px;
           line-height: 1.5;
           font-weight: 750;
         }
 
+        .payslip-notice span {
+          min-width: 0;
+          overflow-wrap: anywhere;
+        }
+
         .spin {
-          animation: payslip-spin .9s linear infinite;
+          animation: payslip-spin .85s linear infinite;
         }
 
         @keyframes payslip-spin {
           to { transform: rotate(360deg); }
         }
 
-        @keyframes payslip-icon-float {
-          0%, 100% { transform: translateY(0) rotate(0deg); }
-          50% { transform: translateY(-3px) rotate(-3deg); }
+        @keyframes payslip-feedback-in {
+          from {
+            opacity: 0;
+            transform: translateY(-6px);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0);
+          }
         }
 
-        @media (max-width: 1240px) {
+        @media (max-width: 1180px) {
           .payslip-metrics {
-            grid-template-columns: repeat(3, minmax(140px, 1fr));
+            grid-template-columns: repeat(3, minmax(0, 1fr));
           }
 
           .payslip-toolbar {
@@ -1563,58 +2135,159 @@ export default function Payslips({ user = {}, setPage = () => {} }) {
             grid-template-columns: 1fr;
           }
 
+          .payslip-list-panel {
+            max-height: none;
+            overflow: visible;
+          }
+
+          .payslip-list {
+            overflow: visible;
+            padding-right: 2px;
+          }
+
           .payslip-detail {
             position: static;
+            max-height: none;
+            overflow: visible;
+            overscroll-behavior: auto;
+          }
+
+          .payslip-detail-head {
+            position: static;
+            top: auto;
+            backdrop-filter: none;
+            -webkit-backdrop-filter: none;
+          }
+
+          .payslip-detail-stats {
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+          }
+
+          .payslip-info-grid {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+          }
+
+          .payslip-line-list {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
+          .payslip-metric strong {
+            font-size: clamp(19px, 2.6vw, 30px);
           }
         }
 
         @media (max-width: 900px) {
-          .payslip-module-links {
-            grid-template-columns: repeat(2, minmax(150px, 1fr));
-          }
-        }
-
-        @media (max-width: 720px) {
           .payslips-page {
-            gap: 18px;
+            width: min(100% - 28px, 1280px);
           }
 
           .payslip-hero {
             grid-template-columns: 1fr;
             min-height: 0;
-            padding: 20px;
-            border-radius: 26px;
-            box-shadow:
-              6px 7px 0 #c6d8f7,
-              0 18px 30px rgba(34,38,110,.10);
-          }
-
-          .payslip-hero h1 {
-            font-size: clamp(36px, 10vw, 52px);
           }
 
           .payslip-hero-actions {
             width: 100%;
-            justify-content: stretch;
+            max-width: none;
+            justify-items: stretch;
           }
 
-          .payslip-hero-actions .payslip-btn {
-            flex: 1;
+          .payslip-hero-action-buttons {
+            justify-content: flex-start;
+          }
+
+          .payslip-hero-action-feedbacks {
+            width: min(100%, 560px);
+          }
+
+          .payslip-module-links {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
+          .payslip-detail-stats {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
+          .payslip-info-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+        }
+
+        @media (max-width: 720px) {
+          .payslips-page {
+            width: min(100% - 20px, 1280px);
+            gap: 18px;
+          }
+
+          .payslip-hero {
+            padding: 22px;
+            border-radius: 26px;
+            box-shadow:
+              6px 7px 0 #b9d5ff,
+              0 18px 30px rgba(34, 38, 110, .09);
+          }
+
+          .payslip-hero h1 {
+            font-size: clamp(38px, 11vw, 54px);
+          }
+
+          .payslip-hero-actions {
+            width: 100%;
+          }
+
+          .payslip-hero-action-buttons {
+            display: grid;
+            grid-template-columns: 1fr;
+            width: 100%;
+          }
+
+          .payslip-hero-action-buttons > .payslip-btn,
+          .payslip-hero-action-buttons .payslip-pdf-actions {
+            width: 100%;
+          }
+
+          .payslip-hero-action-buttons .payslip-pdf-actions {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
+          .payslip-hero-action-buttons .payslip-btn {
+            width: 100%;
+          }
+
+          .payslip-hero-action-feedbacks {
+            width: 100%;
           }
 
           .payslip-module-links,
           .payslip-metrics,
           .payslip-toolbar,
-          .payslip-info-grid {
+          .payslip-info-grid,
+          .payslip-line-list {
             grid-template-columns: 1fr;
+          }
+
+          .payslip-metric strong {
+            font-size: clamp(21px, 7.4vw, 30px);
           }
 
           .payslip-panel {
             padding: 18px;
-            border-radius: 22px;
+            border-radius: 23px;
             box-shadow:
-              5px 6px 0 #c4ccff,
-              0 17px 28px rgba(34,38,110,.09);
+              5px 6px 0 #cbd2ff,
+              0 17px 28px rgba(34, 38, 110, .07);
+          }
+
+          .payslip-panel-heading,
+          .payslip-section-head,
+          .payslip-detail-head {
+            flex-direction: column;
+            align-items: stretch;
+          }
+
+          .payslip-panel-count {
+            align-self: flex-start;
           }
 
           .payslip-row {
@@ -1622,25 +2295,43 @@ export default function Payslips({ user = {}, setPage = () => {} }) {
           }
 
           .payslip-row-end {
+            min-width: 0;
             text-align: left;
           }
 
-          .payslip-detail-head {
-            flex-direction: column;
+          .payslip-row-end small {
+            white-space: normal;
           }
+
         }
 
-        @media (max-width: 430px) {
+        @media (max-width: 520px) {
+          .payslips-page {
+            width: calc(100% - 16px);
+            gap: 15px;
+          }
+
           .payslip-hero {
-            padding: 16px;
+            padding: 18px;
+            border-radius: 22px;
+          }
+
+          .payslip-kicker {
+            font-size: 8px;
           }
 
           .payslip-hero h1 {
-            font-size: clamp(32px, 11vw, 44px);
+            font-size: clamp(34px, 12vw, 46px);
           }
 
           .payslip-panel {
             padding: 15px;
+            border-radius: 20px;
+          }
+
+          .payslip-metric {
+            min-height: 125px;
+            padding: 16px;
           }
 
           .payslip-detail-stats {
@@ -1655,6 +2346,46 @@ export default function Payslips({ user = {}, setPage = () => {} }) {
           .payslip-pdf-actions .payslip-btn {
             width: 100%;
           }
+
+          .payslip-hero-action-buttons .payslip-pdf-actions {
+            grid-template-columns: 1fr;
+          }
+
+          .payslip-feedback {
+            grid-template-columns: auto minmax(0, 1fr) auto;
+            padding: 11px;
+          }
+        }
+
+        @media (max-width: 390px) {
+          .payslips-page {
+            width: calc(100% - 12px);
+          }
+
+          .payslip-hero {
+            padding: 16px;
+          }
+
+          .payslip-panel {
+            padding: 13px;
+          }
+
+          .payslip-row {
+            padding: 14px;
+          }
+
+          .payslip-btn {
+            min-height: 44px;
+            padding-inline: 13px;
+          }
+        }
+
+        @media (hover: none) {
+          .payslip-btn:hover:not(:disabled),
+          .payslip-module-link:hover,
+          .payslip-row:hover {
+            transform: none;
+          }
         }
 
         @media (prefers-reduced-motion: reduce) {
@@ -1663,6 +2394,7 @@ export default function Payslips({ user = {}, setPage = () => {} }) {
           .payslips-page *::after {
             animation: none !important;
             transition: none !important;
+            scroll-behavior: auto !important;
           }
         }
       `}</style>
@@ -1684,21 +2416,45 @@ export default function Payslips({ user = {}, setPage = () => {} }) {
         </div>
 
         <div className="payslip-hero-actions">
-          <button
-            type="button"
-            className="payslip-btn payslip-btn-secondary"
-            onClick={() => refreshAll()}
-            disabled={loadingEmployees || loadingPayslips}
-          >
-            {loadingEmployees || loadingPayslips ? (
-              <Loader2 size={17} className="spin" />
-            ) : (
-              <RefreshCw size={17} />
-            )}
-            Refresh
-          </button>
+          <div className="payslip-hero-action-buttons">
+            <button
+              type="button"
+              className="payslip-btn payslip-btn-secondary"
+              onClick={handleManualRefresh}
+              disabled={loadingEmployees || loadingPayslips}
+            >
+              {loadingEmployees || loadingPayslips ? (
+                <Loader2 size={17} className="spin" />
+              ) : (
+                <RefreshCw size={17} />
+              )}
+              Refresh
+            </button>
 
-          {selectedPayslip ? renderPdfActions(selectedPayslip) : null}
+            {selectedPayslip ? renderPdfActions(selectedPayslip) : null}
+          </div>
+
+          {feedback.actions || feedback.pdf ? (
+            <div className="payslip-hero-action-feedbacks">
+              {feedback.actions ? (
+                <div className="payslip-feedback-zone">
+                  <PayslipFeedbackLine
+                    feedback={feedback.actions}
+                    onClose={() => clearPayslipFeedback('actions')}
+                  />
+                </div>
+              ) : null}
+
+              {feedback.pdf ? (
+                <div className="payslip-feedback-zone">
+                  <PayslipFeedbackLine
+                    feedback={feedback.pdf}
+                    onClose={() => clearPayslipFeedback('pdf')}
+                  />
+                </div>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       </header>
 
@@ -1751,7 +2507,17 @@ export default function Payslips({ user = {}, setPage = () => {} }) {
         </div>
       )}
 
-      <section className="payslip-panel">
+      <section className="payslip-panel payslip-filter-panel">
+        <div className="payslip-panel-heading">
+          <div>
+            <span className="payslip-section-kicker">Payslip filters</span>
+            <h2>Find the payroll document you need</h2>
+          </div>
+          <span className="payslip-panel-count">
+            {visiblePayslips.length} result{visiblePayslips.length === 1 ? '' : 's'}
+          </span>
+        </div>
+
         <div className="payslip-toolbar">
           <div className="payslip-field">
             <label htmlFor="payslip-search">Search</label>
@@ -1829,6 +2595,12 @@ export default function Payslips({ user = {}, setPage = () => {} }) {
             </div>
           ) : null}
         </div>
+
+        <PayslipFeedbackLine
+          feedback={feedback.filters}
+          onClose={() => clearPayslipFeedback('filters')}
+          className="payslip-feedback-inline"
+        />
       </section>
 
       <section className="payslip-metrics">
@@ -1882,7 +2654,7 @@ export default function Payslips({ user = {}, setPage = () => {} }) {
       </section>
 
       <div className="payslip-main-grid">
-        <section className="payslip-panel">
+        <section className="payslip-panel payslip-list-panel">
           <div className="payslip-section-head">
             <div>
               <h2>{periodLabel(period)} Payslips</h2>
@@ -1896,6 +2668,12 @@ export default function Payslips({ user = {}, setPage = () => {} }) {
               <Loader2 size={20} className="spin" />
             ) : null}
           </div>
+
+          <PayslipFeedbackLine
+            feedback={feedback.results}
+            onClose={() => clearPayslipFeedback('results')}
+            className="payslip-feedback-inline"
+          />
 
           {visiblePayslips.length ? (
             <div className="payslip-list">

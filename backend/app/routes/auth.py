@@ -272,7 +272,7 @@ def sanitize_user_for_response(user):
     safe_user.pop("password_hash", None)
 
     safe_user["roles"] = normalize_roles(safe_user.get("roles"))
-    safe_user["tenant_id"] = safe_user.get("tenant_id") or default_tenant_id()
+    safe_user["tenant_id"] = safe_user.get("tenant_id")
 
     apply_profile_photo_aliases(safe_user)
 
@@ -370,6 +370,53 @@ def employee_snapshot(employee, user=None):
     return snapshot
 
 
+
+def employee_login_is_alumni(employee):
+    """Reject departed accounts without treating a scheduled exit as departed."""
+    if not employee:
+        return False
+
+    def normalized(value):
+        return str(value or "").strip().lower()
+
+    def enabled(value):
+        return value is True or normalized(value) in {
+            "true", "yes", "1", "on"
+        }
+
+    if enabled(employee.get("is_alumni")):
+        return True
+
+    # Overdue notice employees must not retain access while the
+    # scheduled Alumni reconciliation has not yet executed.
+    if current_app.config.get("NOTICE_PERIOD_ENABLED", False):
+        from app.services.notice_period_service import notice_exit_due
+        if notice_exit_due(employee):
+            return True
+
+    blocked_statuses = {
+        "resigned",
+        "resign",
+        "alumni",
+        "left",
+        "terminated",
+        "retired",
+        "ex-employee",
+        "ex_employee",
+        "inactive",
+    }
+
+    return any(
+        normalized(employee.get(field)) in blocked_statuses
+        for field in (
+            "status",
+            "employment_status",
+            "employee_status",
+        )
+    )
+
+
+
 def find_employee_for_user(db, user):
     if not user:
         return None
@@ -461,10 +508,6 @@ def find_employee_for_user(db, user):
 
 def sync_user_login_defaults(db, user):
     update_data = {}
-
-    if not user.get("tenant_id"):
-        update_data["tenant_id"] = default_tenant_id()
-        user["tenant_id"] = update_data["tenant_id"]
 
     roles = normalize_roles(user.get("roles"))
 
@@ -789,10 +832,7 @@ def create_auth_session(db, user, login_data=None):
 
     db.auth_sessions.insert_one({
             "user_id": str(user["_id"]),
-            "tenant_id": (
-                user.get("tenant_id")
-                or default_tenant_id()
-            ),
+            "tenant_id": user["tenant_id"],
             "refresh_token_hash": refresh_token_hash,
             "device_id": normalize_text(
                 login_data.get("device_id")
@@ -838,9 +878,20 @@ def login():
     if not check_password_hash(user.get("password_hash", ""), password):
         return jsonify({"message": "Invalid email or password"}), 401
 
+    tenant_id = user.get("tenant_id")
+    if not isinstance(tenant_id, str) or not tenant_id.strip():
+        return jsonify({
+            "message": "Account company assignment is missing. Contact your administrator."
+        }), 403
+
     user = sync_user_login_defaults(db, user)
 
     raw_employee = find_employee_for_user(db, user)
+
+    if employee_login_is_alumni(raw_employee):
+        return jsonify({
+            "message": "This employee account is no longer active."
+        }), 401
 
     try:
         user, raw_employee = sync_user_employee_link(
@@ -870,7 +921,7 @@ def login():
     )
 
     g.current_user = user
-    g.tenant_id = user.get("tenant_id") or default_tenant_id()
+    g.tenant_id = user["tenant_id"]
 
     audit("login", "users", user["_id"], {"email": email})
 
@@ -984,8 +1035,32 @@ def refresh_access_token():
         )
         return jsonify({"message": "User account is unavailable"}), 401
 
+    tenant_id = user.get("tenant_id")
+    if not isinstance(tenant_id, str) or not tenant_id.strip():
+        return jsonify({
+            "message": "Account company assignment is missing. Contact your administrator."
+        }), 403
+
     user = sync_user_login_defaults(db, user)
     raw_employee = find_employee_for_user(db, user)
+
+    if employee_login_is_alumni(raw_employee):
+        db.auth_sessions.update_many(
+            {
+                "user_id": str(user["_id"]),
+                "is_revoked": {"$ne": True},
+            },
+            {
+                "$set": {
+                    "is_revoked": True,
+                    "revoked_at": now_utc(),
+                    "updated_at": now_utc(),
+                }
+            },
+        )
+        return jsonify({
+            "message": "This employee account is no longer active."
+        }), 401
 
     try:
         user, raw_employee = sync_user_employee_link(

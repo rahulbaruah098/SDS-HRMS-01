@@ -599,6 +599,13 @@ export const coreModules = [
   ],
 
 [
+  'sprint_planning',
+  'Sprint Planning',
+  ClipboardList,
+  'Monthly, weekly and day-wise planning, work evidence, approvals and performance monitoring.',
+  ALL_COMMON_ROLES.filter(role => role !== 'super_admin'),
+],
+[
   'projects',
   'Projects',
   Briefcase,
@@ -1178,15 +1185,43 @@ export function getSaasStatus(user = {}) {
   const tenant = getSaasTenant(user);
   const subscription = getSaasSubscription(user);
 
-  return String(
-    subscription.status ||
-      tenant.status ||
-      user.subscription_status ||
-      user.status ||
-      '',
-  )
-    .trim()
-    .toLowerCase();
+  const statuses = [
+    subscription.status,
+    subscription.subscription_status,
+    subscription.trial_status,
+    tenant.subscription_status,
+    tenant.plan_status,
+    tenant.trial_status,
+    tenant.status,
+    user.subscription_status,
+    user.plan_status,
+    user.trial_status,
+    user.status,
+  ]
+    .map((value) =>
+      String(value || '')
+        .trim()
+        .toLowerCase()
+        .replaceAll('-', '_')
+        .replaceAll(' ', '_'),
+    )
+    .filter(Boolean);
+
+  const restrictedStatuses = new Set([
+    'expired',
+    'subscription_expired',
+    'trial_expired',
+    'demo_expired',
+    'suspended',
+    'blocked',
+    'inactive',
+  ]);
+
+  return (
+    statuses.find((status) => restrictedStatuses.has(status)) ||
+    statuses[0] ||
+    ''
+  );
 }
 
 export function getSaasTenantCode(user = {}) {
@@ -1225,9 +1260,8 @@ export function isSdsLifetimeTenant(user = {}) {
 
 export function isPaidTenant(user = {}) {
   const planType = getSaasPlanType(user);
-  const status = getSaasStatus(user);
 
-  return planType === 'paid' && status !== 'expired' && status !== 'suspended';
+  return planType === 'paid' && !isExpiredOrSuspendedTenant(user);
 }
 
 export function isDemoTenant(user = {}) {
@@ -1291,9 +1325,26 @@ export function isExpiredOrSuspendedTenant(user = {}) {
     return false;
   }
 
+  const tenant = getSaasTenant(user);
+  const subscription = getSaasSubscription(user);
   const status = getSaasStatus(user);
 
-  return status === 'expired' || status === 'suspended';
+  const restrictedStatuses = new Set([
+    'expired',
+    'subscription_expired',
+    'trial_expired',
+    'demo_expired',
+    'suspended',
+    'blocked',
+    'inactive',
+  ]);
+
+  const requiresPayment =
+    subscription.requires_payment === true ||
+    tenant.requires_payment === true ||
+    user.requires_payment === true;
+
+  return restrictedStatuses.has(status) || requiresPayment;
 }
 
 export function hasFullSaasAccess(user = {}) {

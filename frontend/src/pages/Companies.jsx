@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   AlertTriangle,
   Building2,
@@ -19,6 +20,10 @@ import {
 
 import { api } from '../api/client';
 import { emptyCompany } from '../data/modules';
+
+const COMPANY_PAGE_SIZE_OPTIONS = [25, 50, 100, 200];
+const DEFAULT_COMPANY_PAGE_SIZE = 25;
+const FEEDBACK_AUTO_HIDE_MS = 3600;
 
 const DEFAULT_COMPANY_FORM = {
   ...emptyCompany,
@@ -215,8 +220,225 @@ function SummaryCard({ icon: Icon, label, value, tone = '#2563eb' }) {
   );
 }
 
-function DetailModal({ detail, loading, onClose, onActivate, onSuspend, onExtendDemo, onMarkPaid }) {
-  if (!detail) {
+function CompanyActionDialog({
+  dialog,
+  form,
+  setForm,
+  error,
+  onClose,
+  onSubmit,
+}) {
+  if (!dialog || typeof document === 'undefined') {
+    return null;
+  }
+
+  const isSuspend = dialog.type === 'suspend';
+  const isExtendDemo = dialog.type === 'extend-demo';
+  const isMarkPaid = dialog.type === 'mark-paid';
+
+  const title = isSuspend
+    ? 'Deactivate Company'
+    : isExtendDemo
+      ? 'Extend Trial'
+      : 'Mark Company as Paid';
+
+  const description = isSuspend
+    ? 'Add the reason for deactivating this company. The company can be activated again later.'
+    : isExtendDemo
+      ? 'Enter the number of additional trial days and the reason for this extension.'
+      : 'Enter the payment amount, subscription duration, and a short note for this paid activation.';
+
+  const confirmLabel = isSuspend
+    ? 'Deactivate Company'
+    : isExtendDemo
+      ? 'Extend Trial'
+      : 'Mark Paid';
+
+  return createPortal(
+    <div
+      className="company-action-backdrop"
+      role="dialog"
+      aria-modal="true"
+      aria-label={title}
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) {
+          onClose();
+        }
+      }}
+    >
+      <form
+        className="company-action-dialog"
+        onSubmit={onSubmit}
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <header className="company-action-dialog-header">
+          <div>
+            <span className="company-action-dialog-kicker">Company Action</span>
+            <h2>{title}</h2>
+            <p>
+              {dialog.companyName}
+              <span aria-hidden="true"> · </span>
+              {description}
+            </p>
+          </div>
+
+          <button
+            type="button"
+            className="company-action-dialog-close"
+            onClick={onClose}
+            aria-label="Close action window"
+          >
+            <X size={17} />
+          </button>
+        </header>
+
+        <div className="company-action-dialog-body">
+          {isSuspend ? (
+            <label className="company-action-field">
+              <span>Suspension reason</span>
+              <textarea
+                value={form.reason ?? ''}
+                onChange={(event) =>
+                  setForm((prev) => ({
+                    ...prev,
+                    reason: event.target.value,
+                  }))
+                }
+                rows={4}
+                autoFocus
+              />
+            </label>
+          ) : null}
+
+          {isExtendDemo ? (
+            <>
+              <label className="company-action-field">
+                <span>Extend trial by (days)</span>
+                <input
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={form.days ?? ''}
+                  onChange={(event) =>
+                    setForm((prev) => ({
+                      ...prev,
+                      days: event.target.value,
+                    }))
+                  }
+                  autoFocus
+                />
+              </label>
+
+              <label className="company-action-field">
+                <span>Reason for trial extension</span>
+                <textarea
+                  value={form.reason ?? ''}
+                  onChange={(event) =>
+                    setForm((prev) => ({
+                      ...prev,
+                      reason: event.target.value,
+                    }))
+                  }
+                  rows={4}
+                />
+              </label>
+            </>
+          ) : null}
+
+          {isMarkPaid ? (
+            <>
+              <div className="company-action-field-grid">
+                <label className="company-action-field">
+                  <span>Paid amount</span>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={form.amount ?? ''}
+                    onChange={(event) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        amount: event.target.value,
+                      }))
+                    }
+                    autoFocus
+                  />
+                </label>
+
+                <label className="company-action-field">
+                  <span>Subscription duration (days)</span>
+                  <input
+                    type="number"
+                    step="1"
+                    value={form.durationDays ?? ''}
+                    onChange={(event) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        durationDays: event.target.value,
+                      }))
+                    }
+                  />
+                </label>
+              </div>
+
+              <label className="company-action-field">
+                <span>Reason / note</span>
+                <textarea
+                  value={form.reason ?? ''}
+                  onChange={(event) =>
+                    setForm((prev) => ({
+                      ...prev,
+                      reason: event.target.value,
+                    }))
+                  }
+                  rows={4}
+                />
+              </label>
+            </>
+          ) : null}
+
+          {error ? (
+            <div className="company-action-dialog-error" role="alert">
+              <AlertTriangle size={16} />
+              <span>{error}</span>
+            </div>
+          ) : null}
+        </div>
+
+        <footer className="company-action-dialog-footer">
+          <button type="button" className="ghost" onClick={onClose}>
+            Cancel
+          </button>
+
+          <button
+            type="submit"
+            className={`company-action-dialog-confirm ${isSuspend ? 'danger' : 'primary'}`}
+          >
+            {isSuspend ? <PauseCircle size={16} /> : null}
+            {isExtendDemo ? <CalendarClock size={16} /> : null}
+            {isMarkPaid ? <IndianRupee size={16} /> : null}
+            {confirmLabel}
+          </button>
+        </footer>
+      </form>
+    </div>,
+    document.body,
+  );
+}
+
+function DetailModal({
+  detail,
+  loading,
+  onClose,
+  onActivate,
+  onSuspend,
+  onExtendDemo,
+  onMarkPaid,
+  onDismissActionFeedback,
+  actionFeedback,
+  actionBusy,
+}) {
+  if (!detail || typeof document === 'undefined') {
     return null;
   }
 
@@ -225,89 +447,58 @@ function DetailModal({ detail, loading, onClose, onActivate, onSuspend, onExtend
   const payments = detail.payments || [];
   const subscriptions = detail.subscriptions || [];
   const demoRequest = detail.demo_request || null;
-  const isSds = item.is_sds_company === true || String(item.tenant_code || '').toLowerCase() === 'sds';
+  const isSds =
+    item.is_sds_company === true ||
+    String(item.tenant_code || '').toLowerCase() === 'sds';
+  const normalizedStatus = String(item.status || '').toLowerCase();
+  const isActive = normalizedStatus === 'active';
+  const isDeactivated = normalizedStatus === 'suspended';
 
-  return (
+  return createPortal(
     <div
       className="company-detail-backdrop"
       role="dialog"
       aria-modal="true"
-      style={{
-        position: 'fixed',
-        inset: 0,
-        zIndex: 1000,
-        background: 'rgba(15, 23, 42, 0.55)',
-        display: 'grid',
-        placeItems: 'center',
-        padding: 18,
-      }}
+      aria-label={`Company details for ${getCompanyName(item)}`}
     >
-      <div
-        className="company-detail-modal"
-        style={{
-          width: 'min(980px, 100%)',
-          maxHeight: '88vh',
-          overflow: 'auto',
-          borderRadius: 28,
-          background: '#ffffff',
-          boxShadow: '0 28px 70px rgba(15,23,42,0.28)',
-        }}
-      >
-        <div
-          style={{
-            padding: '22px 24px',
-            borderBottom: '1px solid rgba(226,232,240,0.9)',
-            display: 'flex',
-            justifyContent: 'space-between',
-            gap: 16,
-            alignItems: 'flex-start',
-          }}
-        >
-          <div>
-            <p
-              style={{
-                margin: '0 0 8px',
-                color: '#2563eb',
-                fontSize: 12,
-                fontWeight: 900,
-                textTransform: 'uppercase',
-                letterSpacing: '0.08em',
-              }}
-            >
-              Company Detail
-            </p>
-            <h2 style={{ margin: 0 }}>{getCompanyName(item)}</h2>
-            <p style={{ margin: '8px 0 0', color: '#64748b' }}>
-              {safeText(getCompanyEmail(item))} · Tenant ID: {safeText(tenantId)}
-            </p>
+      <div className="company-detail-modal">
+        <header className="company-detail-header">
+          <div className="company-detail-heading">
+            <span className="company-detail-kicker">Company Detail</span>
+
+            <div className="company-detail-title-row">
+              <div>
+                <h2>{getCompanyName(item)}</h2>
+                <p>
+                  {safeText(getCompanyEmail(item))}
+                  <span aria-hidden="true"> · </span>
+                  Tenant ID: {safeText(tenantId)}
+                </p>
+              </div>
+
+              <StatusBadge value={item.status || '—'} />
+            </div>
           </div>
 
           <button
             type="button"
-            className="ghost"
+            className="company-detail-close"
             onClick={onClose}
-            style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}
+            aria-label="Close company detail"
           >
-            <X size={16} />
-            Close
+            <X size={17} />
+            <span>Close</span>
           </button>
-        </div>
+        </header>
 
         {loading ? (
-          <div style={{ padding: 36, textAlign: 'center', color: '#64748b' }}>
-            <Loader2 size={18} className="spin" style={{ marginRight: 8 }} />
-            Loading company detail...
+          <div className="company-detail-loading">
+            <Loader2 size={20} className="spin" />
+            <span>Loading company detail...</span>
           </div>
         ) : (
-          <div style={{ padding: 24 }}>
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
-                gap: 14,
-                marginBottom: 22,
-              }}
-            >
+          <div className="company-detail-body">
+            <section className="company-detail-kpis" aria-label="Company summary">
               <SummaryCard
                 icon={ShieldCheck}
                 label="Plan"
@@ -332,193 +523,248 @@ function DetailModal({ detail, loading, onClose, onActivate, onSuspend, onExtend
                 value={formatDate(item.trial_end_date || item.subscription_end_date)}
                 tone="#ea580c"
               />
-            </div>
+            </section>
 
-            <div
-              style={{
-                display: 'flex',
-                gap: 10,
-                flexWrap: 'wrap',
-                marginBottom: 22,
-              }}
-            >
-              <button
-                type="button"
-                className="primary"
-                onClick={() => onActivate(tenantId)}
-                disabled={loading}
-                style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}
-              >
-                <PlayCircle size={16} />
-                Activate
-              </button>
+            <section className="company-modal-action-area" aria-label="Company actions">
+              <div className="company-modal-action-heading">
+                <div>
+                  <span>Account controls</span>
+                  <strong>Manage current company status</strong>
+                </div>
+                <StatusBadge value={item.status || '—'} />
+              </div>
 
-              <button
-                type="button"
-                className="ghost"
-                onClick={() => onSuspend(tenantId)}
-                disabled={loading || isSds}
-                style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}
-              >
-                <PauseCircle size={16} />
-                Suspend
-              </button>
+              <div className="company-modal-actions">
+                <button
+                  type="button"
+                  className={`company-status-action activate ${isActive ? 'is-current' : ''}`}
+                  onClick={() => onActivate(tenantId)}
+                  disabled={loading || Boolean(actionBusy) || isActive}
+                >
+                  {actionBusy === 'activate' ? (
+                    <Loader2 size={16} className="spin" />
+                  ) : isActive ? (
+                    <CheckCircle2 size={16} />
+                  ) : (
+                    <PlayCircle size={16} />
+                  )}
+                  {isActive ? 'Active' : 'Activate'}
+                </button>
 
-              <button
-                type="button"
-                className="ghost"
-                onClick={() => onExtendDemo(tenantId)}
-                disabled={loading || item.plan_type !== 'demo'}
-                style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}
-              >
-                <CalendarClock size={16} />
-                Extend Trial
-              </button>
+                <button
+                  type="button"
+                  className={`company-status-action deactivate ${isDeactivated ? 'is-current' : ''}`}
+                  onClick={() => onSuspend(tenantId)}
+                  disabled={loading || Boolean(actionBusy) || isSds || isDeactivated}
+                >
+                  {actionBusy === 'suspend' ? (
+                    <Loader2 size={16} className="spin" />
+                  ) : (
+                    <PauseCircle size={16} />
+                  )}
+                  {isDeactivated ? 'Deactivated' : 'Deactivate'}
+                </button>
 
-              <button
-                type="button"
-                className="ghost"
-                onClick={() => onMarkPaid(tenantId)}
-                disabled={loading || item.plan_type === 'lifetime'}
-                style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}
-              >
-                <IndianRupee size={16} />
-                Mark Paid
-              </button>
-            </div>
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={() => onExtendDemo(tenantId)}
+                  disabled={loading || Boolean(actionBusy) || item.plan_type !== 'demo'}
+                >
+                  {actionBusy === 'extend-demo' ? (
+                    <Loader2 size={16} className="spin" />
+                  ) : (
+                    <CalendarClock size={16} />
+                  )}
+                  Extend Trial
+                </button>
+
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={() => onMarkPaid(tenantId)}
+                  disabled={loading || Boolean(actionBusy) || item.plan_type === 'lifetime'}
+                >
+                  {actionBusy === 'mark-paid' ? (
+                    <Loader2 size={16} className="spin" />
+                  ) : (
+                    <IndianRupee size={16} />
+                  )}
+                  Mark Paid
+                </button>
+              </div>
+
+              {actionFeedback ? (
+                <div
+                  className={`company-action-feedback ${actionFeedback.type || 'success'}`}
+                  role="status"
+                >
+                  {actionFeedback.type === 'error' ? (
+                    <AlertTriangle size={16} />
+                  ) : (
+                    <CheckCircle2 size={16} />
+                  )}
+                  <span>{actionFeedback.text}</span>
+                  <button
+                    type="button"
+                    className="company-feedback-close"
+                    onClick={onDismissActionFeedback}
+                    aria-label="Dismiss message"
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+              ) : null}
+            </section>
 
             {isSds ? (
-              <div
-                style={{
-                  marginBottom: 22,
-                  padding: 14,
-                  borderRadius: 18,
-                  background: 'rgba(22,163,74,0.1)',
-                  color: '#166534',
-                  display: 'flex',
-                  alignItems: 'flex-start',
-                  gap: 10,
-                }}
-              >
+              <div className="company-protection-note">
                 <ShieldCheck size={19} />
-                <p style={{ margin: 0 }}>
-                  SDS is protected as the lifetime full-access company. It cannot be suspended and does not require payment.
+                <p>
+                  SDS is protected as the lifetime full-access company. It cannot be
+                  suspended and does not require payment.
                 </p>
               </div>
             ) : null}
 
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
-                gap: 18,
-              }}
-            >
-              <div
-                style={{
-                  borderRadius: 22,
-                  padding: 18,
-                  border: '1px solid rgba(226,232,240,0.9)',
-                  background: '#f8fafc',
-                }}
-              >
-                <h3 style={{ margin: '0 0 12px' }}>Company Information</h3>
-                <p><strong>Tenant Code:</strong> {safeText(item.tenant_code)}</p>
-                <p><strong>Phone:</strong> {safeText(item.company_phone || item.contact_phone)}</p>
-                <p><strong>Address:</strong> {safeText(item.address)}</p>
-                <p><strong>Allowed Modules:</strong> {Array.isArray(item.allowed_modules) ? item.allowed_modules.join(', ') : safeText(item.allowed_modules)}</p>
-              </div>
+            <section className="company-detail-grid">
+              <article className="company-detail-card">
+                <div className="company-detail-card-heading">
+                  <Building2 size={17} />
+                  <div>
+                    <span>Profile</span>
+                    <h3>Company Information</h3>
+                  </div>
+                </div>
 
-              <div
-                style={{
-                  borderRadius: 22,
-                  padding: 18,
-                  border: '1px solid rgba(226,232,240,0.9)',
-                  background: '#f8fafc',
-                }}
-              >
-                <h3 style={{ margin: '0 0 12px' }}>Trial Request</h3>
+                <dl className="company-detail-list">
+                  <div>
+                    <dt>Tenant Code</dt>
+                    <dd>{safeText(item.tenant_code)}</dd>
+                  </div>
+                  <div>
+                    <dt>Phone</dt>
+                    <dd>{safeText(item.company_phone || item.contact_phone)}</dd>
+                  </div>
+                  <div>
+                    <dt>Address</dt>
+                    <dd>{safeText(item.address)}</dd>
+                  </div>
+                  <div>
+                    <dt>Allowed Modules</dt>
+                    <dd>
+                      {Array.isArray(item.allowed_modules)
+                        ? item.allowed_modules.join(', ')
+                        : safeText(item.allowed_modules)}
+                    </dd>
+                  </div>
+                </dl>
+              </article>
+
+              <article className="company-detail-card">
+                <div className="company-detail-card-heading">
+                  <CalendarClock size={17} />
+                  <div>
+                    <span>Trial access</span>
+                    <h3>Trial Request</h3>
+                  </div>
+                </div>
+
                 {demoRequest ? (
-                  <>
-                    <p><strong>Status:</strong> {safeText(demoRequest.status)}</p>
-                    <p><strong>OTP Verified:</strong> {demoRequest.otp_verified ? 'Yes' : 'No'}</p>
-                    <p><strong>Requested:</strong> {formatDate(demoRequest.created_at || demoRequest.requested_at)}</p>
-                    <p><strong>Approved:</strong> {formatDate(demoRequest.approved_at)}</p>
-                  </>
+                  <dl className="company-detail-list">
+                    <div>
+                      <dt>Status</dt>
+                      <dd>{safeText(demoRequest.status)}</dd>
+                    </div>
+                    <div>
+                      <dt>OTP Verified</dt>
+                      <dd>{demoRequest.otp_verified ? 'Yes' : 'No'}</dd>
+                    </div>
+                    <div>
+                      <dt>Requested</dt>
+                      <dd>{formatDate(demoRequest.created_at || demoRequest.requested_at)}</dd>
+                    </div>
+                    <div>
+                      <dt>Approved</dt>
+                      <dd>{formatDate(demoRequest.approved_at)}</dd>
+                    </div>
+                  </dl>
                 ) : (
-                  <p style={{ color: '#64748b' }}>No linked trial request found.</p>
+                  <p className="company-detail-empty">No linked trial request found.</p>
                 )}
-              </div>
-            </div>
+              </article>
+            </section>
 
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
-                gap: 18,
-                marginTop: 18,
-              }}
-            >
-              <div
-                style={{
-                  borderRadius: 22,
-                  padding: 18,
-                  border: '1px solid rgba(226,232,240,0.9)',
-                }}
-              >
-                <h3 style={{ margin: '0 0 12px' }}>Recent Subscriptions</h3>
+            <section className="company-detail-history-grid">
+              <article className="company-detail-history-card">
+                <div className="company-detail-card-heading">
+                  <ShieldCheck size={17} />
+                  <div>
+                    <span>History</span>
+                    <h3>Recent Subscriptions</h3>
+                  </div>
+                </div>
+
                 {subscriptions.length ? (
-                  subscriptions.slice(0, 5).map((subscription) => (
-                    <div
-                      key={subscription._id || subscription.id}
-                      style={{
-                        padding: '10px 0',
-                        borderBottom: '1px solid rgba(226,232,240,0.7)',
-                      }}
-                    >
-                      <strong>{safeText(subscription.plan_name || subscription.plan_type)}</strong>
-                      <div style={{ color: '#64748b', fontSize: 13 }}>
-                        {safeText(subscription.status)} · {formatDate(subscription.start_date || subscription.created_at)}
+                  <div className="company-history-list">
+                    {subscriptions.slice(0, 5).map((subscription) => (
+                      <div
+                        className="company-history-item"
+                        key={subscription._id || subscription.id}
+                      >
+                        <strong>
+                          {safeText(subscription.plan_name || subscription.plan_type)}
+                        </strong>
+                        <span>
+                          {safeText(subscription.status)}
+                          <span aria-hidden="true"> · </span>
+                          {formatDate(subscription.start_date || subscription.created_at)}
+                        </span>
                       </div>
-                    </div>
-                  ))
+                    ))}
+                  </div>
                 ) : (
-                  <p style={{ color: '#64748b' }}>No subscription records found.</p>
+                  <p className="company-detail-empty">No subscription records found.</p>
                 )}
-              </div>
+              </article>
 
-              <div
-                style={{
-                  borderRadius: 22,
-                  padding: 18,
-                  border: '1px solid rgba(226,232,240,0.9)',
-                }}
-              >
-                <h3 style={{ margin: '0 0 12px' }}>Recent Payments</h3>
+              <article className="company-detail-history-card">
+                <div className="company-detail-card-heading">
+                  <IndianRupee size={17} />
+                  <div>
+                    <span>Payments</span>
+                    <h3>Recent Payments</h3>
+                  </div>
+                </div>
+
                 {payments.length ? (
-                  payments.slice(0, 5).map((payment) => (
-                    <div
-                      key={payment._id || payment.id}
-                      style={{
-                        padding: '10px 0',
-                        borderBottom: '1px solid rgba(226,232,240,0.7)',
-                      }}
-                    >
-                      <strong>{formatCurrency(payment.amount, payment.currency || 'INR')}</strong>
-                      <div style={{ color: '#64748b', fontSize: 13 }}>
-                        {safeText(payment.payment_status || payment.status)} · {formatDate(payment.paid_at || payment.created_at)}
+                  <div className="company-history-list">
+                    {payments.slice(0, 5).map((payment) => (
+                      <div
+                        className="company-history-item"
+                        key={payment._id || payment.id}
+                      >
+                        <strong>
+                          {formatCurrency(payment.amount, payment.currency || 'INR')}
+                        </strong>
+                        <span>
+                          {safeText(payment.payment_status || payment.status)}
+                          <span aria-hidden="true"> · </span>
+                          {formatDate(payment.paid_at || payment.created_at)}
+                        </span>
                       </div>
-                    </div>
-                  ))
+                    ))}
+                  </div>
                 ) : (
-                  <p style={{ color: '#64748b' }}>No payment records found.</p>
+                  <p className="company-detail-empty">No payment records found.</p>
                 )}
-              </div>
-            </div>
+              </article>
+            </section>
           </div>
         )}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -539,6 +785,15 @@ export default function Companies() {
   const [selectedTenantId, setSelectedTenantId] = useState('');
   const [detail, setDetail] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [searchFeedback, setSearchFeedback] = useState(null);
+  const [actionFeedback, setActionFeedback] = useState({});
+  const [actionBusy, setActionBusy] = useState({});
+  const [actionDialog, setActionDialog] = useState(null);
+  const [actionDialogForm, setActionDialogForm] = useState({});
+  const [actionDialogError, setActionDialogError] = useState('');
+  const [tableSearch, setTableSearch] = useState('');
+  const [tablePage, setTablePage] = useState(1);
+  const [tablePageSize, setTablePageSize] = useState(DEFAULT_COMPANY_PAGE_SIZE);
 
   const queryString = useMemo(() => {
     const query = new URLSearchParams();
@@ -559,17 +814,43 @@ export default function Companies() {
     return text ? `?${text}` : '';
   }, [filters]);
 
-  async function load() {
+  async function load(options = {}) {
+    const showSearchFeedback = options?.showSearchFeedback === true;
+
     setLoading(true);
     setMessage('');
 
+    if (showSearchFeedback) {
+      setSearchFeedback({
+        type: 'info',
+        text: 'Searching companies...',
+      });
+    }
+
     try {
       const data = await api(`/superadmin/companies${queryString}`);
+      const items = data.items || [];
 
-      setRows(data.items || []);
+      setRows(items);
       setSummary(data.summary || {});
+
+      if (showSearchFeedback) {
+        setSearchFeedback({
+          type: 'success',
+          text: `Search complete — ${items.length} ${items.length === 1 ? 'company' : 'companies'} found.`,
+        });
+      }
     } catch (error) {
-      setMessage(error.message || 'Unable to load companies.');
+      const errorMessage = error.message || 'Unable to load companies.';
+
+      if (showSearchFeedback) {
+        setSearchFeedback({
+          type: 'error',
+          text: errorMessage,
+        });
+      } else {
+        setMessage(errorMessage);
+      }
     } finally {
       setLoading(false);
     }
@@ -579,6 +860,112 @@ export default function Companies() {
     load().catch(console.error);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (!searchFeedback) {
+      return undefined;
+    }
+
+    const timer = window.setTimeout(() => {
+      setSearchFeedback(null);
+    }, FEEDBACK_AUTO_HIDE_MS);
+
+    return () => window.clearTimeout(timer);
+  }, [searchFeedback]);
+
+  useEffect(() => {
+    const activeTenantIds = Object.keys(actionFeedback).filter(
+      (tenantId) => Boolean(actionFeedback[tenantId]),
+    );
+
+    if (!activeTenantIds.length) {
+      return undefined;
+    }
+
+    const timer = window.setTimeout(() => {
+      setActionFeedback((prev) => {
+        const next = { ...prev };
+
+        activeTenantIds.forEach((tenantId) => {
+          delete next[tenantId];
+        });
+
+        return next;
+      });
+    }, FEEDBACK_AUTO_HIDE_MS);
+
+    return () => window.clearTimeout(timer);
+  }, [actionFeedback]);
+
+  useEffect(() => {
+    const hasActionFeedback = Object.values(actionFeedback).some(Boolean);
+
+    if (!searchFeedback && !hasActionFeedback) {
+      return undefined;
+    }
+
+    const dismissFeedback = () => {
+      setSearchFeedback(null);
+      setActionFeedback({});
+    };
+
+    const dismissOnEscape = (event) => {
+      if (event.key === 'Escape') {
+        dismissFeedback();
+      }
+    };
+
+    window.addEventListener('click', dismissFeedback);
+    window.addEventListener('keydown', dismissOnEscape);
+
+    return () => {
+      window.removeEventListener('click', dismissFeedback);
+      window.removeEventListener('keydown', dismissOnEscape);
+    };
+  }, [searchFeedback, actionFeedback]);
+
+  useEffect(() => {
+    if ((!detail && !actionDialog) || typeof document === 'undefined') {
+      return undefined;
+    }
+
+    const body = document.body;
+    const root = document.documentElement;
+    const previousBodyOverflow = body.style.overflow;
+    const previousRootOverflow = root.style.overflow;
+    const previousBodyOverscroll = body.style.overscrollBehavior;
+    const previousRootOverscroll = root.style.overscrollBehavior;
+
+    body.style.overflow = 'hidden';
+    root.style.overflow = 'hidden';
+    body.style.overscrollBehavior = 'none';
+    root.style.overscrollBehavior = 'none';
+
+    const blockBackgroundScroll = (event) => {
+      const activeModal = actionDialog
+        ? document.querySelector('.company-action-dialog')
+        : document.querySelector('.company-detail-modal');
+
+      if (activeModal && activeModal.contains(event.target)) {
+        return;
+      }
+
+      event.preventDefault();
+    };
+
+    document.addEventListener('wheel', blockBackgroundScroll, { passive: false });
+    document.addEventListener('touchmove', blockBackgroundScroll, { passive: false });
+
+    return () => {
+      document.removeEventListener('wheel', blockBackgroundScroll);
+      document.removeEventListener('touchmove', blockBackgroundScroll);
+
+      body.style.overflow = previousBodyOverflow;
+      root.style.overflow = previousRootOverflow;
+      body.style.overscrollBehavior = previousBodyOverscroll;
+      root.style.overscrollBehavior = previousRootOverscroll;
+    };
+  }, [detail, actionDialog]);
 
   async function submit(e) {
     e.preventDefault();
@@ -637,7 +1024,19 @@ export default function Companies() {
       return;
     }
 
+    const currentRow = rows.find((row) => getTenantId(row) === tenantId);
+    const currentDetailItem = detail?.item || detail || {};
+    const companyName = getCompanyName(currentRow || currentDetailItem);
+
     setMessage('');
+    setActionBusy((prev) => ({
+      ...prev,
+      [tenantId]: action,
+    }));
+    setActionFeedback((prev) => ({
+      ...prev,
+      [tenantId]: null,
+    }));
 
     try {
       const data = await api(`/superadmin/companies/${encodeURIComponent(tenantId)}/${action}`, {
@@ -645,91 +1044,219 @@ export default function Companies() {
         body: JSON.stringify(payload),
       });
 
-      setMessage(data.message || 'Company updated successfully.');
-      await load();
+      const serverItem =
+        data?.item ||
+        data?.company ||
+        data?.tenant ||
+        data?.updated_company ||
+        data?.data?.item ||
+        data?.data?.company ||
+        data?.data?.tenant ||
+        {};
 
-      if (selectedTenantId) {
-        await openDetail(selectedTenantId);
+      const fallbackPatch = {};
+
+      if (action === 'activate') {
+        fallbackPatch.status = 'active';
+      } else if (action === 'suspend') {
+        fallbackPatch.status = 'suspended';
+      } else if (action === 'mark-paid') {
+        fallbackPatch.status = 'active';
+        fallbackPatch.plan_type = 'paid';
       }
+
+      const updatedCompany = {
+        ...fallbackPatch,
+        ...(serverItem && typeof serverItem === 'object' && !Array.isArray(serverItem)
+          ? serverItem
+          : {}),
+      };
+
+      setRows((prevRows) =>
+        prevRows.map((row) =>
+          getTenantId(row) === tenantId
+            ? {
+                ...row,
+                ...updatedCompany,
+              }
+            : row,
+        ),
+      );
+
+      setDetail((prevDetail) => {
+        if (!prevDetail) {
+          return prevDetail;
+        }
+
+        const previousItem = prevDetail.item || prevDetail;
+
+        if (getTenantId(previousItem) !== tenantId) {
+          return prevDetail;
+        }
+
+        if (prevDetail.item) {
+          return {
+            ...prevDetail,
+            ...(data && typeof data === 'object' ? data : {}),
+            item: {
+              ...previousItem,
+              ...updatedCompany,
+            },
+          };
+        }
+
+        return {
+          ...previousItem,
+          ...updatedCompany,
+        };
+      });
+
+      const successText =
+        action === 'activate'
+          ? `${companyName} is active now.`
+          : action === 'suspend'
+            ? `${companyName} is deactivated now.`
+            : action === 'extend-demo'
+              ? `Trial access for ${companyName} was extended successfully.`
+              : action === 'mark-paid'
+                ? `${companyName} was marked as paid and activated successfully.`
+                : data.message || 'Company updated successfully.';
+
+      setActionFeedback((prev) => ({
+        ...prev,
+        [tenantId]: {
+          type: 'success',
+          text: successText,
+        },
+      }));
     } catch (error) {
-      setMessage(error.message || 'Unable to update company.');
+      setActionFeedback((prev) => ({
+        ...prev,
+        [tenantId]: {
+          type: 'error',
+          text: error.message || 'Unable to update company.',
+        },
+      }));
+    } finally {
+      setActionBusy((prev) => {
+        const next = { ...prev };
+        delete next[tenantId];
+        return next;
+      });
     }
+  }
+
+  function openActionDialog(type, tenantId) {
+    if (!tenantId) {
+      return;
+    }
+
+    const currentRow = rows.find((row) => getTenantId(row) === tenantId);
+    const currentDetailItem = detail?.item || detail || {};
+    const companyName = getCompanyName(currentRow || currentDetailItem);
+
+    const defaults =
+      type === 'suspend'
+        ? {
+            reason: 'Subscription or admin decision',
+          }
+        : type === 'extend-demo'
+          ? {
+              days: '7',
+              reason: 'Superadmin approved trial extension',
+            }
+          : {
+              amount: '4999',
+              durationDays: '30',
+              reason: 'Manual paid activation by Superadmin',
+            };
+
+    setActionDialog({
+      type,
+      tenantId,
+      companyName,
+    });
+    setActionDialogForm(defaults);
+    setActionDialogError('');
+  }
+
+  function closeActionDialog() {
+    setActionDialog(null);
+    setActionDialogForm({});
+    setActionDialogError('');
   }
 
   function handleSuspend(tenantId) {
-    const reason = window.prompt('Enter suspension reason:', 'Subscription or admin decision');
-
-    if (reason === null) {
-      return;
-    }
-
-    runCompanyAction(tenantId, 'suspend', { reason });
+    openActionDialog('suspend', tenantId);
   }
 
   function handleExtendDemo(tenantId) {
-    const daysText = window.prompt('Extend trial by how many days?', '7');
-
-    if (daysText === null) {
-      return;
-    }
-
-    const days = Number(daysText);
-
-    if (!Number.isFinite(days) || days <= 0) {
-      setMessage('Please enter a valid number of days.');
-      return;
-    }
-
-    const reason = window.prompt('Reason for trial extension:', 'Superadmin approved trial extension');
-
-    if (reason === null) {
-      return;
-    }
-
-    runCompanyAction(tenantId, 'extend-demo', {
-      days,
-      reason,
-    });
+    openActionDialog('extend-demo', tenantId);
   }
 
   function handleMarkPaid(tenantId) {
-    const amountText = window.prompt('Enter paid amount:', '4999');
+    openActionDialog('mark-paid', tenantId);
+  }
 
-    if (amountText === null) {
+  function submitActionDialog(event) {
+    event.preventDefault();
+
+    if (!actionDialog?.tenantId) {
       return;
     }
 
-    const amount = Number(amountText);
+    const tenantId = actionDialog.tenantId;
 
-    if (!Number.isFinite(amount) || amount < 0) {
-      setMessage('Please enter a valid payment amount.');
+    if (actionDialog.type === 'suspend') {
+      const reason = String(actionDialogForm.reason ?? '');
+
+      closeActionDialog();
+      runCompanyAction(tenantId, 'suspend', { reason });
       return;
     }
 
-    const durationText = window.prompt('Subscription duration in days:', '30');
+    if (actionDialog.type === 'extend-demo') {
+      const days = Number(actionDialogForm.days);
 
-    if (durationText === null) {
+      if (!Number.isFinite(days) || days <= 0) {
+        setActionDialogError('Please enter a valid number of days.');
+        return;
+      }
+
+      const reason = String(actionDialogForm.reason ?? '');
+
+      closeActionDialog();
+      runCompanyAction(tenantId, 'extend-demo', {
+        days,
+        reason,
+      });
       return;
     }
 
-    const durationDays = Number(durationText);
+    if (actionDialog.type === 'mark-paid') {
+      const amount = Number(actionDialogForm.amount);
 
-    if (!Number.isFinite(durationDays)) {
-      setMessage('Please enter a valid subscription duration.');
-      return;
+      if (!Number.isFinite(amount) || amount < 0) {
+        setActionDialogError('Please enter a valid payment amount.');
+        return;
+      }
+
+      const durationDays = Number(actionDialogForm.durationDays);
+
+      if (!Number.isFinite(durationDays)) {
+        setActionDialogError('Please enter a valid subscription duration.');
+        return;
+      }
+
+      const reason = String(actionDialogForm.reason ?? '');
+
+      closeActionDialog();
+      runCompanyAction(tenantId, 'mark-paid', {
+        amount,
+        duration_days: durationDays,
+        reason,
+      });
     }
-
-    const reason = window.prompt('Reason / note:', 'Manual paid activation by Superadmin');
-
-    if (reason === null) {
-      return;
-    }
-
-    runCompanyAction(tenantId, 'mark-paid', {
-      amount,
-      duration_days: durationDays,
-      reason,
-    });
   }
 
   function handleChange(key, value) {
@@ -739,483 +1266,2037 @@ export default function Companies() {
     }));
   }
 
+  const tableSearchText = tableSearch.trim().toLowerCase();
+
+  const filteredCompanyRows = tableSearchText
+    ? rows.filter((row) => {
+        const tenantId = getTenantId(row);
+        const searchableValues = [
+          getCompanyName(row),
+          getCompanyEmail(row),
+          tenantId,
+          row.tenant_code,
+          row.plan_type || row.plan,
+          row.status,
+          getEmployeeCount(row),
+          getEmployeeLimit(row),
+          formatDate(row.trial_end_date || row.subscription_end_date),
+        ];
+
+        return searchableValues.some((value) =>
+          String(value ?? '').toLowerCase().includes(tableSearchText),
+        );
+      })
+    : rows;
+
+  const companyPageCount = Math.max(
+    1,
+    Math.ceil(filteredCompanyRows.length / tablePageSize),
+  );
+
+  const currentCompanyPage = Math.min(tablePage, companyPageCount);
+  const companyStartIndex = (currentCompanyPage - 1) * tablePageSize;
+  const visibleCompanyRows = filteredCompanyRows.slice(
+    companyStartIndex,
+    companyStartIndex + tablePageSize,
+  );
+
+  const companyPageNumbers = (() => {
+    if (companyPageCount <= 7) {
+      return Array.from({ length: companyPageCount }, (_, index) => index + 1);
+    }
+
+    const pageNumbers = [1];
+    const startPage = Math.max(2, currentCompanyPage - 1);
+    const endPage = Math.min(companyPageCount - 1, currentCompanyPage + 1);
+
+    if (startPage > 2) {
+      pageNumbers.push('left-ellipsis');
+    }
+
+    for (let pageNumber = startPage; pageNumber <= endPage; pageNumber += 1) {
+      pageNumbers.push(pageNumber);
+    }
+
+    if (endPage < companyPageCount - 1) {
+      pageNumbers.push('right-ellipsis');
+    }
+
+    pageNumbers.push(companyPageCount);
+    return pageNumbers;
+  })();
+
   return (
     <div className="page-grid companies-control-page">
 
       <style>{`
-        .companies-control-page{
-          --company-ink:#101a3a;
-          --company-muted:#596483;
-          --company-primary:#6254da;
-          --company-deep:#342b78;
-          --company-blue:#3766db;
-          --company-teal:#18aaa8;
-          --company-flat-blue:#b9d7ff;
-          --company-flat-violet:#c9c0ff;
-          --company-flat-teal:#aee6d9;
-          --company-ease:cubic-bezier(.22,1,.36,1);
-          display:grid;
-          gap:22px;
-          width:100%;
-          min-width:0;
-          padding-bottom:max(34px,env(safe-area-inset-bottom));
-          color:var(--company-ink);
-          font-family:var(--yc-ui,var(--body),inherit);
+        .companies-control-page {
+          --company-ink: #101a3a;
+          --company-muted: #5d6d8d;
+          --company-primary: #6658dc;
+          --company-deep: #342b78;
+          --company-cyan: #18b5c8;
+          --company-teal: #34c9c4;
+          --company-danger: #d84d68;
+          --company-line: rgba(16, 26, 58, .14);
+          --company-ease: cubic-bezier(.22, 1, .36, 1);
+
+          display: grid;
+          gap: clamp(18px, 2vw, 26px);
+          width: 100%;
+          min-width: 0;
+          max-width: 100%;
+          padding-bottom: max(34px, env(safe-area-inset-bottom));
+          color: var(--company-ink);
+          font-family: var(--yc-ui, var(--body), inherit);
         }
 
-        .companies-control-page>.hero{
-          position:relative;
-          isolation:isolate;
-          overflow:hidden;
-          display:flex;
-          align-items:center;
-          justify-content:space-between;
-          gap:28px;
-          min-height:230px;
-          padding:clamp(25px,3vw,40px);
-          border:1px solid rgba(171,181,211,.72);
-          border-radius:clamp(28px,2.5vw,40px);
-          background:
-            radial-gradient(circle at 8% 8%,rgba(121,219,238,.34),transparent 31%),
-            radial-gradient(circle at 92% 12%,rgba(191,190,249,.3),transparent 34%),
-            linear-gradient(135deg,#f1fbff 0%,#fffdf8 48%,#f8f2ff 100%);
-          box-shadow:12px 14px 0 var(--company-flat-blue),0 28px 48px rgba(34,38,110,.13);
+        .companies-control-page *,
+        .companies-control-page *::before,
+        .companies-control-page *::after {
+          box-sizing: border-box;
         }
 
-        .companies-control-page>.hero::before{
-          content:"";
-          position:absolute;
-          inset:0;
-          z-index:-2;
-          opacity:.42;
-          pointer-events:none;
-          background-image:
-            linear-gradient(rgba(65,55,161,.035) 1px,transparent 1px),
-            linear-gradient(90deg,rgba(65,55,161,.035) 1px,transparent 1px);
-          background-size:42px 42px;
+        .companies-control-page > *,
+        .companies-control-page .panel,
+        .companies-control-page .toolbar,
+        .companies-control-page .dynamic-form,
+        .companies-control-page .company-table-tools,
+        .companies-control-page .company-data-board,
+        .companies-control-page .company-table-footer {
+          width: 100%;
+          min-width: 0;
+          max-width: 100%;
         }
 
-        .companies-control-page>.hero::after{
-          content:"";
-          position:absolute;
-          z-index:-1;
-          width:clamp(165px,20vw,290px);
-          aspect-ratio:1;
-          right:clamp(-110px,-7vw,-55px);
-          top:clamp(-118px,-8vw,-60px);
-          border:1px solid rgba(65,55,161,.12);
-          border-radius:34% 66% 58% 42% / 44% 38% 62% 56%;
-          background:linear-gradient(145deg,rgba(105,217,208,.72),rgba(121,189,242,.72));
-          transform:rotate(18deg);
+        .companies-control-page img,
+        .companies-control-page input,
+        .companies-control-page select,
+        .companies-control-page button {
+          max-width: 100%;
         }
 
-        .companies-control-page .kicker{
-          display:inline-flex;
-          align-items:center;
-          width:fit-content;
-          padding:9px 13px;
-          border-radius:999px;
-          color:#fff;
-          background:var(--company-deep);
-          font-size:9px;
-          font-weight:950;
-          line-height:1;
-          letter-spacing:.12em;
-          text-transform:uppercase;
+        .companies-control-page > .hero {
+          position: relative;
+          overflow: hidden;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 28px;
+          min-height: 250px;
+          padding: clamp(26px, 3vw, 42px);
+          border: 1px solid rgba(154, 164, 205, .58);
+          border-radius: clamp(28px, 2.7vw, 40px);
+          background: linear-gradient(
+            90deg,
+            #d3f4fb 0%,
+            #f7fcfb 34%,
+            #fffdf8 52%,
+            #fbf8fa 68%,
+            #f0edfb 100%
+          );
+          box-shadow:
+            12px 14px 0 #c6d8f7,
+            0 28px 48px rgba(34, 38, 110, .13);
         }
 
-        .companies-control-page>.hero h1{
-          margin:15px 0 10px;
-          color:var(--company-ink);
-          font-family:var(--yc-display,var(--heading),inherit);
-          font-size:clamp(34px,4.4vw,66px);
-          font-weight:760;
-          line-height:.94;
-          letter-spacing:-.055em;
+        .companies-control-page > .hero::before,
+        .companies-control-page > .hero::after {
+          content: none;
+          display: none;
         }
 
-        .companies-control-page>.hero p{
-          max-width:830px;
-          margin:0;
-          color:var(--company-muted);
-          font-size:clamp(13px,1vw,16px);
-          line-height:1.68;
+        .companies-control-page > .hero > div {
+          min-width: 0;
+          max-width: 930px;
         }
 
-        .companies-control-page button{
-          touch-action:manipulation;
-          font-weight:900;
-          transition:transform 240ms var(--company-ease),box-shadow 240ms var(--company-ease),filter 200ms ease;
+        .companies-control-page .kicker {
+          display: inline-flex;
+          align-items: center;
+          width: fit-content;
+          max-width: 100%;
+          padding: 9px 13px;
+          border-radius: 999px;
+          color: #fff;
+          background: linear-gradient(135deg, #4c76dc 0%, #2db6b7 100%);
+          box-shadow: 4px 5px 0 #595192;
+          font-size: 9px;
+          font-weight: 950;
+          line-height: 1;
+          letter-spacing: .12em;
+          text-transform: uppercase;
         }
 
-        .companies-control-page button:hover:not(:disabled){
-          transform:translateY(-2px);
-          filter:saturate(1.04);
+        .companies-control-page > .hero h1 {
+          margin: 15px 0 10px;
+          color: var(--company-ink);
+          font-family: var(--yc-display, Georgia, "Times New Roman", serif);
+          font-size: clamp(42px, 5vw, 74px);
+          font-weight: 760;
+          line-height: .94;
+          letter-spacing: -.056em;
+          overflow-wrap: anywhere;
         }
 
-        .companies-control-page button:active:not(:disabled){
-          transform:translateY(0) scale(.985);
+        .companies-control-page > .hero p {
+          max-width: 860px;
+          margin: 0;
+          color: var(--company-muted);
+          font-size: clamp(13px, 1vw, 16px);
+          line-height: 1.68;
         }
 
-        .companies-control-page button:disabled{
-          cursor:not-allowed;
-          opacity:.56;
-          transform:none;
-          filter:none;
+        .companies-control-page > .panel {
+          overflow: hidden;
+          padding: 24px;
+          border: 1px solid rgba(171, 181, 211, .70);
+          border-radius: clamp(26px, 2.2vw, 36px);
+          background: linear-gradient(145deg, #ffffff, #f7fbff);
+          box-shadow:
+            8px 10px 0 #c4ccff,
+            0 24px 42px rgba(34, 38, 110, .10);
+        }
+
+        .companies-control-page > .panel > div:first-child {
+          margin-bottom: 24px !important;
+        }
+
+        .companies-control-page .stat-card {
+          border: 1px solid rgba(171, 181, 211, .64) !important;
+          border-radius: 22px !important;
+          background: #edf6ff !important;
+          box-shadow:
+            7px 9px 0 #b9d7ff,
+            0 18px 30px rgba(34, 38, 110, .08) !important;
+          transition:
+            transform 190ms var(--company-ease),
+            box-shadow 190ms ease !important;
+        }
+
+        .companies-control-page .stat-card:nth-child(2) {
+          background: #eaf8f4 !important;
+          box-shadow:
+            7px 9px 0 #aee6d9,
+            0 18px 30px rgba(34, 38, 110, .08) !important;
+        }
+
+        .companies-control-page .stat-card:nth-child(3) {
+          background: #fff4d5 !important;
+          box-shadow:
+            7px 9px 0 #ffe0a5,
+            0 18px 30px rgba(34, 38, 110, .08) !important;
+        }
+
+        .companies-control-page .stat-card:nth-child(4),
+        .companies-control-page .stat-card:nth-child(5) {
+          background: #f1efff !important;
+          box-shadow:
+            7px 9px 0 #c9c0ff,
+            0 18px 30px rgba(34, 38, 110, .08) !important;
+        }
+
+        .companies-control-page .stat-card:hover {
+          transform: translateY(-3px);
+        }
+
+        .companies-control-page button {
+          touch-action: manipulation;
+          font: inherit;
+          font-weight: 900;
+          cursor: pointer;
+          transition:
+            transform 190ms var(--company-ease),
+            box-shadow 190ms ease,
+            background 190ms ease,
+            border-color 190ms ease,
+            color 190ms ease,
+            filter 190ms ease;
+        }
+
+        .companies-control-page button:hover:not(:disabled) {
+          transform: translateY(-2px);
+          filter: saturate(1.04);
+        }
+
+        .companies-control-page button:active:not(:disabled) {
+          transform: translateY(0) scale(.985);
+        }
+
+        .companies-control-page button:disabled {
+          cursor: not-allowed;
+          opacity: .52;
+          transform: none;
+          filter: none;
         }
 
         .companies-control-page .primary,
-        .companies-control-page .ghost{
-          display:inline-flex;
-          align-items:center;
-          justify-content:center;
-          gap:8px;
-          min-height:42px;
-          padding:0 14px;
-          border-radius:13px;
-          line-height:1;
-          white-space:nowrap;
+        .companies-control-page .ghost {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
+          min-height: 45px;
+          padding: 0 15px;
+          border-radius: 14px;
+          line-height: 1;
+          white-space: nowrap;
         }
 
-        .companies-control-page .primary{
-          border:1px solid rgba(52,43,120,.16);
-          color:#fff;
-          background:linear-gradient(145deg,#4f72df,#2bb9b5);
-          box-shadow:5px 6px 0 rgba(52,43,120,.8),0 12px 22px rgba(55,102,219,.16);
+        .companies-control-page .primary:not(.company-target-search-button):not(.company-target-create-button) {
+          border: 1px solid rgba(52, 43, 120, .16);
+          color: #fff;
+          background: linear-gradient(135deg, #342b78, #4f65d7 58%, #18b5c8);
+          box-shadow:
+            5px 6px 0 #a9d6f5,
+            0 14px 25px rgba(36, 74, 128, .16);
         }
 
-        .companies-control-page .ghost{
-          border:1px solid rgba(98,84,218,.18);
-          color:var(--company-deep);
-          background:#f1efff;
-          box-shadow:3px 4px 0 rgba(98,84,218,.12);
+        .companies-control-page .company-target-search-button,
+        .companies-control-page .company-target-create-button {
+          border: 1px solid rgba(76, 118, 220, .18);
+          color: #fff;
+          background: linear-gradient(135deg, #4c76dc 0%, #2db6b7 100%);
+          box-shadow:
+            6px 7px 0 #595192,
+            0 14px 25px rgba(67, 116, 170, .16);
         }
 
-        .companies-control-page>.panel{
-          min-width:0;
-          overflow:hidden;
-          padding:24px;
-          border:1px solid rgba(171,181,211,.72);
-          border-radius:clamp(24px,2vw,32px);
-          background:linear-gradient(145deg,rgba(255,255,255,.99),rgba(244,249,255,.98));
-          box-shadow:9px 11px 0 #d1dcfa,0 24px 42px rgba(34,38,110,.1);
+        .companies-control-page .ghost {
+          border: 1px solid rgba(65, 55, 161, .18);
+          color: #40348d;
+          background: rgba(255, 255, 255, .94);
+          box-shadow: 3px 4px 0 rgba(52, 43, 120, .10);
         }
 
-        .companies-control-page>.panel>div:first-child{
-          margin-bottom:24px!important;
+        .companies-control-page .toolbar {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          flex-wrap: nowrap;
+          padding: 17px;
+          border: 1px solid rgba(102, 88, 220, .12);
+          border-radius: 20px;
+          background: linear-gradient(145deg, rgba(237, 248, 255, .64), rgba(248, 241, 255, .52));
         }
 
-        .companies-control-page .stat-card{
-          border:1px solid rgba(171,181,211,.68)!important;
-          border-radius:21px!important;
-          background:#f8fbff!important;
-          box-shadow:7px 9px 0 var(--company-flat-blue),0 18px 30px rgba(15,20,75,.08)!important;
-          transition:transform 260ms var(--company-ease),border-color 220ms ease!important;
+        .companies-control-page .toolbar .search {
+          flex: 1 1 auto !important;
+          min-width: 260px;
         }
 
-        .companies-control-page .stat-card:hover{
-          transform:translateY(-3px);
-          border-color:rgba(98,84,218,.3)!important;
+        .companies-control-page .toolbar > .primary {
+          flex: 0 0 auto;
         }
 
-        .companies-control-page .stat-card:nth-child(2n){
-          background:#eaf8f4!important;
-          box-shadow:7px 9px 0 var(--company-flat-teal),0 18px 30px rgba(15,20,75,.08)!important;
+        .companies-control-page .company-search-action {
+          position: relative;
+          flex: 0 0 auto;
+          min-width: 0;
         }
 
-        .companies-control-page .stat-card:nth-child(3n){
-          background:#f1efff!important;
-          box-shadow:7px 9px 0 var(--company-flat-violet),0 18px 30px rgba(15,20,75,.08)!important;
+        .companies-control-page .company-search-action > .primary {
+          width: 100%;
         }
 
-        .companies-control-page .toolbar{
-          padding:17px!important;
-          border:1px solid rgba(98,84,218,.09);
-          border-radius:18px;
-          background:linear-gradient(145deg,rgba(237,248,255,.5),rgba(248,241,255,.45));
+        .companies-control-page .company-search-feedback {
+          position: absolute;
+          z-index: 30;
+          top: calc(100% + 9px);
+          right: 0;
+          display: flex;
+          align-items: flex-start;
+          gap: 8px;
+          width: max-content;
+          max-width: min(340px, 82vw);
+          padding: 11px 13px;
+          border: 1px solid rgba(102,88,220,.18);
+          border-radius: 13px;
+          color: #40348d;
+          background: #f1efff;
+          box-shadow: 4px 5px 0 #c9c0ff, 0 16px 30px rgba(34,38,110,.12);
+          font-size: 11px;
+          font-weight: 850;
+          line-height: 1.45;
         }
 
-        .companies-control-page .search{
-          min-height:44px;
-          border:1px solid rgba(159,169,205,.62)!important;
-          border-radius:14px!important;
-          background:#fff!important;
+        .companies-control-page .company-search-feedback svg {
+          flex: 0 0 auto;
+          margin-top: 1px;
         }
 
-        .companies-control-page .search input{
-          min-height:42px;
-          color:var(--company-ink);
-          background:transparent;
+        .companies-control-page .company-search-feedback > span {
+          min-width: 0;
+          flex: 1 1 auto;
         }
 
-        .companies-control-page .toolbar select{
-          min-height:44px!important;
-          border:1px solid rgba(159,169,205,.62)!important;
-          border-radius:14px!important;
-          background:#fff!important;
-          color:var(--company-ink)!important;
+        .companies-control-page .company-search-feedback.success {
+          border-color: rgba(4,120,87,.20);
+          color: #047857;
+          background: #eaf8f4;
+          box-shadow: 4px 5px 0 #aee6d9, 0 16px 30px rgba(34,38,110,.10);
         }
 
-        .companies-control-page .dynamic-form{
-          display:grid;
-          grid-template-columns:repeat(4,minmax(0,1fr));
-          gap:14px;
-          padding:20px;
-          border:1px solid rgba(98,84,218,.09);
-          border-radius:20px;
-          background:linear-gradient(145deg,rgba(237,248,255,.44),rgba(248,241,255,.34));
+        .companies-control-page .company-search-feedback.error {
+          border-color: rgba(162,52,77,.20);
+          color: #a2344d;
+          background: #fff0f2;
+          box-shadow: 4px 5px 0 #f2c2cc, 0 16px 30px rgba(34,38,110,.10);
         }
 
-        .companies-control-page .dynamic-form label{
-          display:grid;
-          min-width:0;
-          gap:7px;
-          color:#334164;
-          font-size:12px;
-          font-weight:900;
+        .companies-control-page .search {
+          position: relative;
+          display: flex;
+          align-items: center;
+          min-width: 0;
+          min-height: 46px;
+          overflow: hidden;
+          border: 1px solid rgba(151, 161, 197, .58);
+          border-radius: 15px;
+          background: #fff;
+        }
+
+        .companies-control-page .search > svg {
+          margin-left: 14px;
+          flex: 0 0 auto;
+          color: var(--company-primary);
+        }
+
+        .companies-control-page .search input {
+          width: 100%;
+          min-width: 0;
+          min-height: 44px;
+          padding: 0 13px 0 10px;
+          border: 0;
+          outline: 0;
+          color: var(--company-ink);
+          background: transparent;
+          font: inherit;
+          font-weight: 650;
         }
 
         .companies-control-page .dynamic-form input,
-        .companies-control-page .dynamic-form select{
-          width:100%;
-          min-width:0;
-          min-height:46px;
-          border:1px solid rgba(159,169,205,.62);
-          border-radius:14px;
-          outline:none;
-          color:var(--company-ink);
-          background:rgba(255,255,255,.92);
-          padding:0 13px;
-          font:inherit;
-          font-weight:600;
-          transition:border-color 180ms ease,box-shadow 180ms ease,background 180ms ease;
+        .companies-control-page .dynamic-form select,
+        .companies-control-page .company-table-search input,
+        .companies-control-page .company-page-size select {
+          width: 100%;
+          min-width: 0;
+          min-height: 46px;
+          padding: 0 13px;
+          border: 1px solid rgba(151, 161, 197, .58);
+          border-radius: 14px;
+          outline: 0;
+          color: var(--company-ink);
+          background: rgba(255,255,255,.96);
+          font: inherit;
+          font-weight: 650;
+          transition:
+            border-color 170ms ease,
+            box-shadow 170ms ease,
+            transform 170ms ease;
         }
 
-        .companies-control-page .dynamic-form input:hover,
-        .companies-control-page .dynamic-form select:hover{
-          border-color:rgba(98,84,218,.34);
+        .companies-control-page .toolbar > select {
+          flex: 0 0 165px;
+          width: 165px;
+          min-width: 150px;
+          max-width: 180px;
+          min-height: 46px;
+          padding: 0 34px 0 12px;
+          border: 1px solid rgba(151, 161, 197, .58);
+          border-radius: 14px;
+          outline: 0;
+          color: var(--company-ink);
+          background: rgba(255,255,255,.96);
+          font: inherit;
+          font-weight: 650;
+          transition:
+            border-color 170ms ease,
+            box-shadow 170ms ease,
+            transform 170ms ease;
         }
 
+        .companies-control-page .toolbar > select:focus,
         .companies-control-page .dynamic-form input:focus,
-        .companies-control-page .dynamic-form select:focus{
-          border-color:var(--company-primary);
-          background:#fff;
-          box-shadow:0 0 0 4px rgba(98,84,218,.11);
+        .companies-control-page .dynamic-form select:focus,
+        .companies-control-page .company-table-search input:focus,
+        .companies-control-page .company-page-size select:focus {
+          border-color: rgba(102,88,220,.65);
+          box-shadow:
+            4px 5px 0 rgba(102,88,220,.14),
+            0 0 0 4px rgba(102,88,220,.08);
+          transform: translateY(-1px);
         }
 
-        .companies-control-page .dynamic-form>button{
-          align-self:end;
+        .companies-control-page .dynamic-form {
+          display: grid;
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+          gap: 14px;
+          margin-top: 20px;
+          padding: 20px;
+          border: 1px solid rgba(102, 88, 220, .11);
+          border-radius: 22px;
+          background: linear-gradient(145deg, rgba(237,248,255,.52), rgba(248,241,255,.42));
         }
 
-        .companies-control-page .inline-message{
-          padding:14px 16px!important;
-          border:1px solid rgba(98,84,218,.14)!important;
-          border-radius:15px!important;
-          color:var(--company-deep)!important;
-          background:#f1efff!important;
-          font-size:12px;
-          font-weight:850;
+        .companies-control-page .dynamic-form label {
+          display: grid;
+          gap: 8px;
+          min-width: 0;
+          margin: 0;
+          color: #303b5b;
+          font-size: 11px;
+          font-weight: 900;
         }
 
-        .companies-control-page table{
-          border-collapse:separate!important;
-          border-spacing:0!important;
+        .companies-control-page .dynamic-form > button {
+          align-self: end;
         }
 
-        .companies-control-page thead tr{
-          background:rgba(241,239,255,.94)!important;
+        .companies-control-page .inline-message {
+          margin-top: 16px;
+          padding: 14px 16px !important;
+          border: 1px solid rgba(102,88,220,.18) !important;
+          border-radius: 15px !important;
+          color: #40348d !important;
+          background: #f1efff !important;
+          box-shadow: 3px 4px 0 #c9c0ff;
+          font-size: 12px;
+          font-weight: 850;
         }
 
-        .companies-control-page th{
-          position:sticky;
-          top:0;
-          z-index:2;
-          padding:14px 16px!important;
-          border-bottom:1px solid rgba(65,55,161,.11)!important;
-          color:#4f5e7f!important;
-          background:rgba(241,239,255,.94)!important;
-          backdrop-filter:blur(12px);
-          font-size:10px!important;
+        .companies-control-page .company-table-tools {
+          display: grid;
+          grid-template-columns: minmax(280px, 1fr) auto auto;
+          gap: 16px;
+          align-items: end;
+          margin-top: 24px;
+          padding: 18px 20px;
+          border: 1px solid rgba(171,181,211,.52);
+          border-radius: 20px 20px 0 0;
+          background: rgba(248,250,255,.84);
         }
 
-        .companies-control-page td{
-          padding:16px!important;
-          border-bottom:1px solid rgba(65,55,161,.09)!important;
-          color:#334164!important;
-          background:rgba(255,255,255,.66);
+        .companies-control-page .company-table-search {
+          position: relative;
+          min-width: 0;
         }
 
-        .companies-control-page tbody tr:hover td{
-          background:rgba(237,246,255,.82);
+        .companies-control-page .company-table-search > svg {
+          position: absolute;
+          top: 50%;
+          left: 14px;
+          transform: translateY(-50%);
+          color: var(--company-primary);
+          pointer-events: none;
         }
 
-        .companies-control-page tbody strong{
-          color:var(--company-ink)!important;
+        .companies-control-page .company-table-search input {
+          padding-left: 43px;
+          background: #fff;
         }
 
-        .companies-control-page .spin{
-          animation:companySpin .8s linear infinite;
+        .companies-control-page .company-table-summary {
+          display: flex;
+          align-items: baseline;
+          gap: 6px;
+          min-height: 46px;
+          padding: 0 4px;
+          white-space: nowrap;
         }
 
-        @keyframes companySpin{
-          to{transform:rotate(360deg)}
+        .companies-control-page .company-table-summary strong {
+          color: var(--company-ink);
+          font-family: Georgia, "Times New Roman", serif;
+          font-size: 27px;
+          line-height: 1;
         }
 
-        .company-detail-backdrop{
-          z-index:10000!important;
-          width:100vw;
-          height:100dvh;
-          overflow:hidden;
+        .companies-control-page .company-table-summary span {
+          color: var(--company-muted);
+          font-size: 11px;
+          font-weight: 850;
+        }
+
+        .companies-control-page .company-page-size {
+          display: grid;
+          grid-template-columns: auto 86px;
+          align-items: center;
+          gap: 8px;
+          min-width: 0;
+          color: var(--company-muted);
+          font-size: 10px;
+          font-weight: 900;
+          white-space: nowrap;
+        }
+
+        .companies-control-page .company-page-size select {
+          min-height: 42px;
+          padding: 0 30px 0 11px;
+          color: #40348d;
+          font-weight: 900;
+        }
+
+        .companies-control-page .company-data-board {
+          display: grid;
+          gap: 15px;
+          min-width: 0;
+          padding: 18px 20px 22px;
+          border-right: 1px solid rgba(171,181,211,.52);
+          border-left: 1px solid rgba(171,181,211,.52);
+          background: linear-gradient(180deg, rgba(255,255,255,.96), rgba(247,250,255,.86));
+        }
+
+        .companies-control-page .company-record-card {
+          display: grid;
+          overflow: hidden;
+          min-width: 0;
+          border: 1px solid rgba(171,181,211,.58);
+          border-radius: 22px;
+          background: #fff;
+          box-shadow:
+            5px 6px 0 rgba(196,204,255,.78),
+            0 16px 30px rgba(34,38,110,.07);
+          transition:
+            transform 190ms var(--company-ease),
+            box-shadow 190ms ease,
+            border-color 190ms ease;
+        }
+
+        .companies-control-page .company-record-card:hover {
+          transform: translateY(-2px);
+          border-color: rgba(102,88,220,.28);
+          box-shadow:
+            6px 8px 0 rgba(196,204,255,.9),
+            0 20px 34px rgba(34,38,110,.09);
+        }
+
+        .companies-control-page .company-record-head {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 16px;
+          min-width: 0;
+          padding: 17px 18px;
+          border-bottom: 1px solid rgba(171,181,211,.34);
+          background: linear-gradient(135deg, rgba(237,246,255,.92), rgba(248,247,255,.92));
+        }
+
+        .companies-control-page .company-record-title {
+          min-width: 0;
+        }
+
+        .companies-control-page .company-record-title strong {
+          display: block;
+          color: var(--company-ink);
+          font-size: 15px;
+          overflow-wrap: anywhere;
+        }
+
+        .companies-control-page .company-record-title small {
+          display: block;
+          margin-top: 4px;
+          color: var(--company-muted);
+          font-size: 11px;
+          overflow-wrap: anywhere;
+        }
+
+        .companies-control-page .company-record-head-badges {
+          display: flex;
+          align-items: center;
+          justify-content: flex-end;
+          gap: 9px;
+          flex-wrap: wrap;
+          min-width: 0;
+        }
+
+        .companies-control-page .company-tenant-chip {
+          display: inline-flex;
+          align-items: center;
+          min-height: 30px;
+          max-width: 220px;
+          padding: 6px 10px;
+          overflow: hidden;
+          border-radius: 999px;
+          color: #40348d;
+          background: #f1efff;
+          box-shadow: 2px 3px 0 #c9c0ff;
+          font-size: 10px;
+          font-weight: 900;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .companies-control-page .company-record-grid {
+          display: grid;
+          grid-template-columns:
+            minmax(0, 1.15fr)
+            minmax(0, .95fr)
+            minmax(0, 1fr);
+          gap: 12px;
+          padding: 15px 18px 17px;
+        }
+
+        .companies-control-page .company-record-block {
+          display: grid;
+          align-content: start;
+          gap: 11px;
+          min-width: 0;
+          padding: 14px;
+          border: 1px solid rgba(171,181,211,.42);
+          border-radius: 17px;
+          background: #f9fbff;
+        }
+
+        .companies-control-page .company-record-block:nth-child(2) {
+          background: #f8f7ff;
+        }
+
+        .companies-control-page .company-record-block:nth-child(3) {
+          background: #f4fbf8;
+        }
+
+        .companies-control-page .company-record-kicker {
+          color: #5d6785;
+          font-size: 8px;
+          font-weight: 950;
+          letter-spacing: .085em;
+          text-transform: uppercase;
+        }
+
+        .companies-control-page .company-record-pairs {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 10px;
+        }
+
+        .companies-control-page .company-record-pairs > div {
+          min-width: 0;
+        }
+
+        .companies-control-page .company-record-pairs span {
+          display: block;
+          color: #6b7692;
+          font-size: 8px;
+          font-weight: 900;
+          letter-spacing: .05em;
+          text-transform: uppercase;
+        }
+
+        .companies-control-page .company-record-pairs strong {
+          display: block;
+          margin-top: 4px;
+          color: var(--company-ink);
+          font-size: 11px;
+          line-height: 1.42;
+          overflow-wrap: anywhere;
+        }
+
+        .companies-control-page .company-record-action-area {
+          display: grid;
+          gap: 10px;
+          padding: 14px 18px 17px;
+          border-top: 1px solid rgba(171,181,211,.34);
+          background: rgba(250,251,255,.84);
+        }
+
+        .companies-control-page .company-record-actions {
+          display: flex;
+          align-items: center;
+          justify-content: flex-end;
+          flex-wrap: wrap;
+          gap: 8px;
+        }
+
+        .companies-control-page .company-record-actions button,
+        .company-modal-actions button {
+          min-height: 36px;
+          padding: 0 11px;
+          font-size: 10px;
+        }
+
+        .companies-control-page .company-status-action,
+        .company-modal-actions .company-status-action {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 7px;
+          min-height: 36px;
+          padding: 0 12px;
+          border-radius: 12px;
+          font: inherit;
+          font-size: 10px;
+          font-weight: 900;
+          white-space: nowrap;
+          cursor: pointer;
+          transition:
+            transform 180ms var(--company-ease),
+            box-shadow 180ms ease,
+            background 180ms ease,
+            border-color 180ms ease,
+            color 180ms ease;
+        }
+
+        .companies-control-page .company-status-action.activate,
+        .company-modal-actions .company-status-action.activate {
+          border: 1px solid rgba(4,120,87,.20);
+          color: #047857;
+          background: #eaf8f4;
+          box-shadow: 3px 4px 0 #aee6d9;
+        }
+
+        .companies-control-page .company-status-action.activate.is-current,
+        .company-modal-actions .company-status-action.activate.is-current {
+          color: #fff;
+          background: linear-gradient(135deg, #087f5b, #1fa97a);
+          border-color: rgba(4,120,87,.26);
+          box-shadow: 3px 4px 0 #8fdac7;
+        }
+
+        .companies-control-page .company-status-action.deactivate,
+        .company-modal-actions .company-status-action.deactivate {
+          border: 1px solid rgba(162,52,77,.20);
+          color: #a2344d;
+          background: #fff0f2;
+          box-shadow: 3px 4px 0 #f2c2cc;
+        }
+
+        .companies-control-page .company-status-action.deactivate.is-current,
+        .company-modal-actions .company-status-action.deactivate.is-current {
+          color: #fff;
+          background: linear-gradient(135deg, #a2344d, #d4576f);
+          border-color: rgba(162,52,77,.28);
+          box-shadow: 3px 4px 0 #efb4c1;
+        }
+
+        .companies-control-page .company-status-action:disabled,
+        .company-modal-actions .company-status-action:disabled {
+          cursor: not-allowed;
+        }
+
+        .companies-control-page .company-status-action.is-current:disabled,
+        .company-modal-actions .company-status-action.is-current:disabled {
+          opacity: 1;
+          filter: none;
+        }
+
+        .companies-control-page .company-action-feedback,
+        .company-modal-action-area .company-action-feedback {
+          display: flex;
+          align-items: flex-start;
+          gap: 8px;
+          width: 100%;
+          padding: 10px 12px;
+          border: 1px solid rgba(4,120,87,.18);
+          border-radius: 12px;
+          color: #047857;
+          background: #eaf8f4;
+          box-shadow: 3px 4px 0 #aee6d9;
+          font-size: 11px;
+          font-weight: 850;
+          line-height: 1.45;
+        }
+
+        .companies-control-page .company-action-feedback svg,
+        .company-modal-action-area .company-action-feedback svg {
+          flex: 0 0 auto;
+          margin-top: 1px;
+        }
+
+        .companies-control-page .company-action-feedback.error,
+        .company-modal-action-area .company-action-feedback.error {
+          border-color: rgba(162,52,77,.18);
+          color: #a2344d;
+          background: #fff0f2;
+          box-shadow: 3px 4px 0 #f2c2cc;
+        }
+
+        .company-feedback-close {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          width: 25px;
+          height: 25px;
+          min-width: 25px;
+          margin: -4px -5px -4px auto;
+          padding: 0;
+          border: 0;
+          border-radius: 8px;
+          color: currentColor;
+          background: rgba(255,255,255,.56);
+          box-shadow: none;
+          opacity: .72;
+        }
+
+        .company-feedback-close:hover {
+          opacity: 1;
+          background: rgba(255,255,255,.92);
+          transform: none !important;
+          filter: none !important;
+        }
+
+        .company-modal-action-area {
+          display: grid;
+          gap: 10px;
+          margin-bottom: 22px;
+        }
+
+        .company-modal-actions {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          flex-wrap: wrap;
+        }
+
+        .company-modal-actions .ghost {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
+        }
+
+        .companies-control-page .company-empty {
+          padding: 38px 20px;
+          border: 1px dashed rgba(102,88,220,.28);
+          border-radius: 18px;
+          color: var(--company-muted);
+          background: linear-gradient(145deg, #f8f7ff, #effbf8);
+          font-size: 13px;
+          font-weight: 800;
+          text-align: center;
+        }
+
+        .companies-control-page .company-table-footer {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 16px;
+          padding: 17px 20px 21px;
+          border: 1px solid rgba(171,181,211,.52);
+          border-top: 0;
+          border-radius: 0 0 20px 20px;
+          background: rgba(248,250,255,.86);
+        }
+
+        .companies-control-page .company-table-range {
+          display: flex;
+          align-items: baseline;
+          gap: 5px;
+          min-width: 0;
+          color: var(--company-muted);
+          font-size: 10px;
+          font-weight: 800;
+          white-space: nowrap;
+        }
+
+        .companies-control-page .company-table-range strong {
+          color: var(--company-ink);
+          font-size: 12px;
+        }
+
+        .companies-control-page .company-table-pagination {
+          display: flex;
+          align-items: center;
+          justify-content: flex-end;
+          gap: 8px;
+          min-width: 0;
+        }
+
+        .companies-control-page .company-page-numbers {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          min-width: 0;
+        }
+
+        .companies-control-page .company-page-arrow,
+        .companies-control-page .company-page-number {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          width: 40px;
+          min-width: 40px;
+          height: 40px;
+          padding: 0;
+          border: 1px solid rgba(102,88,220,.20);
+          border-radius: 12px;
+          color: #40348d;
+          background: #f1efff;
+          box-shadow: 2px 3px 0 #c9c0ff;
+        }
+
+        .companies-control-page .company-page-number.active {
+          border-color: rgba(76,118,220,.22);
+          color: #fff;
+          background: linear-gradient(135deg, #4c76dc 0%, #2db6b7 100%);
+          box-shadow: 4px 5px 0 #595192;
+        }
+
+        .companies-control-page .company-page-ellipsis {
+          display: inline-grid;
+          min-width: 18px;
+          place-items: center;
+          color: var(--company-muted);
+          font-weight: 900;
+        }
+
+        .companies-control-page .spin {
+          animation: companySpin .8s linear infinite;
+        }
+
+        @keyframes companySpin {
+          to { transform: rotate(360deg); }
+        }
+
+        .company-action-backdrop {
+          position: fixed;
+          inset: 0;
+          z-index: 11000;
+          display: grid;
+          place-items: center;
+          width: 100vw;
+          height: 100dvh;
+          overflow: hidden;
           padding:
-            max(14px,env(safe-area-inset-top))
-            max(14px,env(safe-area-inset-right))
-            max(14px,env(safe-area-inset-bottom))
-            max(14px,env(safe-area-inset-left))!important;
-          background:rgba(15,23,42,.48)!important;
-          backdrop-filter:blur(9px);
-          -webkit-backdrop-filter:blur(9px);
-          animation:companyBackdropEnter 260ms ease both;
+            max(18px, env(safe-area-inset-top))
+            max(18px, env(safe-area-inset-right))
+            max(18px, env(safe-area-inset-bottom))
+            max(18px, env(safe-area-inset-left));
+          background: rgba(15,23,42,.58);
+          backdrop-filter: blur(10px);
+          -webkit-backdrop-filter: blur(10px);
+          overscroll-behavior: none;
         }
 
-        @keyframes companyBackdropEnter{
-          from{opacity:0;backdrop-filter:blur(0)}
-          to{opacity:1;backdrop-filter:blur(9px)}
+        .company-action-dialog {
+          width: min(620px, calc(100vw - 36px));
+          max-height: min(88dvh, 720px);
+          overflow: hidden;
+          border: 1px solid rgba(171,181,211,.72);
+          border-radius: 26px;
+          background: linear-gradient(145deg,#ffffff 0%,#f7fbff 55%,#f8f4ff 100%);
+          box-shadow:
+            0 32px 86px rgba(22,29,73,.32),
+            9px 11px 0 rgba(185,215,255,.46);
         }
 
-        .company-detail-modal{
-          max-height:calc(100dvh - 28px)!important;
-          overscroll-behavior:contain;
-          border:1px solid rgba(171,181,211,.72);
-          background:linear-gradient(145deg,#fff 0%,#f4fbff 52%,#f8f1ff 100%)!important;
-          box-shadow:0 34px 90px rgba(34,38,110,.25),10px 12px 0 rgba(185,215,255,.5)!important;
-          animation:companyModalEnter 420ms var(--company-ease) both;
-          transform-origin:50% 14%;
-          -webkit-overflow-scrolling:touch;
+        .company-action-dialog-header {
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 18px;
+          padding: 22px 23px 18px;
+          border-bottom: 1px solid rgba(171,181,211,.42);
+          background: linear-gradient(135deg, rgba(237,246,255,.97), rgba(248,247,255,.98));
         }
 
-        @keyframes companyModalEnter{
-          from{opacity:0;transform:translateY(22px) scale(.965);filter:blur(4px)}
-          to{opacity:1;transform:translateY(0) scale(1);filter:blur(0)}
+        .company-action-dialog-header > div {
+          min-width: 0;
         }
 
-        .company-detail-modal>div:first-child{
-          position:sticky;
-          top:0;
-          z-index:3;
+        .company-action-dialog-kicker {
+          display: inline-flex;
+          align-items: center;
+          width: fit-content;
+          padding: 7px 10px;
+          border-radius: 999px;
+          color: #fff;
+          background: #342b78;
+          box-shadow: 3px 4px 0 #18b5c8;
+          font-size: 8px;
+          font-weight: 950;
+          letter-spacing: .1em;
+          text-transform: uppercase;
+        }
+
+        .company-action-dialog-header h2 {
+          margin: 13px 0 0;
+          color: var(--company-ink);
+          font-family: var(--yc-display, Georgia, "Times New Roman", serif);
+          font-size: clamp(25px, 3vw, 34px);
+          font-weight: 760;
+          line-height: 1;
+          letter-spacing: -.035em;
+        }
+
+        .company-action-dialog-header p {
+          margin: 9px 0 0;
+          color: var(--company-muted);
+          font-size: 11px;
+          line-height: 1.55;
+        }
+
+        .company-action-dialog-close {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          width: 40px;
+          min-width: 40px;
+          height: 40px;
+          padding: 0;
+          border: 1px solid rgba(65,55,161,.18);
+          border-radius: 13px;
+          color: #40348d;
+          background: #fff;
+          box-shadow: 3px 4px 0 rgba(52,43,120,.10);
+        }
+
+        .company-action-dialog-body {
+          display: grid;
+          gap: 14px;
+          max-height: calc(88dvh - 190px);
+          overflow-y: auto;
+          padding: 20px 23px;
+          overscroll-behavior: contain;
+          -webkit-overflow-scrolling: touch;
+        }
+
+        .company-action-field,
+        .company-action-field-grid {
+          min-width: 0;
+        }
+
+        .company-action-field {
+          display: grid;
+          gap: 8px;
+        }
+
+        .company-action-field > span {
+          color: #303b5b;
+          font-size: 10px;
+          font-weight: 900;
+        }
+
+        .company-action-field-grid {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 12px;
+        }
+
+        .company-action-field input,
+        .company-action-field textarea {
+          width: 100%;
+          min-width: 0;
+          border: 1px solid rgba(151,161,197,.58);
+          border-radius: 14px;
+          outline: 0;
+          color: var(--company-ink);
+          background: rgba(255,255,255,.98);
+          font: inherit;
+          font-weight: 650;
+          transition:
+            border-color 170ms ease,
+            box-shadow 170ms ease,
+            transform 170ms ease;
+        }
+
+        .company-action-field input {
+          min-height: 46px;
+          padding: 0 13px;
+        }
+
+        .company-action-field textarea {
+          min-height: 108px;
+          padding: 12px 13px;
+          resize: vertical;
+          line-height: 1.5;
+        }
+
+        .company-action-field input:focus,
+        .company-action-field textarea:focus {
+          border-color: rgba(102,88,220,.65);
+          box-shadow:
+            4px 5px 0 rgba(102,88,220,.14),
+            0 0 0 4px rgba(102,88,220,.08);
+          transform: translateY(-1px);
+        }
+
+        .company-action-dialog-error {
+          display: flex;
+          align-items: flex-start;
+          gap: 8px;
+          padding: 11px 12px;
+          border: 1px solid rgba(162,52,77,.18);
+          border-radius: 12px;
+          color: #a2344d;
+          background: #fff0f2;
+          box-shadow: 3px 4px 0 #f2c2cc;
+          font-size: 11px;
+          font-weight: 850;
+          line-height: 1.45;
+        }
+
+        .company-action-dialog-error svg {
+          flex: 0 0 auto;
+          margin-top: 1px;
+        }
+
+        .company-action-dialog-footer {
+          display: flex;
+          align-items: center;
+          justify-content: flex-end;
+          gap: 10px;
+          padding: 16px 23px 20px;
+          border-top: 1px solid rgba(171,181,211,.42);
+          background: rgba(248,250,255,.90);
+        }
+
+        .company-action-dialog-footer .ghost,
+        .company-action-dialog-confirm {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
+          min-height: 42px;
+          padding: 0 14px;
+          border-radius: 13px;
+          font: inherit;
+          font-size: 11px;
+          font-weight: 900;
+        }
+
+        .company-action-dialog-confirm.primary {
+          border: 1px solid rgba(52,43,120,.16);
+          color: #fff;
+          background: linear-gradient(135deg, #342b78, #4f65d7 58%, #18b5c8);
+          box-shadow: 4px 5px 0 #a9d6f5;
+        }
+
+        .company-action-dialog-confirm.danger {
+          border: 1px solid rgba(162,52,77,.22);
+          color: #fff;
+          background: linear-gradient(135deg, #a2344d, #d4576f);
+          box-shadow: 4px 5px 0 #efb4c1;
+        }
+
+        .company-detail-backdrop {
+          position: fixed !important;
+          inset: 0 !important;
+          z-index: 10000 !important;
+          display: grid !important;
+          place-items: center !important;
+          width: 100vw;
+          height: 100dvh;
+          overflow: hidden;
+          padding:
+            max(18px, env(safe-area-inset-top))
+            max(18px, env(safe-area-inset-right))
+            max(18px, env(safe-area-inset-bottom))
+            max(18px, env(safe-area-inset-left)) !important;
+          background: rgba(15,23,42,.54) !important;
+          backdrop-filter: blur(10px);
+          -webkit-backdrop-filter: blur(10px);
+          overscroll-behavior: none;
+        }
+
+        .company-detail-modal {
+          position: relative;
+          display: grid;
+          grid-template-rows: auto minmax(0, 1fr);
+          width: min(1040px, calc(100vw - 36px)) !important;
+          max-height: min(90dvh, 900px) !important;
+          overflow: hidden !important;
+          border: 1px solid rgba(171,181,211,.72);
+          border-radius: 30px !important;
+          background: linear-gradient(145deg,#ffffff 0%,#f7fbff 54%,#f8f4ff 100%) !important;
+          box-shadow:
+            0 34px 90px rgba(22,29,73,.30),
+            10px 12px 0 rgba(185,215,255,.48) !important;
+        }
+
+        .company-detail-header {
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 20px;
+          min-width: 0;
+          padding: 24px 26px 20px;
+          border-bottom: 1px solid rgba(171,181,211,.44);
           background:
-            radial-gradient(circle at 92% 0%,rgba(105,217,208,.16),transparent 35%),
-            radial-gradient(circle at 5% 0%,rgba(98,84,218,.14),transparent 39%),
-            rgba(255,255,255,.93)!important;
-          backdrop-filter:blur(14px);
+            linear-gradient(135deg, rgba(237,246,255,.96), rgba(248,247,255,.97));
         }
 
-        .company-detail-modal .stat-card{
-          border:1px solid rgba(171,181,211,.68)!important;
-          border-radius:19px!important;
-          background:#f8fbff!important;
-          box-shadow:5px 6px 0 #d1dcfa,0 14px 24px rgba(34,38,110,.08)!important;
+        .company-detail-heading {
+          min-width: 0;
+          flex: 1 1 auto;
         }
 
-        .company-detail-modal h2,
-        .company-detail-modal h3{
-          color:var(--company-ink);
-          font-family:var(--yc-display,var(--heading),inherit);
+        .company-detail-kicker {
+          display: inline-flex;
+          align-items: center;
+          width: fit-content;
+          padding: 7px 10px;
+          border-radius: 999px;
+          color: #fff;
+          background: #342b78;
+          box-shadow: 3px 4px 0 #18b5c8;
+          font-size: 8px;
+          font-weight: 950;
+          letter-spacing: .11em;
+          text-transform: uppercase;
         }
 
-        .company-detail-modal p{
-          line-height:1.55;
+        .company-detail-title-row {
+          display: flex;
+          align-items: flex-end;
+          justify-content: space-between;
+          gap: 16px;
+          min-width: 0;
+          margin-top: 12px;
         }
 
-        @media (max-width:1180px){
-          .companies-control-page .dynamic-form{
-            grid-template-columns:repeat(3,minmax(0,1fr));
+        .company-detail-title-row > div {
+          min-width: 0;
+        }
+
+        .company-detail-title-row h2 {
+          margin: 0;
+          color: var(--company-ink);
+          font-family: var(--yc-display, Georgia, "Times New Roman", serif);
+          font-size: clamp(28px, 3vw, 42px);
+          font-weight: 760;
+          line-height: 1;
+          letter-spacing: -.04em;
+          overflow-wrap: anywhere;
+        }
+
+        .company-detail-title-row p {
+          margin: 8px 0 0;
+          color: var(--company-muted);
+          font-size: 12px;
+          line-height: 1.5;
+          overflow-wrap: anywhere;
+        }
+
+        .company-detail-close {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 7px;
+          min-height: 40px;
+          padding: 0 12px;
+          flex: 0 0 auto;
+          border: 1px solid rgba(65,55,161,.18);
+          border-radius: 13px;
+          color: #40348d;
+          background: #fff;
+          box-shadow: 3px 4px 0 rgba(52,43,120,.10);
+        }
+
+        .company-detail-body {
+          min-width: 0;
+          overflow-y: auto;
+          overflow-x: hidden;
+          padding: 22px 24px 26px;
+          overscroll-behavior: contain;
+          -webkit-overflow-scrolling: touch;
+        }
+
+        .company-detail-loading {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 9px;
+          min-height: 260px;
+          color: var(--company-muted);
+          font-size: 13px;
+          font-weight: 800;
+        }
+
+        .company-detail-kpis {
+          display: grid;
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+          gap: 13px;
+          margin-bottom: 18px;
+        }
+
+        .company-detail-modal .stat-card {
+          min-width: 0;
+          min-height: 108px !important;
+          padding: 16px !important;
+          border: 1px solid rgba(171,181,211,.64) !important;
+          border-radius: 18px !important;
+          background: #edf6ff !important;
+          box-shadow: 5px 6px 0 #b9d7ff !important;
+        }
+
+        .company-detail-modal .stat-card:nth-child(2) {
+          background: #eaf8f4 !important;
+          box-shadow: 5px 6px 0 #aee6d9 !important;
+        }
+
+        .company-detail-modal .stat-card:nth-child(3) {
+          background: #f1efff !important;
+          box-shadow: 5px 6px 0 #c9c0ff !important;
+        }
+
+        .company-detail-modal .stat-card:nth-child(4) {
+          background: #fff4d5 !important;
+          box-shadow: 5px 6px 0 #ffe0a5 !important;
+        }
+
+        .company-modal-action-area {
+          display: grid;
+          gap: 12px;
+          margin-bottom: 18px;
+          padding: 16px;
+          border: 1px solid rgba(171,181,211,.50);
+          border-radius: 18px;
+          background: rgba(255,255,255,.82);
+          box-shadow: 4px 5px 0 rgba(196,204,255,.55);
+        }
+
+        .company-modal-action-heading {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 14px;
+          min-width: 0;
+        }
+
+        .company-modal-action-heading > div {
+          min-width: 0;
+        }
+
+        .company-modal-action-heading span {
+          display: block;
+          color: #6b7692;
+          font-size: 8px;
+          font-weight: 950;
+          letter-spacing: .08em;
+          text-transform: uppercase;
+        }
+
+        .company-modal-action-heading strong {
+          display: block;
+          margin-top: 3px;
+          color: var(--company-ink);
+          font-size: 13px;
+        }
+
+        .company-modal-actions {
+          display: flex;
+          align-items: center;
+          gap: 9px;
+          flex-wrap: wrap;
+        }
+
+        .company-modal-actions button {
+          min-height: 38px;
+          padding: 0 12px;
+        }
+
+        .company-protection-note {
+          display: flex;
+          align-items: flex-start;
+          gap: 10px;
+          margin-bottom: 18px;
+          padding: 13px 14px;
+          border: 1px solid rgba(4,120,87,.18);
+          border-radius: 15px;
+          color: #047857;
+          background: #eaf8f4;
+          box-shadow: 3px 4px 0 #aee6d9;
+        }
+
+        .company-protection-note svg {
+          flex: 0 0 auto;
+          margin-top: 1px;
+        }
+
+        .company-protection-note p {
+          margin: 0;
+          font-size: 11px;
+          line-height: 1.55;
+        }
+
+        .company-detail-grid,
+        .company-detail-history-grid {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 14px;
+        }
+
+        .company-detail-history-grid {
+          margin-top: 14px;
+        }
+
+        .company-detail-card,
+        .company-detail-history-card {
+          min-width: 0;
+          padding: 17px;
+          border: 1px solid rgba(171,181,211,.50);
+          border-radius: 18px;
+          background: #f9fbff;
+          box-shadow: 3px 4px 0 rgba(196,204,255,.48);
+        }
+
+        .company-detail-card:nth-child(2) {
+          background: #f8f7ff;
+        }
+
+        .company-detail-history-card:first-child {
+          background: #f4fbf8;
+        }
+
+        .company-detail-history-card:last-child {
+          background: #fffaf0;
+        }
+
+        .company-detail-card-heading {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          min-width: 0;
+          margin-bottom: 14px;
+        }
+
+        .company-detail-card-heading > svg {
+          flex: 0 0 auto;
+          color: #40348d;
+        }
+
+        .company-detail-card-heading > div {
+          min-width: 0;
+        }
+
+        .company-detail-card-heading span {
+          display: block;
+          color: #6b7692;
+          font-size: 8px;
+          font-weight: 950;
+          letter-spacing: .08em;
+          text-transform: uppercase;
+        }
+
+        .company-detail-card-heading h3 {
+          margin: 3px 0 0;
+          color: var(--company-ink);
+          font-family: var(--yc-display, Georgia, "Times New Roman", serif);
+          font-size: 18px;
+          line-height: 1.1;
+        }
+
+        .company-detail-list {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 10px;
+          margin: 0;
+        }
+
+        .company-detail-list > div {
+          min-width: 0;
+          padding: 10px 11px;
+          border: 1px solid rgba(171,181,211,.34);
+          border-radius: 12px;
+          background: rgba(255,255,255,.78);
+        }
+
+        .company-detail-list dt {
+          color: #6b7692;
+          font-size: 8px;
+          font-weight: 950;
+          letter-spacing: .06em;
+          text-transform: uppercase;
+        }
+
+        .company-detail-list dd {
+          margin: 5px 0 0;
+          color: var(--company-ink);
+          font-size: 11px;
+          font-weight: 800;
+          line-height: 1.45;
+          overflow-wrap: anywhere;
+        }
+
+        .company-history-list {
+          display: grid;
+          gap: 8px;
+        }
+
+        .company-history-item {
+          display: grid;
+          gap: 4px;
+          min-width: 0;
+          padding: 10px 11px;
+          border: 1px solid rgba(171,181,211,.34);
+          border-radius: 12px;
+          background: rgba(255,255,255,.78);
+        }
+
+        .company-history-item strong {
+          color: var(--company-ink);
+          font-size: 11px;
+          overflow-wrap: anywhere;
+        }
+
+        .company-history-item span {
+          color: var(--company-muted);
+          font-size: 10px;
+          line-height: 1.4;
+          overflow-wrap: anywhere;
+        }
+
+        .company-detail-empty {
+          margin: 0;
+          padding: 14px;
+          border: 1px dashed rgba(102,88,220,.24);
+          border-radius: 13px;
+          color: var(--company-muted);
+          background: rgba(255,255,255,.70);
+          font-size: 11px;
+          line-height: 1.5;
+        }
+
+        @media (max-width: 1280px) {
+          .companies-control-page .dynamic-form {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+          }
+
+          .companies-control-page .company-record-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
+          .companies-control-page .company-record-block:last-child {
+            grid-column: 1 / -1;
           }
         }
 
-        @media (max-width:860px){
-          .companies-control-page .dynamic-form{
-            grid-template-columns:repeat(2,minmax(0,1fr));
+        @media (max-width: 1050px) {
+          .companies-control-page > .hero {
+            align-items: flex-start;
+            flex-direction: column;
+            min-height: 0;
+          }
+
+          .companies-control-page .dynamic-form {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
           }
         }
 
-        @media (max-width:640px){
-          .companies-control-page{
-            gap:16px;
+        @media (max-width: 820px) {
+          .companies-control-page {
+            gap: 18px;
           }
 
-          .companies-control-page>.hero{
-            align-items:flex-start;
-            flex-direction:column;
-            min-height:auto;
-            padding:20px;
-            border-radius:24px;
-            box-shadow:7px 8px 0 var(--company-flat-blue),0 18px 30px rgba(34,38,110,.1);
+          .companies-control-page > .panel {
+            padding: 20px;
           }
 
-          .companies-control-page>.hero h1{
-            font-size:clamp(31px,9.2vw,43px);
+          .companies-control-page .company-table-tools {
+            grid-template-columns: 1fr auto;
           }
 
-          .companies-control-page>.panel{
-            padding:16px;
-            border-radius:23px;
-            box-shadow:6px 7px 0 #d1dcfa,0 16px 28px rgba(34,38,110,.08);
+          .companies-control-page .company-table-search {
+            grid-column: 1 / -1;
           }
 
-          .companies-control-page .toolbar{
-            align-items:stretch!important;
-            flex-direction:column;
+          .companies-control-page .company-page-size {
+            justify-self: end;
           }
 
-          .companies-control-page .toolbar>*{
-            width:100%!important;
-            flex-basis:auto!important;
+          .companies-control-page .company-data-board {
+            display: flex;
+            align-items: stretch;
+            gap: 14px;
+            overflow-x: auto;
+            overflow-y: visible;
+            padding: 18px 20px 24px;
+            scroll-snap-type: x mandatory;
+            scroll-padding-inline: 20px;
+            overscroll-behavior-x: contain;
+            -webkit-overflow-scrolling: touch;
+            scrollbar-width: thin;
+            scrollbar-color: rgba(102,88,220,.26) transparent;
           }
 
-          .companies-control-page .dynamic-form{
-            grid-template-columns:1fr;
-            padding:16px;
+          .companies-control-page .company-record-card {
+            flex: 0 0 100%;
+            width: 100%;
+            max-width: 100%;
+            min-width: 0;
+            height: auto;
+            max-height: none;
+            align-self: stretch;
+            scroll-snap-align: start;
+            scroll-snap-stop: always;
           }
 
-          .companies-control-page .dynamic-form>button{
-            width:100%;
+          .companies-control-page .company-record-grid {
+            grid-template-columns: 1fr;
           }
 
-          .company-detail-backdrop{
-            align-items:end!important;
-            padding:0!important;
+          .companies-control-page .company-record-block:last-child {
+            grid-column: auto;
           }
 
-          .company-detail-modal{
-            width:100%!important;
-            max-height:calc(100dvh - max(8px,env(safe-area-inset-top)))!important;
-            border-radius:25px 25px 0 0!important;
-            box-shadow:0 -18px 60px rgba(34,38,110,.24)!important;
-            animation-name:companyMobileSheetEnter;
-            transform-origin:50% 100%;
+          .companies-control-page .company-table-footer {
+            align-items: stretch;
+            flex-direction: column;
           }
 
-          @keyframes companyMobileSheetEnter{
-            from{opacity:0;transform:translateY(100%);filter:blur(3px)}
-            to{opacity:1;transform:translateY(0);filter:blur(0)}
+          .companies-control-page .company-table-pagination {
+            justify-content: flex-start;
           }
 
-          .company-detail-modal>div:first-child{
-            padding-left:max(18px,env(safe-area-inset-left))!important;
-            padding-right:max(18px,env(safe-area-inset-right))!important;
+          .companies-control-page .company-page-numbers {
+            max-width: 100%;
+            overflow-x: auto;
+            padding: 2px 0 4px;
+            scrollbar-width: none;
+          }
+
+          .companies-control-page .company-page-numbers::-webkit-scrollbar {
+            display: none;
           }
         }
 
-        @media (prefers-reduced-motion:reduce){
+        @media (max-width: 680px) {
+          .companies-control-page {
+            gap: 15px;
+          }
+
+          .companies-control-page > .hero {
+            padding: 22px 18px;
+            border-radius: 26px;
+            box-shadow:
+              7px 9px 0 #c6d8f7,
+              0 20px 34px rgba(34,38,110,.11);
+          }
+
+          .companies-control-page > .hero h1 {
+            font-size: clamp(34px, 12vw, 50px);
+          }
+
+          .companies-control-page > .hero p {
+            font-size: 12px;
+          }
+
+          .companies-control-page > .panel {
+            padding: 17px;
+            border-radius: 22px;
+            box-shadow:
+              5px 7px 0 #c4ccff,
+              0 18px 30px rgba(34,38,110,.09);
+          }
+
+          .companies-control-page .toolbar {
+            align-items: stretch;
+            flex-direction: column;
+          }
+
+          .companies-control-page .toolbar > * {
+            width: 100% !important;
+            flex-basis: auto !important;
+            max-width: none !important;
+          }
+
+          .companies-control-page .toolbar > select {
+            min-width: 0;
+          }
+
+          .companies-control-page .company-search-action {
+            width: 100%;
+          }
+
+          .companies-control-page .company-search-feedback {
+            position: static;
+            width: 100%;
+            max-width: none;
+            margin-top: 9px;
+          }
+
+          .companies-control-page .dynamic-form {
+            grid-template-columns: 1fr;
+            padding: 17px;
+          }
+
+          .companies-control-page .dynamic-form > button {
+            width: 100%;
+          }
+
+          .companies-control-page .company-table-tools {
+            grid-template-columns: 1fr;
+            padding: 15px 17px;
+          }
+
+          .companies-control-page .company-table-search {
+            grid-column: auto;
+          }
+
+          .companies-control-page .company-page-size {
+            grid-template-columns: 1fr 88px;
+            justify-self: stretch;
+          }
+
+          .companies-control-page .company-data-board {
+            padding: 15px 17px 22px;
+            scroll-padding-inline: 17px;
+          }
+
+          .companies-control-page .company-record-card {
+            flex: 0 0 100%;
+            width: 100%;
+            max-width: 100%;
+            min-width: 0;
+            height: auto;
+          }
+
+          .companies-control-page .company-record-head {
+            align-items: stretch;
+            flex-direction: column;
+          }
+
+          .companies-control-page .company-record-head-badges {
+            justify-content: flex-start;
+          }
+
+          .companies-control-page .company-record-pairs {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
+          .companies-control-page .company-record-actions {
+            justify-content: stretch;
+          }
+
+          .companies-control-page .company-record-actions button {
+            flex: 1 1 calc(50% - 8px);
+          }
+
+          .companies-control-page .company-table-footer {
+            padding: 15px 17px 19px;
+          }
+
+          .companies-control-page .company-table-pagination {
+            width: 100%;
+            justify-content: space-between;
+          }
+
+          .companies-control-page .company-page-numbers {
+            flex: 1 1 auto;
+            justify-content: center;
+          }
+
+          .company-detail-backdrop {
+            place-items: center !important;
+            padding:
+              max(10px, env(safe-area-inset-top))
+              max(10px, env(safe-area-inset-right))
+              max(10px, env(safe-area-inset-bottom))
+              max(10px, env(safe-area-inset-left)) !important;
+          }
+
+          .company-detail-modal {
+            width: calc(100vw - 20px) !important;
+            max-height: calc(100dvh - 20px) !important;
+            border-radius: 22px !important;
+            box-shadow: 0 24px 60px rgba(34,38,110,.24) !important;
+          }
+
+          .company-action-backdrop {
+            padding:
+              max(10px, env(safe-area-inset-top))
+              max(10px, env(safe-area-inset-right))
+              max(10px, env(safe-area-inset-bottom))
+              max(10px, env(safe-area-inset-left));
+          }
+
+          .company-action-dialog {
+            width: calc(100vw - 20px);
+            max-height: calc(100dvh - 20px);
+            border-radius: 22px;
+          }
+
+          .company-action-field-grid {
+            grid-template-columns: 1fr;
+          }
+
+          .company-detail-header {
+            padding: 18px;
+          }
+
+          .company-detail-title-row {
+            align-items: flex-start;
+            flex-direction: column;
+          }
+
+          .company-detail-body {
+            padding: 17px;
+          }
+
+          .company-detail-kpis {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
+          .company-modal-actions {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
+          .company-modal-actions button {
+            width: 100%;
+            min-width: 0;
+          }
+
+          .company-detail-grid,
+          .company-detail-history-grid {
+            grid-template-columns: 1fr;
+          }
+        }
+
+        @media (max-width: 520px) {
+          .companies-control-page > .hero {
+            padding: 20px 15px;
+          }
+
+          .companies-control-page > .hero h1 {
+            font-size: clamp(31px, 11vw, 43px);
+          }
+
+          .companies-control-page .kicker {
+            white-space: normal;
+          }
+
+          .companies-control-page .company-record-card {
+            flex: 0 0 100%;
+            width: 100%;
+            max-width: 100%;
+            min-width: 0;
+          }
+
+          .companies-control-page .company-record-actions {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+          }
+
+          .companies-control-page .company-record-actions button {
+            width: 100%;
+            min-width: 0;
+            padding-left: 8px;
+            padding-right: 8px;
+          }
+
+          .companies-control-page .company-page-arrow,
+          .companies-control-page .company-page-number {
+            width: 38px;
+            min-width: 38px;
+            height: 38px;
+          }
+
+          .company-action-dialog-header {
+            gap: 12px;
+            padding: 16px;
+          }
+
+          .company-action-dialog-body {
+            padding: 16px;
+          }
+
+          .company-action-dialog-footer {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            padding: 14px 16px 17px;
+          }
+
+          .company-action-dialog-footer button {
+            width: 100%;
+          }
+
+          .company-detail-header {
+            gap: 12px;
+            padding: 15px;
+          }
+
+          .company-detail-close {
+            width: 38px;
+            min-width: 38px;
+            height: 38px;
+            padding: 0;
+          }
+
+          .company-detail-close span {
+            display: none;
+          }
+
+          .company-detail-body {
+            padding: 14px;
+          }
+
+          .company-detail-kpis {
+            gap: 10px;
+          }
+
+          .company-detail-modal .stat-card {
+            min-height: 96px !important;
+            padding: 13px !important;
+          }
+
+          .company-modal-action-area,
+          .company-detail-card,
+          .company-detail-history-card {
+            padding: 13px;
+          }
+
+          .company-detail-list {
+            grid-template-columns: 1fr;
+          }
+        }
+
+        @media (max-width: 380px) {
+          .companies-control-page {
+            gap: 13px;
+          }
+
+          .companies-control-page > .hero {
+            padding: 18px 13px;
+          }
+
+          .companies-control-page > .panel {
+            padding: 13px;
+          }
+
+          .companies-control-page .company-table-tools,
+          .companies-control-page .company-table-footer {
+            padding-left: 13px;
+            padding-right: 13px;
+          }
+
+          .companies-control-page .company-data-board {
+            padding-left: 13px;
+            padding-right: 13px;
+            scroll-padding-inline: 13px;
+          }
+
+          .companies-control-page .company-record-card {
+            flex: 0 0 100%;
+            width: 100%;
+            max-width: 100%;
+            min-width: 0;
+          }
+
+          .companies-control-page .company-page-arrow,
+          .companies-control-page .company-page-number {
+            width: 35px;
+            min-width: 35px;
+            height: 35px;
+          }
+
+          .company-detail-kpis,
+          .company-modal-actions {
+            grid-template-columns: 1fr;
+          }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
           .companies-control-page *,
           .companies-control-page *::before,
           .companies-control-page *::after,
           .company-detail-backdrop,
-          .company-detail-modal{
-            animation-duration:.01ms!important;
-            animation-iteration-count:1!important;
-            transition-duration:.01ms!important;
-            scroll-behavior:auto!important;
+          .company-detail-modal {
+            scroll-behavior: auto !important;
+            animation-duration: .01ms !important;
+            animation-iteration-count: 1 !important;
+            transition-duration: .01ms !important;
           }
         }
       `}</style>
@@ -1261,14 +3342,20 @@ export default function Companies() {
             <Search size={16} />
             <input
               value={filters.q}
-              onChange={(e) => setFilters({ ...filters, q: e.target.value })}
+              onChange={(e) => {
+                setFilters({ ...filters, q: e.target.value });
+                setSearchFeedback(null);
+              }}
               placeholder="Search company, email, tenant code..."
             />
           </div>
 
           <select
             value={filters.status}
-            onChange={(e) => setFilters({ ...filters, status: e.target.value })}
+            onChange={(e) => {
+              setFilters({ ...filters, status: e.target.value });
+              setSearchFeedback(null);
+            }}
             style={{
               minHeight: 42,
               borderRadius: 14,
@@ -1286,7 +3373,10 @@ export default function Companies() {
 
           <select
             value={filters.plan_type}
-            onChange={(e) => setFilters({ ...filters, plan_type: e.target.value })}
+            onChange={(e) => {
+              setFilters({ ...filters, plan_type: e.target.value });
+              setSearchFeedback(null);
+            }}
             style={{
               minHeight: 42,
               borderRadius: 14,
@@ -1302,16 +3392,41 @@ export default function Companies() {
             ))}
           </select>
 
-          <button
-            type="button"
-            className="primary"
-            onClick={load}
-            disabled={loading}
-            style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}
-          >
-            <RefreshCw size={16} className={loading ? 'spin' : ''} />
-            Search
-          </button>
+          <div className="company-search-action">
+            <button
+              type="button"
+              className="primary company-target-search-button"
+              onClick={() => load({ showSearchFeedback: true })}
+              disabled={loading}
+            >
+              <RefreshCw size={16} className={loading ? 'spin' : ''} />
+              Search
+            </button>
+
+            {searchFeedback ? (
+              <div
+                className={`company-search-feedback ${searchFeedback.type || 'info'}`}
+                role="status"
+              >
+                {searchFeedback.type === 'error' ? (
+                  <AlertTriangle size={15} />
+                ) : searchFeedback.type === 'success' ? (
+                  <CheckCircle2 size={15} />
+                ) : (
+                  <Search size={15} />
+                )}
+                <span>{searchFeedback.text}</span>
+                <button
+                  type="button"
+                  className="company-feedback-close"
+                  onClick={() => setSearchFeedback(null)}
+                  aria-label="Dismiss search message"
+                >
+                  <X size={13} />
+                </button>
+              </div>
+            ) : null}
+          </div>
         </div>
 
         <form
@@ -1457,7 +3572,7 @@ export default function Companies() {
             />
           </label>
 
-          <button className="primary" disabled={saving}>
+          <button className="primary company-target-create-button" disabled={saving}>
             {saving ? <Loader2 size={16} className="spin" /> : <Plus size={16} />}
             Create Company
           </button>
@@ -1474,189 +3589,268 @@ export default function Companies() {
           </div>
         )}
 
-        <div
-          style={{
-            marginTop: 24,
-            borderRadius: 24,
-            border: '1px solid rgba(226,232,240,0.9)',
-            overflow: 'hidden',
-            background: '#ffffff',
-          }}
-        >
-          <div style={{ overflowX: 'auto' }}>
-            <table
-              style={{
-                width: '100%',
-                minWidth: 980,
-                borderCollapse: 'collapse',
+        <div className="company-table-tools">
+          <div className="company-table-search">
+            <Search size={17} />
+            <input
+              type="search"
+              value={tableSearch}
+              onChange={(event) => {
+                setTableSearch(event.target.value);
+                setTablePage(1);
               }}
+              placeholder="Search within company records"
+              aria-label="Search within company records"
+            />
+          </div>
+
+          <div className="company-table-summary">
+            <strong>{filteredCompanyRows.length.toLocaleString('en-IN')}</strong>
+            <span>{filteredCompanyRows.length === 1 ? 'company' : 'companies'}</span>
+          </div>
+
+          <label className="company-page-size">
+            <span>Rows per page</span>
+            <select
+              value={tablePageSize}
+              onChange={(event) => {
+                setTablePageSize(Number(event.target.value));
+                setTablePage(1);
+              }}
+              aria-label="Rows per page"
             >
-              <thead>
-                <tr style={{ background: '#f8fafc' }}>
-                  {[
-                    'Company',
-                    'Tenant',
-                    'Plan',
-                    'Status',
-                    'Employees',
-                    'Trial / Subscription End',
-                    'Actions',
-                  ].map((heading) => (
-                    <th
-                      key={heading}
-                      style={{
-                        textAlign: 'left',
-                        padding: '13px 14px',
-                        color: '#475569',
-                        fontSize: 12,
-                        textTransform: 'uppercase',
-                        letterSpacing: '0.06em',
-                        borderBottom: '1px solid rgba(226,232,240,0.9)',
-                      }}
-                    >
-                      {heading}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
+              {COMPANY_PAGE_SIZE_OPTIONS.map((size) => (
+                <option key={size} value={size}>{size}</option>
+              ))}
+            </select>
+          </label>
+        </div>
 
-              <tbody>
-                {loading ? (
-                  <tr>
-                    <td colSpan={7} style={{ padding: 30, textAlign: 'center', color: '#64748b' }}>
-                      <Loader2 size={18} className="spin" style={{ marginRight: 8 }} />
-                      Loading companies...
-                    </td>
-                  </tr>
-                ) : rows.length ? (
-                  rows.map((row) => {
-                    const tenantId = getTenantId(row);
-                    const isSds =
-                      row.is_sds_company === true ||
-                      String(row.tenant_code || '').toLowerCase() === 'sds';
+        <div className="company-data-board">
+          {loading ? (
+            <div className="company-empty">
+              <Loader2 size={18} className="spin" style={{ marginRight: 8 }} />
+              Loading companies...
+            </div>
+          ) : visibleCompanyRows.length ? (
+            visibleCompanyRows.map((row) => {
+              const tenantId = getTenantId(row);
+              const isSds =
+                row.is_sds_company === true ||
+                String(row.tenant_code || '').toLowerCase() === 'sds';
+              const normalizedStatus = String(row.status || '').toLowerCase();
+              const isActive = normalizedStatus === 'active';
+              const isDeactivated = normalizedStatus === 'suspended';
+              const rowActionBusy = actionBusy[tenantId];
+              const rowActionFeedback = actionFeedback[tenantId];
 
-                    return (
-                      <tr key={tenantId || row._id}>
-                        <td
-                          style={{
-                            padding: '14px',
-                            borderBottom: '1px solid rgba(226,232,240,0.72)',
-                            verticalAlign: 'top',
-                          }}
-                        >
-                          <strong style={{ color: '#0f172a' }}>{getCompanyName(row)}</strong>
-                          <div style={{ color: '#64748b', fontSize: 13 }}>
-                            {safeText(getCompanyEmail(row))}
-                          </div>
-                          {isSds ? (
-                            <div style={{ marginTop: 6 }}>
-                              <StatusBadge value="Lifetime SDS" />
-                            </div>
-                          ) : null}
-                        </td>
+              return (
+                <article className="company-record-card" key={tenantId || row._id}>
+                  <header className="company-record-head">
+                    <div className="company-record-title">
+                      <strong>{getCompanyName(row)}</strong>
+                      <small>{safeText(getCompanyEmail(row))}</small>
+                    </div>
 
-                        <td
-                          style={{
-                            padding: '14px',
-                            borderBottom: '1px solid rgba(226,232,240,0.72)',
-                            color: '#334155',
-                          }}
-                        >
+                    <div className="company-record-head-badges">
+                      <span className="company-tenant-chip">{safeText(row.tenant_code)}</span>
+                      <StatusBadge value={row.plan_type || row.plan} />
+                      <StatusBadge value={row.status} />
+                      {isSds ? <StatusBadge value="Lifetime SDS" /> : null}
+                    </div>
+                  </header>
+
+                  <div className="company-record-grid">
+                    <section className="company-record-block">
+                      <span className="company-record-kicker">Company & tenant</span>
+                      <div className="company-record-pairs">
+                        <div>
+                          <span>Company</span>
+                          <strong>{getCompanyName(row)}</strong>
+                        </div>
+                        <div>
+                          <span>Email</span>
+                          <strong>{safeText(getCompanyEmail(row))}</strong>
+                        </div>
+                        <div>
+                          <span>Tenant Code</span>
                           <strong>{safeText(row.tenant_code)}</strong>
-                          <div style={{ color: '#64748b', fontSize: 13 }}>
-                            {safeText(tenantId)}
-                          </div>
-                        </td>
+                        </div>
+                        <div>
+                          <span>Tenant ID</span>
+                          <strong>{safeText(tenantId)}</strong>
+                        </div>
+                      </div>
+                    </section>
 
-                        <td
-                          style={{
-                            padding: '14px',
-                            borderBottom: '1px solid rgba(226,232,240,0.72)',
-                          }}
+                    <section className="company-record-block">
+                      <span className="company-record-kicker">Subscription</span>
+                      <div className="company-record-pairs">
+                        <div>
+                          <span>Plan</span>
+                          <strong>{badgeText(row.plan_type || row.plan)}</strong>
+                        </div>
+                        <div>
+                          <span>Status</span>
+                          <strong>{badgeText(row.status)}</strong>
+                        </div>
+                        <div>
+                          <span>Trial / Subscription End</span>
+                          <strong>{formatDate(row.trial_end_date || row.subscription_end_date)}</strong>
+                        </div>
+                      </div>
+                    </section>
+
+                    <section className="company-record-block">
+                      <span className="company-record-kicker">Capacity</span>
+                      <div className="company-record-pairs">
+                        <div>
+                          <span>Employees</span>
+                          <strong>{getEmployeeCount(row)}</strong>
+                        </div>
+                        <div>
+                          <span>Employee Limit</span>
+                          <strong>{getEmployeeLimit(row)}</strong>
+                        </div>
+                        <div>
+                          <span>Usage</span>
+                          <strong>{getEmployeeCount(row)} / {getEmployeeLimit(row)}</strong>
+                        </div>
+                      </div>
+                    </section>
+                  </div>
+
+                  <footer className="company-record-action-area">
+                    <div className="company-record-actions">
+                      <button
+                        type="button"
+                        className="ghost"
+                        onClick={() => openDetail(tenantId)}
+                        disabled={Boolean(rowActionBusy)}
+                      >
+                        <Eye size={15} />
+                        View
+                      </button>
+
+                      <button
+                        type="button"
+                        className={`company-status-action activate ${isActive ? 'is-current' : ''}`}
+                        onClick={() => runCompanyAction(tenantId, 'activate')}
+                        disabled={Boolean(rowActionBusy) || isActive}
+                      >
+                        {rowActionBusy === 'activate' ? (
+                          <Loader2 size={15} className="spin" />
+                        ) : isActive ? (
+                          <CheckCircle2 size={15} />
+                        ) : (
+                          <PlayCircle size={15} />
+                        )}
+                        {isActive ? 'Active' : 'Activate'}
+                      </button>
+
+                      <button
+                        type="button"
+                        className={`company-status-action deactivate ${isDeactivated ? 'is-current' : ''}`}
+                        onClick={() => handleSuspend(tenantId)}
+                        disabled={Boolean(rowActionBusy) || isSds || isDeactivated}
+                      >
+                        {rowActionBusy === 'suspend' ? (
+                          <Loader2 size={15} className="spin" />
+                        ) : (
+                          <PauseCircle size={15} />
+                        )}
+                        {isDeactivated ? 'Deactivated' : 'Deactivate'}
+                      </button>
+
+                    </div>
+
+                    {rowActionFeedback ? (
+                      <div
+                        className={`company-action-feedback ${rowActionFeedback.type || 'success'}`}
+                        role="status"
+                      >
+                        {rowActionFeedback.type === 'error' ? (
+                          <AlertTriangle size={16} />
+                        ) : (
+                          <CheckCircle2 size={16} />
+                        )}
+                        <span>{rowActionFeedback.text}</span>
+                        <button
+                          type="button"
+                          className="company-feedback-close"
+                          onClick={() =>
+                            setActionFeedback((prev) => {
+                              const next = { ...prev };
+                              delete next[tenantId];
+                              return next;
+                            })
+                          }
+                          aria-label="Dismiss action message"
                         >
-                          <StatusBadge value={row.plan_type || row.plan} />
-                        </td>
+                          <X size={14} />
+                        </button>
+                      </div>
+                    ) : null}
+                  </footer>
+                </article>
+              );
+            })
+          ) : (
+            <div className="company-empty">
+              {tableSearch ? 'No companies match the current table search.' : 'No companies found.'}
+            </div>
+          )}
+        </div>
 
-                        <td
-                          style={{
-                            padding: '14px',
-                            borderBottom: '1px solid rgba(226,232,240,0.72)',
-                          }}
-                        >
-                          <StatusBadge value={row.status} />
-                        </td>
+        <div className="company-table-footer">
+          <div className="company-table-range">
+            <span>Showing</span>
+            <strong>
+              {filteredCompanyRows.length
+                ? `${companyStartIndex + 1}–${Math.min(companyStartIndex + tablePageSize, filteredCompanyRows.length)}`
+                : '0–0'}
+            </strong>
+            <span>of {filteredCompanyRows.length.toLocaleString('en-IN')}</span>
+          </div>
 
-                        <td
-                          style={{
-                            padding: '14px',
-                            borderBottom: '1px solid rgba(226,232,240,0.72)',
-                            color: '#334155',
-                          }}
-                        >
-                          {getEmployeeCount(row)} / {getEmployeeLimit(row)}
-                        </td>
+          <div className="company-table-pagination" aria-label="Company pagination">
+            <button
+              type="button"
+              className="company-page-arrow"
+              onClick={() => setTablePage(Math.max(1, currentCompanyPage - 1))}
+              disabled={currentCompanyPage <= 1}
+              aria-label="Previous company page"
+            >
+              ‹
+            </button>
 
-                        <td
-                          style={{
-                            padding: '14px',
-                            borderBottom: '1px solid rgba(226,232,240,0.72)',
-                            color: '#334155',
-                          }}
-                        >
-                          {formatDate(row.trial_end_date || row.subscription_end_date)}
-                        </td>
-
-                        <td
-                          style={{
-                            padding: '14px',
-                            borderBottom: '1px solid rgba(226,232,240,0.72)',
-                          }}
-                        >
-                          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                            <button
-                              type="button"
-                              className="ghost"
-                              onClick={() => openDetail(tenantId)}
-                              style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
-                            >
-                              <Eye size={15} />
-                              View
-                            </button>
-
-                            <button
-                              type="button"
-                              className="ghost"
-                              onClick={() => runCompanyAction(tenantId, 'activate')}
-                              style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
-                            >
-                              <PlayCircle size={15} />
-                              Activate
-                            </button>
-
-                            <button
-                              type="button"
-                              className="ghost"
-                              onClick={() => handleSuspend(tenantId)}
-                              disabled={isSds}
-                              style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
-                            >
-                              <PauseCircle size={15} />
-                              Suspend
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })
+            <div className="company-page-numbers">
+              {companyPageNumbers.map((item) =>
+                typeof item === 'number' ? (
+                  <button
+                    type="button"
+                    key={item}
+                    className={`company-page-number ${item === currentCompanyPage ? 'active' : ''}`}
+                    onClick={() => setTablePage(item)}
+                    aria-current={item === currentCompanyPage ? 'page' : undefined}
+                  >
+                    {item}
+                  </button>
                 ) : (
-                  <tr>
-                    <td colSpan={7} style={{ padding: 30, textAlign: 'center', color: '#64748b' }}>
-                      No companies found.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
+                  <span className="company-page-ellipsis" key={item}>…</span>
+                ),
+              )}
+            </div>
+
+            <button
+              type="button"
+              className="company-page-arrow"
+              onClick={() => setTablePage(Math.min(companyPageCount, currentCompanyPage + 1))}
+              disabled={currentCompanyPage >= companyPageCount}
+              aria-label="Next company page"
+            >
+              ›
+            </button>
           </div>
         </div>
       </section>
@@ -1672,6 +3866,28 @@ export default function Companies() {
         onSuspend={handleSuspend}
         onExtendDemo={handleExtendDemo}
         onMarkPaid={handleMarkPaid}
+        onDismissActionFeedback={() => {
+          if (!selectedTenantId) {
+            return;
+          }
+
+          setActionFeedback((prev) => {
+            const next = { ...prev };
+            delete next[selectedTenantId];
+            return next;
+          });
+        }}
+        actionFeedback={selectedTenantId ? actionFeedback[selectedTenantId] : null}
+        actionBusy={selectedTenantId ? actionBusy[selectedTenantId] : null}
+      />
+
+      <CompanyActionDialog
+        dialog={actionDialog}
+        form={actionDialogForm}
+        setForm={setActionDialogForm}
+        error={actionDialogError}
+        onClose={closeActionDialog}
+        onSubmit={submitActionDialog}
       />
     </div>
   );

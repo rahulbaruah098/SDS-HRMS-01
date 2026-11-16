@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { currentUser, getTodayCelebrations } from './api/client';
+import { api, currentUser, getTodayCelebrations } from './api/client';
 import {
   canAccessModule,
   hasFullSaasAccess,
@@ -30,6 +30,7 @@ import UserControl from './pages/UserControl';
 import ModuleCrud from './pages/ModuleCrud';
 import HolidayCalendar from './pages/HolidayCalendar';
 import Employees from './pages/Employees';
+import EmployeeHandover from './pages/EmployeeHandover';
 import EmployeeDirectory from './pages/EmployeeDirectory';
 import Assets from './pages/Assets.jsx';
 import Departments from './pages/Departments';
@@ -53,6 +54,7 @@ import ApplyLeave from './pages/ApplyLeave';
 import LeaveBalances from './pages/LeaveBalances.jsx';
 import CompOffCredits from './pages/CompOffCredits.jsx';
 import Projects from './pages/Projects';
+import SprintPlanning from './pages/SprintPlanning.jsx';
 import Policies from './pages/Policies.jsx';
 import Notifications from './pages/Notifications';
 import ApplicationStatus from './pages/ApplicationStatus';
@@ -756,8 +758,65 @@ function normalizePageKey(page) {
   return PAGE_ALIASES[key] || PAGE_ALIASES[key.toLowerCase()] || key;
 }
 
+function getHrmsPathForPage(page = 'dashboard') {
+  const normalizedPage = normalizePageKey(page);
+
+  if (normalizedPage === 'dashboard') {
+    return HRMS_HOME_PATH;
+  }
+
+  return `${HRMS_HOME_PATH}/${normalizedPage.replaceAll('_', '-')}`;
+}
+
+function getPageFromHrmsPath(pathname) {
+  const path = normalizePublicPath(pathname);
+
+  if (isBillingPath(path)) {
+    return 'billing';
+  }
+
+  if (isPremiumRequestsPath(path)) {
+    return 'premium_requests';
+  }
+
+  if (isSubscriptionExpiredPath(path)) {
+    return 'subscription_expired';
+  }
+
+  if (path === HRMS_HOME_PATH || path === `${HRMS_HOME_PATH}/dashboard`) {
+    return 'dashboard';
+  }
+
+  if (!path.startsWith(`${HRMS_HOME_PATH}/`)) {
+    return '';
+  }
+
+  const routeSegment = path
+    .slice(`${HRMS_HOME_PATH}/`.length)
+    .split('/')[0]
+    .trim();
+
+  if (!routeSegment) {
+    return 'dashboard';
+  }
+
+  try {
+    return normalizePageKey(
+      decodeURIComponent(routeSegment).replaceAll('-', '_'),
+    );
+  } catch {
+    return normalizePageKey(routeSegment.replaceAll('-', '_'));
+  }
+}
+
 function moduleAccessKey(page) {
   const normalizedPage = normalizePageKey(page);
+
+  // Employee handover is an HR/Admin subpage of Employee Management.
+  // Preserve the existing Employees module permission and the page's own role check.
+  if (normalizedPage === 'employee_handover') {
+    return 'employees';
+  }
 
   // Existing tenant permissions store this module under the legacy key.
   // The visible page and route use "my_visits".
@@ -991,7 +1050,7 @@ function shouldUseEmployeeDashboard(userRoles = []) {
   return hasAnyRole(userRoles, EMPLOYEE_CAPABILITY_ROLES);
 }
 
-function DashboardRouter({ user, setPage }) {
+function DashboardRouter({ user, setPage, sprintEnabled = false }) {
   const userRoles = normalizeRoles(user);
 
   if (userRoles.includes('super_admin')) {
@@ -1005,7 +1064,7 @@ function DashboardRouter({ user, setPage }) {
     employee + reporting_officer, it must still open EmployeeDashboard.
   */
   if (shouldUseEmployeeDashboard(userRoles)) {
-    return <EmployeeDashboard setPage={setPage} />;
+    return <EmployeeDashboard setPage={setPage} sprintEnabled={sprintEnabled} />;
   }
 
   return (
@@ -1015,6 +1074,7 @@ function DashboardRouter({ user, setPage }) {
         roles: userRoles,
       }}
       setPage={setPage}
+      sprintEnabled={sprintEnabled}
     />
   );
 }
@@ -1037,12 +1097,12 @@ function UnauthorizedPage({ setPage }) {
   );
 }
 
-function PageRouter({ page, user, setPage }) {
+function PageRouter({ page, user, setPage, sprintEnabled = false }) {
   const safeUser = mergeUserWithEmployeeProfile(user || {});
   const normalizedPage = normalizePageKey(page);
 
   if (normalizedPage === 'dashboard') {
-    return <DashboardRouter user={safeUser} setPage={setPage} />;
+    return <DashboardRouter user={safeUser} setPage={setPage} sprintEnabled={sprintEnabled} />;
   }
 
   if (normalizedPage === 'superadmin_attendance_correction') {
@@ -1063,7 +1123,7 @@ function PageRouter({ page, user, setPage }) {
   if (normalizedPage === 'billing') {
     // SDS has lifetime access and must never see subscription/payment screens.
     if (isSdsLifetimeTenant(safeUser)) {
-      return <DashboardRouter user={safeUser} setPage={setPage} />;
+      return <DashboardRouter user={safeUser} setPage={setPage} sprintEnabled={sprintEnabled} />;
     }
 
     // Client Billing contains company-level subscription, quotation, payment,
@@ -1077,7 +1137,7 @@ function PageRouter({ page, user, setPage }) {
 
   if (normalizedPage === 'subscription_expired') {
     if (!isExpiredOrSuspendedTenant(safeUser)) {
-      return <DashboardRouter user={safeUser} setPage={setPage} />;
+      return <DashboardRouter user={safeUser} setPage={setPage} sprintEnabled={sprintEnabled} />;
     }
 
     return <SubscriptionExpired setPage={setPage} user={safeUser} />;
@@ -1217,6 +1277,13 @@ if (normalizedPage === 'companies') {
     return <UserControl setPage={setPage} user={safeUser} />;
   }
 
+  if (normalizedPage === 'employee_handover') {
+    if (!normalizeRoles(safeUser).some(role => ['admin','hr_admin','hr_manager','hr'].includes(role))) {
+      return <UnauthorizedPage setPage={setPage} />;
+    }
+    return <EmployeeHandover setPage={setPage} />;
+  }
+
   if (normalizedPage === 'employees') {
     return <Employees setPage={setPage} user={safeUser} />;
   }
@@ -1239,6 +1306,27 @@ if (normalizedPage === 'companies') {
 
   if (normalizedPage === 'states') {
     return <States setPage={setPage} user={safeUser} />;
+  }
+
+
+  // YourComate Sprint Planning
+  // Access is checked by the existing canAccessModule guard.
+  if (normalizedPage === 'sprint_planning') {
+    const sprintRoles = normalizeRoles(safeUser);
+    if (sprintRoles.some(role =>
+      ['super_admin'].includes(role)
+    )) {
+      return <UnauthorizedPage setPage={setPage} />;
+    }
+    if (!sprintEnabled || !canAccessModule(safeUser, 'sprint_planning')) {
+      return <UnauthorizedPage setPage={setPage} />;
+    }
+    return (
+      <SprintPlanning
+        setPage={setPage}
+        user={safeUser}
+      />
+    );
   }
 
   if (normalizedPage === 'projects') {
@@ -1343,17 +1431,15 @@ export default function App() {
   const [user, setUser] = useState(initialUser);
   const [page, setPage] = useState(() => {
     const pathname = getBrowserPathname();
+    const routePage = getPageFromHrmsPath(pathname);
 
-    if (isBillingPath(pathname)) {
-      return 'billing';
-    }
-
-    if (isPremiumRequestsPath(pathname)) {
-      return 'premium_requests';
-    }
-
-    if (isSubscriptionExpiredPath(pathname)) {
-      return 'subscription_expired';
+    /*
+      A concrete /hrms/<page> URL is the strongest source of truth after a
+      reload. Keep the existing hidden-page handoff for /hrms and public-entry
+      flows where no specific HRMS module is encoded in the URL.
+    */
+    if (routePage && routePage !== 'dashboard') {
+      return routePage;
     }
 
     try {
@@ -1364,10 +1450,10 @@ export default function App() {
         return normalizePageKey(hiddenPage);
       }
     } catch {
-      // Ignore localStorage errors and use dashboard.
+      // Ignore localStorage errors and use the browser route/dashboard.
     }
 
-    return 'dashboard';
+    return routePage || 'dashboard';
   });
   const [celebrations, setCelebrations] = useState([]);
   const [currentPath, setCurrentPath] = useState(() => getBrowserPathname());
@@ -1381,6 +1467,67 @@ export default function App() {
   }, [user]);
 
   const normalizedPage = useMemo(() => normalizePageKey(page), [page]);
+
+  // Server-owned, tenant-specific Sprint activation. Fail closed until loaded.
+  const [sprintAvailability, setSprintAvailability] = useState({
+    context: '', enabled: false,
+  });
+  const [sprintRefreshVersion, setSprintRefreshVersion] = useState(0);
+  const sprintContext = normalizedUser
+    ? [
+        String(normalizedUser.tenant_id || normalizedUser.tenant?.id || normalizedUser.tenant?._id || ''),
+        String(normalizedUser._id || normalizedUser.id || normalizedUser.email || ''),
+      ].join(':')
+    : '';
+  const sprintEnabled = Boolean(
+    sprintContext &&
+    sprintAvailability.context === sprintContext &&
+    sprintAvailability.enabled === true
+  );
+
+  useEffect(() => {
+    const refresh = () => setSprintRefreshVersion(version => version + 1);
+    window.addEventListener('yourcomate:sprint-setting-changed', refresh);
+    return () => window.removeEventListener('yourcomate:sprint-setting-changed', refresh);
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    setSprintAvailability({ context: sprintContext, enabled: false });
+    if (!normalizedUser || !sprintContext.split(':')[0]) {
+      return () => { active = false; };
+    }
+
+    api('/sprint-planning/availability')
+      .then(data => {
+        if (active) setSprintAvailability({
+          context: sprintContext,
+          enabled: data?.enabled === true,
+        });
+      })
+      .catch(() => {
+        if (active) setSprintAvailability({ context: sprintContext, enabled: false });
+      });
+
+    return () => { active = false; };
+  }, [sprintContext, sprintRefreshVersion]);
+
+  const effectivePage = useMemo(() => {
+    if (!normalizedUser || !isExpiredOrSuspendedTenant(normalizedUser)) {
+      return normalizedPage;
+    }
+
+    const recoveryPages = new Set([
+      'billing',
+      'subscription_expired',
+      'profile',
+    ]);
+
+    return recoveryPages.has(normalizedPage)
+      ? normalizedPage
+      : 'subscription_expired';
+  }, [normalizedPage, normalizedUser]);
+
   const isTrialRegistrationRoute = useMemo(
     () => isApplyDemoRegistrationPath(currentPath),
     [currentPath],
@@ -1401,13 +1548,22 @@ export default function App() {
 
   useEffect(() => {
     function syncPath() {
-      setCurrentPath(getBrowserPathname());
+      const pathname = getBrowserPathname();
+      const routePage = getPageFromHrmsPath(pathname);
+
+      setCurrentPath(pathname);
+
+      if (routePage) {
+        setPage(routePage);
+      }
     }
 
     window.addEventListener('popstate', syncPath);
+    window.addEventListener('app:navigation', syncPath);
 
     return () => {
       window.removeEventListener('popstate', syncPath);
+      window.removeEventListener('app:navigation', syncPath);
     };
   }, []);
 
@@ -1492,7 +1648,8 @@ export default function App() {
 
     if (
       normalizedPage === 'billing' ||
-      normalizedPage === 'subscription_expired'
+      normalizedPage === 'subscription_expired' ||
+      normalizedPage === 'profile'
     ) {
       return;
     }
@@ -1535,7 +1692,21 @@ export default function App() {
     }
   }, [normalizedUser, normalizedPage]);
 
-  function handleSetUser(nextUser) {
+  function normalizeNextUser(nextUser) {
+    const nextEmployee =
+      nextUser.employee ||
+      nextUser.employee_summary ||
+      nextUser.employee_profile ||
+      readStoredEmployee();
+
+    return mergeUserWithEmployeeProfile({
+      ...nextUser,
+      employee: nextEmployee,
+      employee_summary: nextEmployee,
+    });
+  }
+
+  function handleLoginUser(nextUser) {
     if (!nextUser) {
       setUser(null);
       setPage('dashboard');
@@ -1543,19 +1714,7 @@ export default function App() {
       return;
     }
 
-    const nextEmployee =
-      nextUser.employee ||
-      nextUser.employee_summary ||
-      nextUser.employee_profile ||
-      readStoredEmployee();
-
-    setUser(
-      mergeUserWithEmployeeProfile({
-        ...nextUser,
-        employee: nextEmployee,
-        employee_summary: nextEmployee,
-      }),
-    );
+    setUser(normalizeNextUser(nextUser));
 
     try {
       window.history.replaceState({}, '', HRMS_HOME_PATH);
@@ -1567,8 +1726,61 @@ export default function App() {
     setPage('dashboard');
   }
 
-  function handleSetPage(nextPage) {
-    setPage(normalizePageKey(nextPage));
+  function handleSessionUserUpdate(nextUser) {
+    if (!nextUser) {
+      setUser(null);
+      setPage('dashboard');
+      setCelebrations([]);
+      return;
+    }
+
+    /*
+      AppLayout refreshes the current session/profile after mount and after
+      profile updates. Those refreshes must update user data only; they must not
+      reset page state or browser history back to Dashboard.
+    */
+    setUser(normalizeNextUser(nextUser));
+  }
+
+  function handleSetPage(nextPage, options = {}) {
+    const normalizedNextPage = normalizePageKey(nextPage);
+    const shouldSyncUrl = options?.syncUrl !== false;
+    const shouldReplace = options?.replace === true;
+
+    if (normalizedNextPage === 'sprint_planning' && !sprintEnabled) {
+      return;
+    }
+
+    setPage(normalizedNextPage);
+
+    if (!shouldSyncUrl || typeof window === 'undefined') {
+      return;
+    }
+
+    const targetPath = getHrmsPathForPage(normalizedNextPage);
+    const currentBrowserPath = normalizePublicPath(getBrowserPathname());
+    const normalizedTargetPath = normalizePublicPath(targetPath);
+
+    /*
+      Clicking the already-active module must not create duplicate browser
+      history entries. This also keeps Back/Forward predictable.
+    */
+    if (currentBrowserPath === normalizedTargetPath) {
+      setCurrentPath(getBrowserPathname());
+      return;
+    }
+
+    try {
+      if (shouldReplace) {
+        window.history.replaceState({}, '', targetPath);
+      } else {
+        window.history.pushState({}, '', targetPath);
+      }
+
+      setCurrentPath(targetPath);
+    } catch {
+      // Page state still changes normally if browser history is unavailable.
+    }
   }
 
   useEffect(() => {
@@ -1729,8 +1941,70 @@ export default function App() {
       try {
         const data = await getTodayCelebrations();
 
-        if (!cancelled) {
-          setCelebrations(data.released ? data.items || [] : []);
+        if (cancelled) {
+          return;
+        }
+
+        const todayCelebrations = data.released ? data.items || [] : [];
+
+        if (!todayCelebrations.length) {
+          setCelebrations([]);
+          return;
+        }
+
+        const celebrationDateKey = String(
+          data.date_key || todayCelebrations[0]?.date_key || '',
+        ).trim();
+        const tenantIdentity = String(
+          normalizedUser.tenant_id ||
+            normalizedUser.tenant?.tenant_id ||
+            normalizedUser.company_id ||
+            normalizedUser.company_name ||
+            'tenant',
+        ).trim();
+        const viewerIdentity = String(
+          normalizedUser.id ||
+            normalizedUser._id ||
+            normalizedUser.user_id ||
+            normalizedUser.employee_id ||
+            normalizedUser.email ||
+            '',
+        ).trim();
+
+        let seenStorageKey = '';
+
+        if (celebrationDateKey && viewerIdentity) {
+          seenStorageKey = [
+            'sds_hrms_celebration_popup_seen',
+            encodeURIComponent(tenantIdentity),
+            encodeURIComponent(viewerIdentity),
+            encodeURIComponent(celebrationDateKey),
+          ].join(':');
+        }
+
+        if (seenStorageKey) {
+          try {
+            if (localStorage.getItem(seenStorageKey) === '1') {
+              setCelebrations([]);
+              return;
+            }
+          } catch {
+            // If localStorage is unavailable, continue showing today's popup.
+          }
+        }
+
+        setCelebrations(todayCelebrations);
+
+        // Mark today's celebration popup as shown for this tenant/user as soon
+        // as it is released. Logout removes the auth session but intentionally
+        // does not remove this separate daily marker, so logging in again on
+        // the same date will not reopen the popup.
+        if (seenStorageKey) {
+          try {
+            localStorage.setItem(seenStorageKey, '1');
+          } catch {
+            // Ignore storage errors; the celebration can still be displayed.
+          }
         }
       } catch {
         if (!cancelled) {
@@ -1778,7 +2052,7 @@ if (isAccountAccessTrackingRoute) {
 if (!normalizedUser) {
   return (
     <CustomAlertProvider>
-      <Login onLogin={handleSetUser} />
+      <Login onLogin={handleLoginUser} />
     </CustomAlertProvider>
   );
 }
@@ -1787,14 +2061,16 @@ return (
   <CustomAlertProvider>
     <AppLayout
       user={normalizedUser}
-      setUser={handleSetUser}
-      page={normalizedPage}
+      setUser={handleSessionUserUpdate}
+      page={effectivePage}
       setPage={handleSetPage}
+      sprintEnabled={sprintEnabled}
     >
       <PageRouter
-        page={normalizedPage}
+        page={effectivePage}
         user={normalizedUser}
         setPage={handleSetPage}
+        sprintEnabled={sprintEnabled}
       />
     </AppLayout>
 

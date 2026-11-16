@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Archive,
   BarChart3,
@@ -28,6 +28,7 @@ import { api, getApiUrl, getToken } from '../api/client';
 import { useCustomAlert } from '../components/CustomAlertProvider.jsx';
 
 const DEFAULT_LIMIT = 500;
+const PAYREP_NOTICE_HIDE_MS = 4200;
 
 const REPORT_TYPES = [
   {
@@ -686,6 +687,50 @@ async function parseFailedDownload(response) {
   }
 }
 
+
+function PayrollReportFeedback({ feedback, onClose, className = '' }) {
+  if (!feedback?.message) {
+    return null;
+  }
+
+  const type = ['success', 'warning', 'error', 'info'].includes(feedback.type)
+    ? feedback.type
+    : 'info';
+
+  const Icon =
+    type === 'success'
+      ? CheckCircle2
+      : type === 'error' || type === 'warning'
+        ? XCircle
+        : ShieldCheck;
+
+  return (
+    <div
+      className={`payrep-feedback ${type} ${className}`.trim()}
+      role={type === 'error' ? 'alert' : 'status'}
+      aria-live={type === 'error' ? 'assertive' : 'polite'}
+    >
+      <span className="payrep-feedback-icon" aria-hidden="true">
+        {feedback.loading ? <Loader2 size={16} className="spin" /> : <Icon size={16} />}
+      </span>
+
+      <span className="payrep-feedback-copy">
+        {feedback.title ? <strong>{feedback.title}</strong> : null}
+        <span>{feedback.message}</span>
+      </span>
+
+      <button
+        type="button"
+        className="payrep-feedback-close"
+        onClick={onClose}
+        aria-label="Dismiss notification"
+      >
+        ×
+      </button>
+    </div>
+  );
+}
+
 export default function PayrollReports({ user = {} }) {
   const alerts = useCustomAlert();
   const superAdmin = isSuperAdmin(user);
@@ -727,6 +772,70 @@ export default function PayrollReports({ user = {} }) {
     emptyExportStatusForm(),
   );
   const [exportStatusFilter, setExportStatusFilter] = useState('');
+
+  const [inlineFeedback, setInlineFeedback] = useState({});
+  const feedbackTimersRef = useRef({});
+
+  function clearPayrepFeedback(scopeKey) {
+    if (!scopeKey) {
+      return;
+    }
+
+    const timer = feedbackTimersRef.current[scopeKey];
+    if (timer) {
+      window.clearTimeout(timer);
+      delete feedbackTimersRef.current[scopeKey];
+    }
+
+    setInlineFeedback((current) => {
+      if (!Object.prototype.hasOwnProperty.call(current, scopeKey)) {
+        return current;
+      }
+
+      const next = { ...current };
+      delete next[scopeKey];
+      return next;
+    });
+  }
+
+  function showPayrepFeedback(
+    scopeKey,
+    type,
+    message,
+    title = '',
+    options = {},
+  ) {
+    if (!scopeKey) {
+      return;
+    }
+
+    const timer = feedbackTimersRef.current[scopeKey];
+    if (timer) {
+      window.clearTimeout(timer);
+      delete feedbackTimersRef.current[scopeKey];
+    }
+
+    setInlineFeedback((current) => ({
+      ...current,
+      [scopeKey]: {
+        type,
+        message,
+        title,
+        loading: Boolean(options.loading),
+      },
+    }));
+
+    if (!options.loading) {
+      feedbackTimersRef.current[scopeKey] = window.setTimeout(() => {
+        setInlineFeedback((current) => {
+          const next = { ...current };
+          delete next[scopeKey];
+          return next;
+        });
+        delete feedbackTimersRef.current[scopeKey];
+      }, PAYREP_NOTICE_HIDE_MS);
+    }
+  }
 
   const currentDefinition = reportDefinition(reportType);
   const reportRows = Array.isArray(report?.rows) ? report.rows : [];
@@ -790,7 +899,9 @@ export default function PayrollReports({ user = {} }) {
 
   function assertTenant() {
     if (superAdmin && !tenantId.trim()) {
-      alerts.warning(
+      showPayrepFeedback(
+        'page',
+        'warning',
         'Enter the company tenant ID before generating payroll reports.',
         'Tenant Required',
       );
@@ -844,7 +955,9 @@ export default function PayrollReports({ user = {} }) {
       setEmployees([]);
 
       if (!silent) {
-        alerts.error(
+        showPayrepFeedback(
+          'page',
+          'error',
           error.message || 'Unable to load employees.',
           'Employee Load Failed',
         );
@@ -881,7 +994,9 @@ export default function PayrollReports({ user = {} }) {
       setReportExports([]);
 
       if (!silent) {
-        alerts.error(
+        showPayrepFeedback(
+          'page',
+          'error',
           error.message || 'Unable to load payroll report exports.',
           'Export History Load Failed',
         );
@@ -926,6 +1041,50 @@ export default function PayrollReports({ user = {} }) {
     }
   }, [availableReportTypes, reportType]);
 
+  useEffect(() => {
+    return () => {
+      Object.values(feedbackTimersRef.current).forEach((timer) => {
+        window.clearTimeout(timer);
+      });
+      feedbackTimersRef.current = {};
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!showExportModal && !showExportStatusModal) {
+      return undefined;
+    }
+
+    const body = document.body;
+    const root = document.documentElement;
+    const previousBodyOverflow = body.style.overflow;
+    const previousBodyPaddingRight = body.style.paddingRight;
+    const previousBodyOverscroll = body.style.overscrollBehavior;
+    const previousRootOverflow = root.style.overflow;
+    const previousRootOverscroll = root.style.overscrollBehavior;
+    const scrollbarWidth = Math.max(
+      0,
+      window.innerWidth - document.documentElement.clientWidth,
+    );
+
+    body.style.overflow = 'hidden';
+    body.style.overscrollBehavior = 'none';
+    root.style.overflow = 'hidden';
+    root.style.overscrollBehavior = 'none';
+
+    if (scrollbarWidth > 0) {
+      body.style.paddingRight = `${scrollbarWidth}px`;
+    }
+
+    return () => {
+      body.style.overflow = previousBodyOverflow;
+      body.style.paddingRight = previousBodyPaddingRight;
+      body.style.overscrollBehavior = previousBodyOverscroll;
+      root.style.overflow = previousRootOverflow;
+      root.style.overscrollBehavior = previousRootOverscroll;
+    };
+  }, [showExportModal, showExportStatusModal]);
+
   function validateReportFilters() {
     if (!assertTenant()) {
       return false;
@@ -933,7 +1092,9 @@ export default function PayrollReports({ user = {} }) {
 
     if (reportType === 'period_variance') {
       if (!filters.base_period || !filters.comparison_period) {
-        alerts.warning(
+        showPayrepFeedback(
+          'filters',
+          'warning',
           'Select both the base period and comparison period.',
           'Variance Periods Required',
         );
@@ -941,7 +1102,9 @@ export default function PayrollReports({ user = {} }) {
       }
 
       if (filters.base_period === filters.comparison_period) {
-        alerts.warning(
+        showPayrepFeedback(
+          'filters',
+          'warning',
           'Base period and comparison period must be different.',
           'Different Periods Required',
         );
@@ -951,14 +1114,18 @@ export default function PayrollReports({ user = {} }) {
       ['payroll_trend', 'employee_statement'].includes(reportType)
     ) {
       if (!filters.start_period || !filters.end_period) {
-        alerts.warning(
+        showPayrepFeedback(
+          'filters',
+          'warning',
           'Select both the start period and end period.',
           'Report Period Required',
         );
         return false;
       }
     } else if (!filters.period) {
-      alerts.warning(
+      showPayrepFeedback(
+        'filters',
+        'warning',
         'Select a payroll period.',
         'Payroll Period Required',
       );
@@ -970,7 +1137,9 @@ export default function PayrollReports({ user = {} }) {
       canManage &&
       !filters.employee_id
     ) {
-      alerts.warning(
+      showPayrepFeedback(
+        'filters',
+        'warning',
         'Select an employee.',
         'Employee Required',
       );
@@ -1025,6 +1194,13 @@ export default function PayrollReports({ user = {} }) {
     }
 
     try {
+      showPayrepFeedback(
+        'filters',
+        'info',
+        `Generating ${currentDefinition.label} with the selected filters...`,
+        'Generating Report',
+        { loading: true },
+      );
       setLoadingReport(true);
 
       const data = await api('/payroll/reports/generate', {
@@ -1035,13 +1211,17 @@ export default function PayrollReports({ user = {} }) {
       const generatedReport = data.report || null;
       setReport(generatedReport);
 
-      alerts.success(
+      showPayrepFeedback(
+        'filters',
+        'success',
         data.message || `${currentDefinition.label} generated successfully.`,
         'Payroll Report Generated',
       );
     } catch (error) {
       setReport(null);
-      alerts.error(
+      showPayrepFeedback(
+        'filters',
+        'error',
         error.message || 'Unable to generate the payroll report.',
         'Report Generation Failed',
       );
@@ -1052,7 +1232,9 @@ export default function PayrollReports({ user = {} }) {
 
   function openExport() {
     if (!reportRows.length) {
-      alerts.warning(
+      showPayrepFeedback(
+        'filters',
+        'warning',
         'Generate a report with at least one row before exporting it.',
         'Report Required',
       );
@@ -1069,6 +1251,7 @@ export default function PayrollReports({ user = {} }) {
     }
 
     setShowExportModal(false);
+    clearPayrepFeedback('export-modal');
     setExportForm(emptyExportForm());
   }
 
@@ -1093,6 +1276,13 @@ export default function PayrollReports({ user = {} }) {
     }
 
     try {
+      showPayrepFeedback(
+        'export-modal',
+        'info',
+        `Generating and preparing the ${currentDefinition.label} CSV download...`,
+        'Preparing CSV',
+        { loading: true },
+      );
       setExporting(true);
 
       const token = getToken();
@@ -1138,20 +1328,24 @@ export default function PayrollReports({ user = {} }) {
         response.headers.get('x-payroll-report-total-amount') ||
         totalValue(report, 'net_amount');
 
-      alerts.success(
+      closeExportModal();
+
+      showPayrepFeedback(
+        'page',
+        'success',
         `Downloaded ${rowCount} report row(s). Report value: ${formatCurrency(
           totalAmount,
         )}.`,
         'Payroll Report Downloaded',
       );
 
-      closeExportModal();
-
       if (canManage) {
         await loadReportExports({ silent: true });
       }
     } catch (error) {
-      alerts.error(
+      showPayrepFeedback(
+        'export-modal',
+        'error',
         error.message || 'Unable to export the payroll report.',
         'Report Export Failed',
       );
@@ -1178,6 +1372,7 @@ export default function PayrollReports({ user = {} }) {
     }
 
     setShowExportStatusModal(false);
+    clearPayrepFeedback('export-status-modal');
     setSelectedExport(null);
     setExportStatusForm(emptyExportStatusForm());
   }
@@ -1192,6 +1387,13 @@ export default function PayrollReports({ user = {} }) {
     }
 
     try {
+      showPayrepFeedback(
+        'export-status-modal',
+        'info',
+        'Updating this export record and audit status...',
+        'Updating Export Status',
+        { loading: true },
+      );
       setUpdatingExport(true);
 
       const data = await api(
@@ -1206,15 +1408,19 @@ export default function PayrollReports({ user = {} }) {
         },
       );
 
-      alerts.success(
+      closeExportStatusModal();
+      await loadReportExports({ silent: true });
+
+      showPayrepFeedback(
+        'history',
+        'success',
         data.message || 'Payroll report export status updated.',
         'Export Status Updated',
       );
-
-      closeExportStatusModal();
-      await loadReportExports({ silent: true });
     } catch (error) {
-      alerts.error(
+      showPayrepFeedback(
+        'export-status-modal',
+        'error',
         error.message || 'Unable to update export status.',
         'Export Status Update Failed',
       );
@@ -1235,218 +1441,411 @@ export default function PayrollReports({ user = {} }) {
     <div className="payroll-reports-page">
       <style>{`
         .payroll-reports-page {
+          --payrep-ink: #111a38;
+          --payrep-copy: #60708f;
+          --payrep-muted: #7c88a2;
+          --payrep-border: rgba(171, 181, 211, .68);
+          --payrep-blue: #4d77dd;
+          --payrep-cyan: #2eb2b9;
+          --payrep-violet: #575092;
+          --payrep-lavender: #d9d4ff;
+          --payrep-panel: #ffffff;
+          --payrep-soft-blue: #eef7ff;
+          --payrep-soft-violet: #f4f1ff;
+          --payrep-soft-mint: #effbf7;
+          --payrep-soft-amber: #fff8e7;
+          --payrep-soft-rose: #fff1f4;
           display: grid;
-          gap: 18px;
+          gap: 22px;
+          width: min(1280px, calc(100% - 48px));
+          max-width: 1280px;
           min-width: 0;
-          color: var(--text, #172033);
+          margin: 0 auto;
+          padding: 24px 0 38px;
+          color: var(--payrep-ink);
+          font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+            "Segoe UI", sans-serif;
         }
 
-        .payroll-reports-page * {
+        .payroll-reports-page *,
+        .payroll-reports-page *::before,
+        .payroll-reports-page *::after {
           box-sizing: border-box;
         }
 
         .payrep-hero {
           position: relative;
-          display: flex;
-          align-items: flex-start;
-          justify-content: space-between;
-          gap: 22px;
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) auto;
+          align-items: center;
+          gap: 24px;
           overflow: hidden;
-          padding: 25px;
-          border: 1px solid rgba(57, 89, 204, 0.18);
-          border-radius: 22px;
+          padding: clamp(26px, 3.2vw, 42px);
+          border: 1px solid rgba(171, 181, 211, .72);
+          border-radius: 28px;
           background:
-            radial-gradient(circle at 90% 10%, rgba(66, 96, 212, 0.16), transparent 35%),
-            linear-gradient(135deg, rgba(248, 250, 255, 0.99), rgba(255, 255, 255, 0.99));
-          box-shadow: 0 16px 42px rgba(15, 23, 42, 0.07);
-        }
-
-        .payrep-hero::after {
-          position: absolute;
-          right: -48px;
-          bottom: -75px;
-          width: 210px;
-          height: 210px;
-          border-radius: 50%;
-          background: rgba(57, 89, 204, 0.07);
-          content: '';
+            linear-gradient(
+              90deg,
+              #d8f7ff 0%,
+              #eefcff 27%,
+              #ffffff 52%,
+              #f7f2ff 73%,
+              #e9e3ff 100%
+            );
+          box-shadow:
+            10px 12px 0 #afd3ff,
+            0 28px 58px rgba(32, 42, 99, .10);
         }
 
         .payrep-hero-content,
         .payrep-hero-actions {
           position: relative;
           z-index: 1;
+          min-width: 0;
         }
 
         .payrep-kicker {
           display: inline-flex;
           align-items: center;
-          gap: 7px;
-          margin-bottom: 8px;
-          color: #3959cc;
-          font-size: 12px;
-          font-weight: 900;
-          letter-spacing: 0.08em;
+          gap: 8px;
+          margin-bottom: 12px;
+          padding: 8px 13px;
+          border-radius: 999px;
+          color: #443691;
+          background: rgba(238, 234, 255, .9);
+          box-shadow: 3px 4px 0 #d4ceff;
+          font-size: 10px;
+          font-weight: 950;
+          letter-spacing: .08em;
           text-transform: uppercase;
         }
 
         .payrep-hero h1 {
-          margin: 0 0 8px;
-          font-size: clamp(25px, 3vw, 36px);
-          line-height: 1.1;
+          margin: 0 0 10px;
+          color: var(--payrep-ink);
+          font-family: Georgia, "Times New Roman", serif;
+          font-size: clamp(34px, 4.6vw, 62px);
+          font-weight: 700;
+          line-height: .98;
+          letter-spacing: -.035em;
         }
 
         .payrep-hero p {
-          max-width: 820px;
+          max-width: 850px;
           margin: 0;
-          color: var(--muted, #64748b);
-          line-height: 1.65;
+          color: var(--payrep-copy);
+          font-size: clamp(13px, 1.25vw, 16px);
+          line-height: 1.7;
         }
 
         .payrep-hero-actions {
           display: flex;
           flex-wrap: wrap;
           justify-content: flex-end;
-          gap: 10px;
+          gap: 11px;
+        }
+
+        .payrep-hero-feedback {
+          grid-column: 1 / -1;
+          margin-top: 2px;
         }
 
         .payrep-btn {
           display: inline-flex;
           align-items: center;
           justify-content: center;
-          gap: 7px;
-          min-height: 40px;
-          padding: 9px 14px;
+          gap: 8px;
+          min-height: 46px;
+          padding: 10px 16px;
           border: 1px solid transparent;
-          border-radius: 11px;
+          border-radius: 15px;
           font: inherit;
-          font-size: 13px;
-          font-weight: 850;
+          font-size: 11px;
+          font-weight: 950;
           line-height: 1;
+          white-space: nowrap;
           cursor: pointer;
           transition:
-            transform 0.15s ease,
-            border-color 0.15s ease,
-            background 0.15s ease,
-            opacity 0.15s ease;
-        }
-
-        .payrep-btn:hover:not(:disabled) {
-          transform: translateY(-1px);
+            transform .16s ease,
+            box-shadow .16s ease,
+            opacity .16s ease,
+            border-color .16s ease;
         }
 
         .payrep-btn:disabled {
           cursor: not-allowed;
-          opacity: 0.55;
+          opacity: .52;
+          transform: none;
         }
 
         .payrep-btn-primary {
           color: #fff;
-          background: #3959cc;
-          border-color: #3959cc;
+          border-color: rgba(77, 119, 221, .20);
+          background: linear-gradient(135deg, var(--payrep-blue) 0%, var(--payrep-cyan) 100%);
+          box-shadow:
+            4px 5px 0 var(--payrep-violet),
+            0 12px 22px rgba(67, 116, 170, .13);
         }
 
         .payrep-btn-success {
-          color: #fff;
-          background: #07875f;
-          border-color: #07875f;
+          color: #087257;
+          border-color: rgba(12, 155, 114, .22);
+          background: #e9fbf5;
+          box-shadow: 4px 5px 0 #a9ead9;
         }
 
         .payrep-btn-secondary {
-          color: #27324a;
+          color: #40348d;
+          border-color: rgba(102, 88, 220, .20);
           background: #fff;
-          border-color: var(--border, #dfe5ee);
+          box-shadow:
+            4px 5px 0 #d7d2ff,
+            0 10px 20px rgba(52, 43, 120, .06);
         }
 
         .payrep-btn-danger {
-          color: #fff;
-          background: #c9364b;
-          border-color: #c9364b;
+          color: #a33249;
+          border-color: rgba(211, 78, 103, .20);
+          background: #fff2f5;
+          box-shadow: 4px 5px 0 #f2c5cf;
+        }
+
+        @media (hover: hover) and (pointer: fine) {
+          .payrep-btn:hover:not(:disabled),
+          .payrep-type-card:hover {
+            transform: translateY(-2px);
+          }
+        }
+
+        .payrep-feedback {
+          display: grid;
+          grid-template-columns: auto minmax(0, 1fr) auto;
+          align-items: start;
+          gap: 10px;
+          width: 100%;
+          padding: 12px 13px;
+          border: 1px solid transparent;
+          border-radius: 15px;
+          font-size: 11px;
+          line-height: 1.45;
+          animation: payrep-feedback-in .2s ease-out;
+        }
+
+        .payrep-feedback.info {
+          color: #3c3b87;
+          border-color: #cbc7ff;
+          background: #f3f2ff;
+          box-shadow: 3px 4px 0 #dedaff;
+        }
+
+        .payrep-feedback.success {
+          color: #087257;
+          border-color: #a7e9d5;
+          background: #ecfbf6;
+          box-shadow: 3px 4px 0 #b8eadc;
+        }
+
+        .payrep-feedback.warning {
+          color: #975317;
+          border-color: #f2d28f;
+          background: #fff8e8;
+          box-shadow: 3px 4px 0 #f5dfb1;
+        }
+
+        .payrep-feedback.error {
+          color: #a2334b;
+          border-color: #efbdc8;
+          background: #fff1f4;
+          box-shadow: 3px 4px 0 #f2cad2;
+        }
+
+        .payrep-feedback-icon {
+          display: inline-grid;
+          width: 28px;
+          height: 28px;
+          place-items: center;
+          border-radius: 9px;
+          background: rgba(255, 255, 255, .72);
+        }
+
+        .payrep-feedback-copy {
+          display: grid;
+          gap: 2px;
+          min-width: 0;
+        }
+
+        .payrep-feedback-copy strong {
+          font-weight: 950;
+        }
+
+        .payrep-feedback-close {
+          display: inline-grid;
+          width: 30px;
+          height: 30px;
+          place-items: center;
+          padding: 0;
+          border: 0;
+          border-radius: 9px;
+          color: currentColor;
+          background: rgba(255, 255, 255, .72);
+          font-size: 18px;
+          font-weight: 800;
+          cursor: pointer;
+        }
+
+        .payrep-section-feedback {
+          margin-top: 15px;
         }
 
         .payrep-report-types {
           display: grid;
-          grid-template-columns: repeat(4, minmax(180px, 1fr));
-          gap: 12px;
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+          grid-auto-rows: 1fr;
+          gap: 15px;
         }
 
         .payrep-type-card {
+          position: relative;
+          display: grid;
+          align-content: start;
           min-width: 0;
-          padding: 15px;
-          border: 1px solid var(--border, #dfe5ee);
-          border-radius: 15px;
-          background: var(--card, #fff);
+          min-height: 156px;
+          padding: 20px;
+          border: 1px solid rgba(171, 181, 211, .66);
+          border-radius: 21px;
+          color: var(--payrep-ink);
+          background: #e8f3ff;
+          box-shadow:
+            6px 7px 0 #b7d9ff,
+            0 15px 28px rgba(31, 41, 92, .065);
           cursor: pointer;
           text-align: left;
           transition:
-            border-color 0.15s ease,
-            box-shadow 0.15s ease,
-            transform 0.15s ease;
+            transform .16s ease,
+            border-color .16s ease,
+            box-shadow .16s ease,
+            background .16s ease;
         }
 
-        .payrep-type-card:hover {
-          border-color: rgba(57, 89, 204, 0.45);
-          transform: translateY(-1px);
+        .payrep-type-card:nth-child(1) {
+          background: #e5f2ff;
+          box-shadow:
+            6px 7px 0 #afd4ff,
+            0 15px 28px rgba(31, 41, 92, .065);
+        }
+
+        .payrep-type-card:nth-child(2) {
+          background: #e4f7f0;
+          box-shadow:
+            6px 7px 0 #afe4d6,
+            0 15px 28px rgba(31, 41, 92, .065);
+        }
+
+        .payrep-type-card:nth-child(3) {
+          background: #fff2cf;
+          box-shadow:
+            6px 7px 0 #ffdda0,
+            0 15px 28px rgba(31, 41, 92, .065);
+        }
+
+        .payrep-type-card:nth-child(4) {
+          background: #eeebff;
+          box-shadow:
+            6px 7px 0 #c6bcff,
+            0 15px 28px rgba(31, 41, 92, .065);
+        }
+
+        .payrep-type-card:nth-child(5) {
+          background: #ffe8ed;
+          box-shadow:
+            6px 7px 0 #f3bec9,
+            0 15px 28px rgba(31, 41, 92, .065);
+        }
+
+        .payrep-type-card:nth-child(6) {
+          background: #e5f2ff;
+          box-shadow:
+            6px 7px 0 #afd4ff,
+            0 15px 28px rgba(31, 41, 92, .065);
+        }
+
+        .payrep-type-card:nth-child(7) {
+          background: #e4f7f0;
+          box-shadow:
+            6px 7px 0 #afe4d6,
+            0 15px 28px rgba(31, 41, 92, .065);
         }
 
         .payrep-type-card.is-active {
-          border-color: #3959cc;
-          background: rgba(57, 89, 204, 0.045);
-          box-shadow: 0 0 0 3px rgba(57, 89, 204, 0.1);
+          border-color: rgba(77, 119, 221, .72);
+          background: linear-gradient(145deg, #dcecff 0%, #e9e3ff 100%);
+          box-shadow:
+            7px 8px 0 #aebcff,
+            0 17px 32px rgba(31, 41, 92, .10);
         }
 
         .payrep-type-card svg {
-          margin-bottom: 10px;
-          color: #3959cc;
+          margin-bottom: 13px;
+          color: #6558dc;
         }
 
         .payrep-type-card strong {
           display: block;
-          margin-bottom: 5px;
+          margin-bottom: 7px;
           font-size: 14px;
+          font-weight: 950;
         }
 
         .payrep-type-card span {
           display: block;
-          color: var(--muted, #64748b);
-          font-size: 11px;
-          line-height: 1.45;
+          color: var(--payrep-copy);
+          font-size: 10.5px;
+          line-height: 1.55;
         }
 
         .payrep-panel {
           min-width: 0;
-          padding: 20px;
-          border: 1px solid var(--border, #dfe5ee);
-          border-radius: 18px;
-          background: var(--card, #fff);
-          box-shadow: 0 12px 32px rgba(15, 23, 42, 0.055);
+          padding: clamp(19px, 2.2vw, 28px);
+          border: 1px solid rgba(171, 181, 211, .66);
+          border-radius: 25px;
+          background: #fff;
+          box-shadow:
+            8px 9px 0 #d4dbff,
+            0 22px 40px rgba(29, 40, 92, .065);
         }
 
         .payrep-section-head {
           display: flex;
           align-items: flex-start;
           justify-content: space-between;
-          gap: 14px;
-          margin-bottom: 16px;
+          gap: 18px;
+          margin-bottom: 20px;
+        }
+
+        .payrep-section-head > * {
+          min-width: 0;
         }
 
         .payrep-section-head h2,
         .payrep-section-head h3 {
-          margin: 0 0 5px;
-          font-size: 19px;
+          margin: 0 0 6px;
+          color: var(--payrep-ink);
+          font-family: Georgia, "Times New Roman", serif;
+          font-size: clamp(21px, 2.2vw, 29px);
+          line-height: 1.08;
         }
 
         .payrep-section-head p {
           margin: 0;
-          color: var(--muted, #64748b);
-          font-size: 13px;
-          line-height: 1.5;
+          color: var(--payrep-copy);
+          font-size: 11.5px;
+          line-height: 1.55;
         }
 
         .payrep-filters {
           display: grid;
-          grid-template-columns: repeat(4, minmax(155px, 1fr));
-          gap: 12px;
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+          gap: 14px;
         }
 
         .payrep-field {
@@ -1456,9 +1855,11 @@ export default function PayrollReports({ user = {} }) {
         }
 
         .payrep-field label {
-          color: #465269;
-          font-size: 12px;
-          font-weight: 850;
+          color: #586581;
+          font-size: 9px;
+          font-weight: 950;
+          letter-spacing: .055em;
+          text-transform: uppercase;
         }
 
         .payrep-field input,
@@ -1466,19 +1867,29 @@ export default function PayrollReports({ user = {} }) {
         .payrep-field textarea {
           width: 100%;
           min-width: 0;
-          min-height: 42px;
-          padding: 10px 12px;
-          border: 1px solid var(--border, #d7dee9);
-          border-radius: 11px;
+          min-height: 46px;
+          padding: 10px 13px;
+          border: 1px solid rgba(163, 174, 211, .70);
+          border-radius: 14px;
           outline: none;
-          background: var(--card, #fff);
-          color: inherit;
+          color: #192542;
+          background: #fff;
+          box-shadow: none;
           font: inherit;
-          font-size: 14px;
+          font-size: 12px;
+          transition:
+            border-color .15s ease,
+            box-shadow .15s ease,
+            background .15s ease;
+        }
+
+        .payrep-field select[multiple] {
+          min-height: 112px;
+          padding: 8px;
         }
 
         .payrep-field textarea {
-          min-height: 92px;
+          min-height: 100px;
           resize: vertical;
           line-height: 1.5;
         }
@@ -1486,8 +1897,8 @@ export default function PayrollReports({ user = {} }) {
         .payrep-field input:focus,
         .payrep-field select:focus,
         .payrep-field textarea:focus {
-          border-color: #536bd7;
-          box-shadow: 0 0 0 3px rgba(57, 89, 204, 0.11);
+          border-color: rgba(77, 119, 221, .78);
+          box-shadow: 0 0 0 4px rgba(77, 119, 221, .09);
         }
 
         .payrep-field-full {
@@ -1497,39 +1908,73 @@ export default function PayrollReports({ user = {} }) {
         .payrep-checkbox {
           display: flex;
           align-items: center;
-          gap: 8px;
-          min-height: 42px;
-          color: #465269;
-          font-size: 13px;
-          font-weight: 750;
+          gap: 9px;
+          min-height: 46px;
+          padding: 10px 12px;
+          border: 1px solid rgba(171, 181, 211, .48);
+          border-radius: 14px;
+          color: #52607d;
+          background: #f8faff;
+          font-size: 11px;
+          font-weight: 850;
         }
 
         .payrep-checkbox input {
           width: 17px;
           height: 17px;
+          accent-color: #5c70dc;
         }
 
         .payrep-filter-actions {
           display: flex;
           flex-wrap: wrap;
           justify-content: flex-end;
-          gap: 10px;
-          margin-top: 15px;
+          gap: 11px;
+          margin-top: 18px;
+          padding-top: 17px;
+          border-top: 1px solid rgba(171, 181, 211, .32);
         }
 
         .payrep-metrics {
           display: grid;
-          grid-template-columns: repeat(5, minmax(145px, 1fr));
-          gap: 13px;
+          grid-template-columns: repeat(5, minmax(0, 1fr));
+          gap: 15px;
         }
 
         .payrep-metric {
+          container-type: inline-size;
           min-width: 0;
-          padding: 17px;
-          border: 1px solid var(--border, #dfe5ee);
-          border-radius: 16px;
-          background: var(--card, #fff);
-          box-shadow: 0 10px 28px rgba(15, 23, 42, 0.05);
+          min-height: 142px;
+          padding: 19px;
+          border: 1px solid rgba(171, 181, 211, .62);
+          border-radius: 22px;
+          box-shadow:
+            7px 8px 0 #cfdaff,
+            0 18px 31px rgba(30, 40, 92, .055);
+        }
+
+        .payrep-metric:nth-child(1) {
+          background: #edf7ff;
+        }
+
+        .payrep-metric:nth-child(2) {
+          background: #fff5d8;
+          box-shadow: 7px 8px 0 #f4d99b;
+        }
+
+        .payrep-metric:nth-child(3) {
+          background: #f2efff;
+          box-shadow: 7px 8px 0 #cfc5ff;
+        }
+
+        .payrep-metric:nth-child(4) {
+          background: #eaf9f4;
+          box-shadow: 7px 8px 0 #afe3d4;
+        }
+
+        .payrep-metric:nth-child(5) {
+          background: #fff0f3;
+          box-shadow: 7px 8px 0 #f0bdc7;
         }
 
         .payrep-metric-head {
@@ -1537,50 +1982,67 @@ export default function PayrollReports({ user = {} }) {
           align-items: center;
           justify-content: space-between;
           gap: 10px;
-          margin-bottom: 10px;
-          color: var(--muted, #64748b);
-          font-size: 11px;
-          font-weight: 900;
+          margin-bottom: 15px;
+          color: #62708c;
+          font-size: 9px;
+          font-weight: 950;
+          letter-spacing: .055em;
           text-transform: uppercase;
+        }
+
+        .payrep-metric-head svg {
+          width: 34px;
+          height: 34px;
+          padding: 8px;
+          border: 1px solid rgba(91, 105, 177, .17);
+          border-radius: 11px;
+          background: rgba(255, 255, 255, .68);
         }
 
         .payrep-metric strong {
           display: block;
-          overflow: hidden;
-          font-size: clamp(21px, 2.3vw, 29px);
-          line-height: 1.15;
-          text-overflow: ellipsis;
+          width: max-content;
+          max-width: none;
+          overflow: visible;
+          color: #131b38;
+          font-family: Georgia, "Times New Roman", serif;
+          font-size: clamp(17px, 7cqi, 28px);
+          line-height: 1;
+          letter-spacing: -.025em;
           white-space: nowrap;
+          font-variant-numeric: tabular-nums;
         }
 
         .payrep-statement-employee {
           display: grid;
           grid-template-columns: repeat(4, minmax(0, 1fr));
-          gap: 10px;
-          margin-bottom: 16px;
+          gap: 12px;
         }
 
         .payrep-statement-item {
           min-width: 0;
-          padding: 12px;
-          border-radius: 12px;
-          background: rgba(148, 163, 184, 0.09);
+          padding: 15px;
+          border: 1px solid rgba(171, 181, 211, .44);
+          border-radius: 16px;
+          background: #f8faff;
         }
 
         .payrep-statement-item span {
           display: block;
-          margin-bottom: 4px;
-          color: var(--muted, #64748b);
-          font-size: 10px;
-          font-weight: 850;
+          margin-bottom: 5px;
+          color: #6b7895;
+          font-size: 8.5px;
+          font-weight: 950;
+          letter-spacing: .05em;
           text-transform: uppercase;
         }
 
         .payrep-statement-item strong {
           display: block;
-          overflow: hidden;
-          font-size: 13px;
-          text-overflow: ellipsis;
+          overflow-wrap: anywhere;
+          color: #17213e;
+          font-size: 12px;
+          font-weight: 900;
         }
 
         .payrep-chart {
@@ -1590,244 +2052,337 @@ export default function PayrollReports({ user = {} }) {
 
         .payrep-chart-row {
           display: grid;
-          grid-template-columns: 90px minmax(0, 1fr) 130px;
-          gap: 12px;
+          grid-template-columns: 90px minmax(0, 1fr) 155px;
+          gap: 14px;
           align-items: center;
+          padding: 12px 13px;
+          border: 1px solid rgba(171, 181, 211, .40);
+          border-radius: 15px;
+          background: #fafbff;
         }
 
         .payrep-chart-label {
-          color: #465269;
-          font-size: 12px;
-          font-weight: 850;
+          color: #4d5b79;
+          font-size: 10px;
+          font-weight: 950;
         }
 
         .payrep-chart-bars {
           display: grid;
-          gap: 5px;
+          gap: 6px;
         }
 
         .payrep-chart-track {
           height: 9px;
           overflow: hidden;
           border-radius: 999px;
-          background: rgba(148, 163, 184, 0.17);
+          background: #e9edf7;
         }
 
         .payrep-chart-bar {
           height: 100%;
           border-radius: inherit;
-          background: #3959cc;
+          background: linear-gradient(90deg, #4d77dd, #6e67e7);
         }
 
         .payrep-chart-bar.is-secondary {
-          background: #07875f;
+          background: linear-gradient(90deg, #2eb2b9, #57caa4);
         }
 
         .payrep-chart-value {
+          color: #34415f;
           text-align: right;
-          font-size: 11px;
-          font-weight: 800;
+          font-size: 9.5px;
+          font-weight: 850;
+          line-height: 1.45;
         }
 
         .payrep-table-wrap {
+          width: 100%;
+          min-width: 0;
           overflow-x: auto;
+          padding: 13px 13px 17px;
+          border: 1px solid rgba(171, 181, 211, .65);
+          border-radius: 22px;
+          background: #fff;
+          box-shadow:
+            7px 8px 0 #cdd5ff,
+            0 17px 32px rgba(31, 41, 92, .055);
+          overscroll-behavior-x: contain;
+          scrollbar-width: thin;
+          scrollbar-color: #c1cad8 transparent;
         }
 
-        .payrep-table {
+        .payrep-table-wrap::-webkit-scrollbar {
+          height: 8px;
+        }
+
+        .payrep-table-wrap::-webkit-scrollbar-thumb {
+          border-radius: 999px;
+          background: #c1cad8;
+        }
+
+        .payrep-table,
+        .payrep-export-table {
           width: 100%;
           min-width: 980px;
-          border-collapse: collapse;
+          border-collapse: separate;
+          border-spacing: 0 10px;
+        }
+
+        .payrep-export-table {
+          min-width: 940px;
         }
 
         .payrep-table th,
-        .payrep-table td {
+        .payrep-table td,
+        .payrep-export-table th,
+        .payrep-export-table td {
           padding: 12px 11px;
-          border-bottom: 1px solid #e7ebf1;
           text-align: left;
-          vertical-align: top;
-          font-size: 12px;
+          vertical-align: middle;
+          font-size: 10px;
         }
 
-        .payrep-table th {
+        .payrep-table th,
+        .payrep-export-table th {
           position: sticky;
-          top: 0;
-          z-index: 1;
-          color: #58647a;
-          background: #f8fafc;
-          font-size: 10px;
-          font-weight: 900;
+          z-index: 2;
+          top: -13px;
+          border: 0;
+          color: #697591;
+          background: #fff;
+          font-size: 8.5px;
+          font-weight: 950;
+          letter-spacing: .055em;
           text-transform: uppercase;
           white-space: nowrap;
         }
 
-        .payrep-table td {
-          max-width: 260px;
+        .payrep-table td,
+        .payrep-export-table td {
+          max-width: 270px;
+          border-top: 1px solid rgba(171, 181, 211, .44);
+          border-bottom: 1px solid rgba(171, 181, 211, .44);
+          color: #34415e;
+          background: #f8fbff;
           line-height: 1.45;
         }
 
-        .payrep-table td.is-money {
-          font-weight: 800;
-          white-space: nowrap;
+        .payrep-table tbody tr:nth-child(even) td,
+        .payrep-export-table tbody tr:nth-child(even) td {
+          background: #fbf9ff;
         }
 
-        .payrep-table td.is-identity strong {
+        .payrep-table td:first-child,
+        .payrep-export-table td:first-child {
+          border-left: 1px solid rgba(171, 181, 211, .44);
+          border-radius: 15px 0 0 15px;
+        }
+
+        .payrep-table td:last-child,
+        .payrep-export-table td:last-child {
+          border-right: 1px solid rgba(171, 181, 211, .44);
+          border-radius: 0 15px 15px 0;
+        }
+
+        .payrep-table td.is-money {
+          color: #1d2946;
+          font-weight: 900;
+          white-space: nowrap;
+          font-variant-numeric: tabular-nums;
+        }
+
+        .payrep-table td.is-identity strong,
+        .payrep-export-table td strong {
           display: block;
           margin-bottom: 3px;
+          color: #17213d;
+          font-weight: 950;
         }
 
-        .payrep-table td.is-identity small {
-          color: var(--muted, #64748b);
+        .payrep-table td.is-identity small,
+        .payrep-export-table td small {
+          color: #71809d;
         }
 
         .payrep-status {
           display: inline-flex;
           align-items: center;
           gap: 5px;
-          padding: 5px 9px;
+          padding: 6px 9px;
+          border: 1px solid transparent;
           border-radius: 999px;
-          font-size: 11px;
-          font-weight: 900;
+          font-size: 9px;
+          font-weight: 950;
           white-space: nowrap;
         }
 
         .payrep-status-success {
-          color: #047857;
-          background: rgba(5, 150, 105, 0.1);
+          color: #087659;
+          border-color: #a8e9d4;
+          background: #eafaf4;
         }
 
         .payrep-status-warning {
-          color: #9a5b00;
-          background: rgba(245, 158, 11, 0.13);
+          color: #9a5818;
+          border-color: #efd28f;
+          background: #fff8e9;
         }
 
         .payrep-status-neutral {
-          color: #475569;
-          background: rgba(100, 116, 139, 0.12);
+          color: #554b94;
+          border-color: #d5cff7;
+          background: #f3f1ff;
         }
 
         .payrep-empty {
           display: grid;
+          min-height: 220px;
           place-items: center;
-          min-height: 230px;
           padding: 30px;
-          border: 1px dashed var(--border, #d7dee9);
-          border-radius: 15px;
-          color: var(--muted, #64748b);
+          border: 1px dashed rgba(171, 181, 211, .76);
+          border-radius: 19px;
+          color: var(--payrep-copy);
+          background: #fafbff;
           text-align: center;
         }
 
-        .payrep-empty svg {
-          margin-bottom: 10px;
-          opacity: 0.6;
-        }
-
-        .payrep-export-table {
-          width: 100%;
-          min-width: 900px;
-          border-collapse: collapse;
-        }
-
-        .payrep-export-table th,
-        .payrep-export-table td {
-          padding: 12px 11px;
-          border-bottom: 1px solid #e7ebf1;
-          text-align: left;
-          vertical-align: top;
-          font-size: 12px;
-        }
-
-        .payrep-export-table th {
-          color: #58647a;
-          background: rgba(148, 163, 184, 0.07);
-          font-size: 10px;
-          font-weight: 900;
-          text-transform: uppercase;
-        }
-
-        .payrep-export-table td strong {
+        .payrep-empty strong {
           display: block;
-          margin-bottom: 3px;
+          margin-top: 8px;
+          color: #2b3655;
         }
 
-        .payrep-export-table td small {
-          color: var(--muted, #64748b);
+        .payrep-empty p {
+          margin: 6px 0 0;
+          font-size: 11px;
+          line-height: 1.5;
+        }
+
+        .payrep-empty svg {
+          opacity: .65;
         }
 
         .payrep-modal-backdrop {
           position: fixed;
+          z-index: 2147483000;
           inset: 0;
-          z-index: 10020;
           display: grid;
           place-items: center;
-          overflow: auto;
-          padding: 22px;
-          background: rgba(15, 23, 42, 0.58);
-          backdrop-filter: blur(5px);
+          overflow: hidden;
+          padding: clamp(14px, 3vw, 28px);
+          background: rgba(22, 28, 65, .50);
+          backdrop-filter: blur(11px) saturate(1.04);
+          -webkit-backdrop-filter: blur(11px) saturate(1.04);
+          overscroll-behavior: contain;
         }
 
         .payrep-modal {
-          width: min(720px, 100%);
-          max-height: calc(100vh - 44px);
+          width: min(700px, 100%);
+          max-height: min(88dvh, 820px);
           overflow: auto;
-          border: 1px solid rgba(255, 255, 255, 0.35);
-          border-radius: 20px;
+          overscroll-behavior: contain;
+          border: 1px solid rgba(171, 181, 211, .78);
+          border-radius: 29px;
           background: #fff;
-          box-shadow: 0 30px 90px rgba(15, 23, 42, 0.3);
+          box-shadow:
+            10px 12px 0 #c9c0ff,
+            0 34px 76px rgba(20, 27, 70, .28);
+          scrollbar-width: thin;
+          scrollbar-color: rgba(102, 88, 220, .30) transparent;
         }
 
         .payrep-modal-head {
+          position: sticky;
+          z-index: 3;
+          top: 0;
           display: flex;
           align-items: flex-start;
           justify-content: space-between;
-          gap: 14px;
-          padding: 20px 22px 14px;
-          border-bottom: 1px solid #e4e8ef;
+          gap: 16px;
+          padding: 21px 23px 17px;
+          border-bottom: 1px solid rgba(171, 181, 211, .42);
+          border-radius: 28px 28px 0 0;
+          background:
+            linear-gradient(90deg, #e8fbff 0%, #fff 50%, #f1edff 100%);
         }
 
         .payrep-modal-head h2 {
-          margin: 0 0 4px;
-          font-size: 21px;
+          margin: 0 0 5px;
+          color: #111a38;
+          font-family: Georgia, "Times New Roman", serif;
+          font-size: clamp(24px, 3vw, 32px);
+          line-height: 1;
         }
 
         .payrep-modal-head p {
           margin: 0;
-          color: #64748b;
-          font-size: 13px;
+          color: #66738f;
+          font-size: 10.5px;
         }
 
         .payrep-modal-close {
-          width: 38px;
-          height: 38px;
-          border: 1px solid #dfe5ee;
-          border-radius: 10px;
+          display: inline-grid;
+          width: 43px;
+          height: 43px;
+          flex: 0 0 43px;
+          place-items: center;
+          padding: 0;
+          border: 1px solid rgba(102, 88, 220, .18);
+          border-radius: 14px;
+          color: #40348d;
           background: #fff;
-          color: #334155;
+          box-shadow: 3px 4px 0 #d7d2ff;
+          font-size: 21px;
+          line-height: 1;
           cursor: pointer;
+        }
+
+        .payrep-modal-close:disabled {
+          cursor: not-allowed;
+          opacity: .5;
         }
 
         .payrep-modal-body {
           display: grid;
           gap: 15px;
-          padding: 20px 22px;
+          padding: 21px 23px 18px;
+          background: #fff;
         }
 
         .payrep-form-grid {
           display: grid;
           grid-template-columns: repeat(2, minmax(0, 1fr));
-          gap: 13px;
+          gap: 14px;
         }
 
         .payrep-modal-actions {
-          display: flex;
-          flex-wrap: wrap;
-          justify-content: flex-end;
-          gap: 10px;
-          padding: 14px 22px 20px;
-          border-top: 1px solid #e4e8ef;
+          position: sticky;
+          z-index: 3;
+          bottom: 0;
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+          gap: 11px;
+          padding: 15px 23px 21px;
+          border-top: 1px solid rgba(171, 181, 211, .42);
+          border-radius: 0 0 28px 28px;
+          background: rgba(250, 251, 255, .98);
+          backdrop-filter: blur(8px);
+          -webkit-backdrop-filter: blur(8px);
+        }
+
+        .payrep-modal-actions > .payrep-btn {
+          width: 100%;
+        }
+
+        .payrep-modal-feedback {
+          grid-column: 1 / -1;
+          margin-bottom: 2px;
         }
 
         .spin {
-          animation: payrep-spin 0.9s linear infinite;
+          animation: payrep-spin .9s linear infinite;
         }
 
         @keyframes payrep-spin {
@@ -1836,41 +2391,92 @@ export default function PayrollReports({ user = {} }) {
           }
         }
 
-        @media (max-width: 1220px) {
-          .payrep-report-types {
-            grid-template-columns: repeat(3, minmax(180px, 1fr));
+        @keyframes payrep-feedback-in {
+          from {
+            opacity: 0;
+            transform: translateY(-5px);
           }
-
-          .payrep-filters {
-            grid-template-columns: repeat(3, minmax(155px, 1fr));
-          }
-
-          .payrep-metrics {
-            grid-template-columns: repeat(3, minmax(145px, 1fr));
+          to {
+            opacity: 1;
+            transform: translateY(0);
           }
         }
 
-        @media (max-width: 860px) {
+        @media (max-width: 1220px) {
+          .payrep-report-types {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+          }
+
+          .payrep-filters {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+          }
+
+          .payrep-metrics {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+          }
+        }
+
+        @media (max-width: 900px) {
+          .payroll-reports-page {
+            width: min(100% - 28px, 1280px);
+            padding-top: 18px;
+          }
+
+          .payrep-hero {
+            grid-template-columns: 1fr;
+            padding: 28px;
+          }
+
+          .payrep-hero-actions {
+            justify-content: flex-start;
+          }
+
           .payrep-report-types,
           .payrep-filters,
           .payrep-statement-employee {
             grid-template-columns: repeat(2, minmax(0, 1fr));
           }
+
+          .payrep-metrics {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
+          .payrep-section-head {
+            flex-direction: column;
+          }
+
+          .payrep-section-head > .payrep-field {
+            width: min(100%, 360px);
+          }
         }
 
-        @media (max-width: 760px) {
+        @media (max-width: 700px) {
+          .payroll-reports-page {
+            width: min(100% - 20px, 1280px);
+            gap: 17px;
+            padding-top: 12px;
+          }
+
           .payrep-hero {
-            flex-direction: column;
-            padding: 20px;
+            padding: 22px;
+            border-radius: 23px;
+            box-shadow:
+              7px 9px 0 #cbd3ff,
+              0 22px 42px rgba(32, 42, 99, .08);
+          }
+
+          .payrep-hero h1 {
+            font-size: clamp(34px, 11vw, 48px);
           }
 
           .payrep-hero-actions {
+            display: grid;
+            grid-template-columns: 1fr;
             width: 100%;
-            justify-content: stretch;
           }
 
           .payrep-hero-actions .payrep-btn {
-            flex: 1;
+            width: 100%;
           }
 
           .payrep-report-types,
@@ -1881,8 +2487,29 @@ export default function PayrollReports({ user = {} }) {
             grid-template-columns: 1fr;
           }
 
+          .payrep-type-card {
+            min-height: 0;
+          }
+
+          .payrep-panel {
+            padding: 18px;
+            border-radius: 21px;
+            box-shadow:
+              6px 8px 0 #d4dbff,
+              0 18px 32px rgba(29, 40, 92, .06);
+          }
+
+          .payrep-filter-actions {
+            display: grid;
+            grid-template-columns: 1fr;
+          }
+
+          .payrep-filter-actions .payrep-btn {
+            width: 100%;
+          }
+
           .payrep-chart-row {
-            grid-template-columns: 70px minmax(0, 1fr);
+            grid-template-columns: 72px minmax(0, 1fr);
           }
 
           .payrep-chart-value {
@@ -1890,21 +2517,111 @@ export default function PayrollReports({ user = {} }) {
             text-align: left;
           }
 
+          .payrep-table-wrap {
+            padding: 9px 9px 14px;
+            border-radius: 18px;
+            box-shadow:
+              5px 7px 0 #cdd5ff,
+              0 15px 26px rgba(31, 41, 92, .05);
+          }
+
           .payrep-modal-backdrop {
-            align-items: end;
-            padding: 0;
+            padding: 10px;
           }
 
           .payrep-modal {
-            max-height: 94vh;
-            border-radius: 20px 20px 0 0;
+            max-height: calc(100dvh - 20px);
+            border-radius: 22px;
+            box-shadow:
+              7px 9px 0 #c9c0ff,
+              0 24px 52px rgba(20, 27, 70, .25);
           }
 
-          .payrep-modal-head,
-          .payrep-modal-body,
+          .payrep-modal-head {
+            padding: 18px 17px 15px;
+            border-radius: 21px 21px 0 0;
+          }
+
+          .payrep-modal-body {
+            padding: 17px;
+          }
+
           .payrep-modal-actions {
-            padding-left: 16px;
-            padding-right: 16px;
+            grid-template-columns: 1fr;
+            padding: 14px 17px 18px;
+            border-radius: 0 0 21px 21px;
+          }
+
+          .payrep-modal-feedback {
+            grid-column: 1;
+          }
+        }
+
+        @media (max-width: 520px) {
+          .payroll-reports-page {
+            width: calc(100% - 16px);
+          }
+
+          .payrep-hero,
+          .payrep-panel {
+            padding: 17px;
+          }
+
+          .payrep-kicker {
+            padding: 7px 10px;
+            font-size: 9px;
+          }
+
+          .payrep-metric {
+            min-height: 124px;
+            padding: 16px;
+          }
+
+          .payrep-metric strong {
+            font-size: clamp(16px, 7.2cqi, 25px);
+          }
+
+          .payrep-feedback {
+            grid-template-columns: auto minmax(0, 1fr);
+          }
+
+          .payrep-feedback-close {
+            grid-column: 2;
+            justify-self: end;
+          }
+        }
+
+        @media (max-width: 390px) {
+          .payroll-reports-page {
+            width: calc(100% - 12px);
+          }
+
+          .payrep-hero,
+          .payrep-panel {
+            padding: 15px;
+          }
+
+          .payrep-btn {
+            min-height: 44px;
+            padding-inline: 12px;
+          }
+        }
+
+        @media (hover: none) {
+          .payrep-btn,
+          .payrep-type-card {
+            transform: none !important;
+          }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+          .payroll-reports-page *,
+          .payroll-reports-page *::before,
+          .payroll-reports-page *::after {
+            scroll-behavior: auto !important;
+            animation-duration: .01ms !important;
+            animation-iteration-count: 1 !important;
+            transition-duration: .01ms !important;
           }
         }
       `}</style>
@@ -1928,6 +2645,12 @@ export default function PayrollReports({ user = {} }) {
             type="button"
             className="payrep-btn payrep-btn-secondary"
             onClick={() => {
+              showPayrepFeedback(
+                'page',
+                'info',
+                'Refreshing employee and payroll-report export data...',
+                'Refreshing Payroll Reports',
+              );
               loadEmployees();
               if (canManage) {
                 loadReportExports();
@@ -1964,6 +2687,12 @@ export default function PayrollReports({ user = {} }) {
             Export CSV
           </button>
         </div>
+
+        <PayrollReportFeedback
+          feedback={inlineFeedback.page}
+          onClose={() => clearPayrepFeedback('page')}
+          className="payrep-hero-feedback"
+        />
       </header>
 
       <section className="payrep-report-types">
@@ -2246,6 +2975,12 @@ export default function PayrollReports({ user = {} }) {
             onClick={() => {
               setFilters(emptyFilters());
               setReport(null);
+              showPayrepFeedback(
+                'filters',
+                'success',
+                'Report filters were restored to their default values.',
+                'Filters Reset',
+              );
             }}
           >
             <RefreshCw size={15} />
@@ -2266,6 +3001,12 @@ export default function PayrollReports({ user = {} }) {
             Generate Report
           </button>
         </div>
+
+        <PayrollReportFeedback
+          feedback={inlineFeedback.filters}
+          onClose={() => clearPayrepFeedback('filters')}
+          className="payrep-section-feedback"
+        />
       </section>
 
       {report ? (
@@ -2573,6 +3314,12 @@ export default function PayrollReports({ user = {} }) {
             </div>
           </div>
 
+          <PayrollReportFeedback
+            feedback={inlineFeedback.history}
+            onClose={() => clearPayrepFeedback('history')}
+            className="payrep-section-feedback"
+          />
+
           {loadingExports ? (
             <div className="payrep-empty" style={{ minHeight: 150 }}>
               <div>
@@ -2731,6 +3478,12 @@ export default function PayrollReports({ user = {} }) {
               </div>
 
               <div className="payrep-modal-actions">
+                <PayrollReportFeedback
+                  feedback={inlineFeedback['export-modal']}
+                  onClose={() => clearPayrepFeedback('export-modal')}
+                  className="payrep-modal-feedback"
+                />
+
                 <button
                   type="button"
                   className="payrep-btn payrep-btn-secondary"
@@ -2823,6 +3576,12 @@ export default function PayrollReports({ user = {} }) {
               </div>
 
               <div className="payrep-modal-actions">
+                <PayrollReportFeedback
+                  feedback={inlineFeedback['export-status-modal']}
+                  onClose={() => clearPayrepFeedback('export-status-modal')}
+                  className="payrep-modal-feedback"
+                />
+
                 <button
                   type="button"
                   className="payrep-btn payrep-btn-secondary"

@@ -999,6 +999,70 @@ def delete_platform_logo():
     })
 
 
+@profile_photos_bp.patch("/tenant-branding/company-name")
+@current_user_required
+def update_tenant_company_name():
+    """Update only the authenticated tenant's display name; never its identity."""
+    roles = current_roles()
+    if not roles.intersection({"admin", "tenant_admin"}) or "super_admin" in roles:
+        return jsonify({"message": "Only this tenant's administrator may change its company name"}), 403
+
+    actor = getattr(g, "current_user", {}) or {}
+    actor_tenant = normalize_text(
+        getattr(g, "tenant_id", None) or actor.get("tenant_id")
+        or actor.get("company_id") or actor.get("tenant")
+    )
+    # Do not rely on the legacy 'sds' fallback for a tenant-changing operation.
+    if not actor_tenant or actor_tenant == PLATFORM_BRANDING_TENANT_ID:
+        return jsonify({"message": "Authenticated company scope required"}), 403
+
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify({"message": "Provide a JSON company name"}), 400
+    raw = body.get("company_name")
+    if not isinstance(raw, str):
+        return jsonify({"message": "Company name must be text"}), 400
+    company_name = " ".join(raw.strip().split())
+    if not 2 <= len(company_name) <= 120 or any(ord(ch) < 32 or ord(ch) == 127 for ch in company_name):
+        return jsonify({"message": "Company name must be 2 to 120 readable characters"}), 400
+
+    db = get_db()
+    tenant = find_current_tenant(db)
+    if not tenant or normalize_text(tenant.get("tenant_id")).lower() != actor_tenant.lower():
+        return jsonify({"message": "Company account not found"}), 404
+    previous_name = company_name_value(tenant)
+    expected = body.get("expected_company_name")
+    if not isinstance(expected, str) or expected != previous_name:
+        return jsonify({"message": "Company name changed elsewhere. Refresh and try again."}), 409
+    if company_name == previous_name:
+        return jsonify({"message": "Company name is already up to date", "branding": tenant_branding_payload(tenant), "tenant": clean_doc(tenant)}), 200
+
+    changed_at = datetime.utcnow()
+    values = {
+        "company_name": company_name,
+        "name": company_name,
+        "branding.company_name": company_name,
+        "branding.updated_at": changed_at,
+        "branding.updated_by": current_user_id(),
+        "updated_at": changed_at,
+        "updated_by": current_user_id(),
+    }
+    if "tenant_name" in tenant:
+        values["tenant_name"] = company_name
+    result = db.tenants.update_one(
+        {"_id": tenant["_id"], "tenant_id": tenant["tenant_id"],
+         "company_name": tenant.get("company_name") } if "company_name" in tenant
+        else {"_id": tenant["_id"], "tenant_id": tenant["tenant_id"], "company_name": {"$exists": False}},
+        {"$set": values},
+    )
+    if not result.matched_count:
+        return jsonify({"message": "Company record changed. Refresh and try again."}), 409
+    updated_tenant = db.tenants.find_one({"_id": tenant["_id"], "tenant_id": tenant["tenant_id"]})
+    audit("tenant_company_name_updated", "system_settings", tenant["_id"],
+          {"old_name": previous_name, "new_name": company_name})
+    return jsonify({"message": "Company name updated successfully", "branding": tenant_branding_payload(updated_tenant), "tenant": clean_doc(updated_tenant), "can_manage_branding": True})
+
+
 @profile_photos_bp.get("/tenant-branding")
 @current_user_required
 def get_tenant_branding():

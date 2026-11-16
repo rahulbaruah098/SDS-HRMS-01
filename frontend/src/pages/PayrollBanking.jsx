@@ -1642,17 +1642,6 @@ export default function PayrollBanking({ user = {} }) {
           box-shadow: 0 16px 42px rgba(15, 23, 42, 0.07);
         }
 
-        .paybank-hero::after {
-          position: absolute;
-          right: -45px;
-          bottom: -72px;
-          width: 205px;
-          height: 205px;
-          border-radius: 50%;
-          background: rgba(49, 88, 214, 0.07);
-          content: '';
-        }
-
         .paybank-hero-content,
         .paybank-hero-actions {
           position: relative;

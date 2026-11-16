@@ -196,33 +196,36 @@ export default function AboutSayanantPage() {
             </p>
           </article>
 
-          <h3 className="yc-sg-subheading">Legacy and organisational story</h3>
+          <h3 className="yc-sg-subheading">Organisational journey</h3>
 
           <div className="yc-sg-history">
             <article className="tone-violet">
               <span aria-hidden="true" />
-              <b>3+ decades</b>
+              <b>2013</b>
               <p>
-                The official home page describes the wider Sayanant Group legacy
-                as spanning more than three decades in development consulting.
+                SDS was established in 2013 with a clear focus on strengthening
+                rural livelihoods, institutions, market systems and development
+                programme delivery.
               </p>
             </article>
             <article className="tone-blue">
               <span aria-hidden="true" />
-              <b>2013</b>
+              <b>Growth</b>
               <p>
-                The official About page states that SDS was founded in 2013 to
-                strengthen livelihoods, markets, institutions and development
-                delivery.
+                Since its establishment, SDS has progressively expanded its work
+                across advisory services, field implementation, research,
+                institution building, market development and technology-enabled
+                solutions.
               </p>
             </article>
             <article className="tone-cyan">
               <span aria-hidden="true" />
               <b>Today</b>
               <p>
-                SDS and allied initiatives are presented as combining advisory,
-                field implementation, research, systems, skills and
-                technology-enabled services.
+                Today, SDS and allied initiatives bring together development
+                consulting, field delivery, research, skills, institutional
+                support and digital systems to serve organisations, enterprises
+                and communities.
               </p>
             </article>
           </div>

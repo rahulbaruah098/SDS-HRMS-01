@@ -10,7 +10,7 @@ import {
   Menu,
   X,
 } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   api,
   clearSession,
@@ -257,121 +257,90 @@ function roleLabel(role = '') {
     .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
+// Sidebar presentation only. Module visibility and permissions stay in data/modules.js.
+const SIDEBAR_SECTIONS = [
+  {
+    name: 'Work & Planning',
+    keys: ['sprint_planning', 'projects'],
+  },
+  {
+    name: 'Attendance & Leave',
+    keys: [
+      'attendance', 'leave_requests', 'team_approvals', 'application_status',
+      'team_field_attendance', 'attendance_logs', 'leave', 'leave_balances',
+      'holiday_work_requests', 'compoff_credits', 'compoff_records',
+      'holiday_calendar', 'attendance_mode_requests',
+    ],
+  },
+  {
+    name: 'People & Organisation',
+    keys: [
+      'employee_directory', 'employees', 'organisations', 'departments',
+      'designations', 'states',
+    ],
+  },
+  {
+    name: 'Payroll & Finance',
+    keys: [
+      'payslips', 'payroll_runs', 'reimbursements', 'loans_advances',
+      'payroll_banking', 'payroll_reports', 'tax_declarations',
+      'payroll_configuration', 'payslip_designer',
+    ],
+  },
+  {
+    name: 'Talent & Performance',
+    keys: ['performance_reviews', 'recruitment', 'job_openings', 'candidates'],
+  },
+  {
+    name: 'Reports & Insights',
+    keys: ['reports'],
+  },
+  {
+    name: 'Support & Resources',
+    keys: ['notifications', 'it_support', 'grievances', 'assets',
+      'tickets', 'policies', 'documents'],
+  },
+  {
+    name: 'Administration',
+    keys: [
+      'companies', 'users', 'subscriptions', 'demo_requests',
+      'premium_requests', 'billing', 'system_settings', 'audit_logs',
+    ],
+  },
+  {
+    name: 'Management',
+    keys: ['management_groups'],
+  },
+  {
+    name: 'Account',
+    keys: ['profile'],
+  },
+];
+
+const SIDEBAR_GROUP_BY_KEY = Object.fromEntries(
+  SIDEBAR_SECTIONS.flatMap((section) =>
+    section.keys.map((key) => [key, section.name]),
+  ),
+);
+const SIDEBAR_KEY_POSITION = Object.fromEntries(
+  SIDEBAR_SECTIONS.flatMap((section) =>
+    section.keys.map((key, position) => [key, position]),
+  ),
+);
+
 function moduleGroup(key) {
-  if (
-    [
-      'companies',
-      'users',
-      'billing',
-      'system_settings',
-      'audit_logs',
-    ].includes(key)
-  ) {
-    return 'Administration';
-  }
-
-  if (
-    [
-      'employees',
-      'departments',
-      'designations',
-      'states',
-    ].includes(key)
-  ) {
-    return 'Employee Setup';
-  }
-
-  if (key === 'projects') {
-    return 'Projects';
-  }
-
-  if (
-    [
-      'attendance',
-      'attendance_logs',
-      'holiday_work_requests',
-      'team_field_attendance',
-      'attendance_mode_requests',
-      'holiday_calendar',
-      'compoff_credits',
-      'compoff_records',
-      'team_approvals',
-      'leave_requests',
-      'leave',
-      'leave_balances',
-      'leave_types',
-      'application_status',
-    ].includes(key)
-  ) {
-    return 'Attendance & Leave';
-  }
-
-  if (key === 'reports') {
-    return 'Reports';
-  }
-
-  if (
-    [
-      'payroll_configuration',
-      'payslip_designer',
-      'loans_advances',
-      'reimbursements',
-      'payroll_banking',
-      'payroll_reports',
-      'tax_declarations',
-      'payroll_runs',
-      'payslips',
-    ].includes(key)
-  ) {
-    return 'Payroll & Finance';
-  }
-
-if (
-  [
-    'job_openings',
-    'candidates',
-    'performance_reviews',
-  ].includes(key)
-) {
-  return 'Talent & Performance';
+  return SIDEBAR_GROUP_BY_KEY[key] || 'Other Modules';
 }
 
-  if (
-    [
-      'assets',
-      'tickets',
-      'grievances',
-      'it_support',
-      'notifications',
-      'policies',
-      'documents',
-    ].includes(key)
-  ) {
-    return 'Support & Records';
-  }
-
-  if (key === 'profile') {
-    return 'Account';
-  }
-
-  return 'Modules';
+function groupOrder(group, isSuperAdmin = false) {
+  if (isSuperAdmin && group === 'Administration') return -1;
+  const position = SIDEBAR_SECTIONS.findIndex((section) => section.name === group);
+  return position === -1 ? SIDEBAR_SECTIONS.length : position;
 }
 
-function groupOrder(group) {
-  const order = {
-    Administration: 1,
-    'Employee Setup': 2,
-    Projects: 3,
-    'Attendance & Leave': 4,
-    Reports: 5,
-    'Payroll & Finance': 6,
-    'Talent & Performance': 7,
-    'Support & Records': 8,
-    Account: 9,
-    Modules: 99,
-  };
-
-  return order[group] || 99;
+function sidebarModuleOrder([keyA], [keyB]) {
+  return (SIDEBAR_KEY_POSITION[keyA] ?? Number.MAX_SAFE_INTEGER) -
+    (SIDEBAR_KEY_POSITION[keyB] ?? Number.MAX_SAFE_INTEGER);
 }
 
 function buildCapabilityText(user) {
@@ -502,16 +471,36 @@ function getSaasSummary(user = {}) {
       '',
   );
 
-  const status = normalizeSaasText(
-    subscription.status ||
-      tenant.subscription_status ||
-      tenant.plan_status ||
-      tenant.status ||
-      user.subscription_status ||
-      user.plan_status ||
-      user.status ||
-      '',
-  );
+  const statusCandidates = [
+    subscription.status,
+    subscription.subscription_status,
+    subscription.trial_status,
+    tenant.subscription_status,
+    tenant.plan_status,
+    tenant.trial_status,
+    tenant.status,
+    user.subscription_status,
+    user.plan_status,
+    user.trial_status,
+    user.status,
+  ]
+    .map(normalizeSaasText)
+    .filter(Boolean);
+
+  const restrictedStatuses = new Set([
+    'expired',
+    'subscription_expired',
+    'trial_expired',
+    'demo_expired',
+    'suspended',
+    'blocked',
+    'inactive',
+  ]);
+
+  const status =
+    statusCandidates.find((candidate) => restrictedStatuses.has(candidate)) ||
+    statusCandidates[0] ||
+    '';
 
   const trialEndDate =
     subscription.trial_end_date ||
@@ -582,18 +571,31 @@ function getSaasSummary(user = {}) {
 
   const accessEndDate = isPaidPlan ? renewalDueDate : trialEndDate;
   const daysLeft = calculateDaysLeft(accessEndDate);
-  const isSuspended = status === 'suspended' || status === 'blocked';
+  const requiresPayment =
+    truthyValue(subscription.requires_payment) ||
+    truthyValue(tenant.requires_payment) ||
+    truthyValue(user.requires_payment);
+  const isSuspended = ['suspended', 'blocked', 'inactive'].includes(status);
 
   const isTrialExpired = Boolean(
-    status === 'trial_expired' ||
-      status === 'demo_expired' ||
-      (!isSdsLifetime && isDemo && daysLeft !== null && daysLeft <= 0),
+    !isSdsLifetime &&
+      (
+        status === 'trial_expired' ||
+        status === 'demo_expired' ||
+        (status === 'expired' && isDemo) ||
+        (isDemo && requiresPayment) ||
+        (isDemo && daysLeft !== null && daysLeft <= 0)
+      ),
   );
 
   const isSubscriptionExpired = Boolean(
-    status === 'subscription_expired' ||
-      (status === 'expired' && isPaidPlan) ||
-      (!isSdsLifetime && isPaidPlan && daysLeft !== null && daysLeft <= 0),
+    !isSdsLifetime &&
+      (
+        status === 'subscription_expired' ||
+        (status === 'expired' && isPaidPlan) ||
+        (isPaidPlan && requiresPayment) ||
+        (isPaidPlan && daysLeft !== null && daysLeft <= 0)
+      ),
   );
 
   const isExpired = isTrialExpired || isSubscriptionExpired;
@@ -966,7 +968,7 @@ function notificationIsUnread(notification = {}) {
   return notification.read !== true && notification.status !== 'read';
 }
 
-export default function AppLayout({ user, setUser, page, setPage, children }) {
+export default function AppLayout({ user, setUser, page, setPage, children, sprintEnabled = false }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [notificationOpen, setNotificationOpen] = useState(false);
   const [notifications, setNotifications] = useState([]);
@@ -984,6 +986,91 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
   });
   const [platformLogoFailed, setPlatformLogoFailed] = useState(false);
   const notificationRef = useRef(null);
+  const sidebarNavigationRef = useRef(null);
+  const sidebarRestoredKeyRef = useRef('');
+
+  /*
+    HRMS pages use the browser document as the main vertical scroll container.
+    Keep browser-native reload/history restoration from reopening a module at an
+    old vertical position while this authenticated layout is mounted.
+  */
+  useLayoutEffect(() => {
+    if (
+      typeof window === 'undefined' ||
+      !('scrollRestoration' in window.history)
+    ) {
+      return undefined;
+    }
+
+    const previousScrollRestoration = window.history.scrollRestoration;
+    window.history.scrollRestoration = 'manual';
+
+    return () => {
+      window.history.scrollRestoration = previousScrollRestoration;
+    };
+  }, []);
+
+  /*
+    Every HRMS module is a separate workspace, so a newly opened/restored page
+    starts from its own top. Only the document viewport is reset here; the
+    sidebar navigation keeps its independent scroll position.
+  */
+  useLayoutEffect(() => {
+    if (typeof window === 'undefined' || typeof document === 'undefined') {
+      return undefined;
+    }
+
+    const root = document.documentElement;
+    const body = document.body;
+
+    if (!root || !body) {
+      return undefined;
+    }
+
+    const previousRootScrollBehavior = root.style.scrollBehavior;
+    const previousBodyScrollBehavior = body.style.scrollBehavior;
+
+    const scrollHrmsPageToTop = () => {
+      root.style.scrollBehavior = 'auto';
+      body.style.scrollBehavior = 'auto';
+
+      root.scrollTop = 0;
+      body.scrollTop = 0;
+      window.scrollTo(0, 0);
+    };
+
+    const restoreScrollBehavior = () => {
+      root.style.scrollBehavior = previousRootScrollBehavior;
+      body.style.scrollBehavior = previousBodyScrollBehavior;
+    };
+
+    /*
+      Reset immediately before paint, then re-assert for two animation frames.
+      The extra frames cover browser reload restoration and page content settling
+      without introducing a visible smooth-scroll animation.
+    */
+    scrollHrmsPageToTop();
+
+    let secondFrame = 0;
+    const firstFrame = window.requestAnimationFrame(() => {
+      scrollHrmsPageToTop();
+
+      secondFrame = window.requestAnimationFrame(() => {
+        scrollHrmsPageToTop();
+        restoreScrollBehavior();
+      });
+    });
+
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+
+      if (secondFrame) {
+        window.cancelAnimationFrame(secondFrame);
+      }
+
+      restoreScrollBehavior();
+    };
+  }, [page]);
 
   const safeUser = {
     ...(user || {}),
@@ -993,7 +1080,8 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
   applyProfilePhotoAliases(safeUser, getUserPhoto(safeUser));
 
   const modules = moduleList(safeUser).filter(
-    (module) => module[0] !== 'dashboard',
+    (module) => module[0] !== 'dashboard' &&
+      (module[0] !== 'sprint_planning' || sprintEnabled),
   );
 
   const groupedModules = useMemo(() => {
@@ -1008,23 +1096,40 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
       return acc;
     }, {});
 
+    const isSuperAdmin = safeUser.roles.includes('super_admin');
+
     return Object.entries(grouped)
-      .sort(([groupA], [groupB]) => groupOrder(groupA) - groupOrder(groupB))
+      .sort(([groupA], [groupB]) =>
+        groupOrder(groupA, isSuperAdmin) - groupOrder(groupB, isSuperAdmin),
+      )
       .map(([group, groupModules]) => ({
         group,
-        modules: groupModules,
+        modules: [...groupModules].sort(sidebarModuleOrder),
       }));
-  }, [modules]);
-
-  const currentTitle =
-    page === 'dashboard'
-      ? 'Dashboard'
-      : modules.find((module) => module[0] === page)?.[1] ||
-        'Access Restricted';
+  }, [modules, safeUser.roles.includes('super_admin')]);
 
   const displayRole = getDisplayRole(safeUser);
   const capabilityText = buildCapabilityText(safeUser);
   const saasSummary = useMemo(() => getSaasSummary(safeUser), [safeUser]);
+
+  const currentTitle =
+    page === 'dashboard'
+      ? 'Dashboard'
+      : page === 'subscription_expired'
+        ? saasSummary.isSuspended
+          ? 'Subscription Access Suspended'
+          : 'Subscription Renewal Required'
+        : page === 'billing'
+          ? 'Billing & Subscription'
+          : page === 'employee_handover'
+            ? 'Employee Work Handover'
+            : modules.find((module) => module[0] === page)?.[1] ||
+              'Access Restricted';
+
+  const canOpenTenantBilling =
+    safeUser.roles.includes('admin') &&
+    !safeUser.roles.includes('super_admin') &&
+    safeUser.is_platform_superadmin !== true;
   const sessionBranding = normalizeTenantBranding({
     branding:
       safeUser.tenant_branding ||
@@ -1051,6 +1156,189 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
       saasSummary.tenantCode ||
       '',
   );
+
+  const sidebarUserIdentity = String(
+    safeUser._id ||
+      safeUser.id ||
+      safeUser.user_id ||
+      safeUser.employee_id ||
+      safeUser.email ||
+      '',
+  ).trim();
+
+  const sidebarScrollStorageKey = [
+    'yourcomate_hrms_sidebar_scroll_v1',
+    encodeURIComponent(tenantIdentity || 'tenant'),
+    encodeURIComponent(sidebarUserIdentity || 'user'),
+  ].join(':');
+
+  const sidebarModuleSignature = modules
+    .map((module) => String(module?.[0] || '').trim())
+    .filter(Boolean)
+    .join('|');
+
+  /*
+    Keep the sidebar's own scroll position across refreshes in the current
+    browser tab, while always making sure the active page button is visible.
+    This is intentionally independent from the main document scroll-to-top
+    behavior above.
+  */
+  useLayoutEffect(() => {
+    if (typeof window === 'undefined') {
+      return undefined;
+    }
+
+    const navigation = sidebarNavigationRef.current;
+
+    if (!navigation) {
+      return undefined;
+    }
+
+    if (sidebarRestoredKeyRef.current !== sidebarScrollStorageKey) {
+      try {
+        const savedScrollTop = Number(
+          window.sessionStorage.getItem(sidebarScrollStorageKey),
+        );
+
+        if (Number.isFinite(savedScrollTop) && savedScrollTop >= 0) {
+          navigation.scrollTop = savedScrollTop;
+        }
+      } catch {
+        // Sidebar navigation still works when sessionStorage is unavailable.
+      }
+
+      sidebarRestoredKeyRef.current = sidebarScrollStorageKey;
+    }
+
+    const ensureActiveSidebarItemIsVisible = () => {
+      const activeButton = navigation.querySelector(
+        '.sidebar-nav-item[aria-current="page"]',
+      );
+
+      if (!activeButton) {
+        return;
+      }
+
+      const navigationRect = navigation.getBoundingClientRect();
+      const activeRect = activeButton.getBoundingClientRect();
+      const edgePadding = 8;
+
+      if (activeRect.top < navigationRect.top + edgePadding) {
+        navigation.scrollTop = Math.max(
+          0,
+          navigation.scrollTop -
+            (navigationRect.top + edgePadding - activeRect.top),
+        );
+      } else if (activeRect.bottom > navigationRect.bottom - edgePadding) {
+        navigation.scrollTop +=
+          activeRect.bottom - (navigationRect.bottom - edgePadding);
+      }
+    };
+
+    const persistCurrentSidebarPosition = () => {
+      try {
+        window.sessionStorage.setItem(
+          sidebarScrollStorageKey,
+          String(Math.max(0, navigation.scrollTop)),
+        );
+      } catch {
+        // Ignore storage errors; active-item visibility still remains correct.
+      }
+    };
+
+    /*
+      Run before paint and again while the sidebar finishes layout. This keeps a
+      restored active item visible without using scrollIntoView(), which could
+      also move the main document.
+    */
+    ensureActiveSidebarItemIsVisible();
+
+    let secondFrame = 0;
+    const firstFrame = window.requestAnimationFrame(() => {
+      ensureActiveSidebarItemIsVisible();
+
+      secondFrame = window.requestAnimationFrame(() => {
+        ensureActiveSidebarItemIsVisible();
+        persistCurrentSidebarPosition();
+      });
+    });
+
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+
+      if (secondFrame) {
+        window.cancelAnimationFrame(secondFrame);
+      }
+    };
+  }, [page, sidebarModuleSignature, sidebarScrollStorageKey]);
+
+  /*
+    Save sidebar scrolling independently from the main page. sessionStorage is
+    used so refreshes in this tab preserve the menu position without carrying
+    stale positions into unrelated browser sessions.
+  */
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof document === 'undefined') {
+      return undefined;
+    }
+
+    const navigation = sidebarNavigationRef.current;
+
+    if (!navigation) {
+      return undefined;
+    }
+
+    let saveFrame = 0;
+
+    const saveSidebarPosition = () => {
+      try {
+        window.sessionStorage.setItem(
+          sidebarScrollStorageKey,
+          String(Math.max(0, navigation.scrollTop)),
+        );
+      } catch {
+        // Ignore storage errors; normal sidebar scrolling remains available.
+      }
+    };
+
+    const handleSidebarScroll = () => {
+      if (saveFrame) {
+        return;
+      }
+
+      saveFrame = window.requestAnimationFrame(() => {
+        saveFrame = 0;
+        saveSidebarPosition();
+      });
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        saveSidebarPosition();
+      }
+    };
+
+    navigation.addEventListener('scroll', handleSidebarScroll, {
+      passive: true,
+    });
+    window.addEventListener('pagehide', saveSidebarPosition);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      if (saveFrame) {
+        window.cancelAnimationFrame(saveFrame);
+      }
+
+      saveSidebarPosition();
+
+      navigation.removeEventListener('scroll', handleSidebarScroll);
+      window.removeEventListener('pagehide', saveSidebarPosition);
+      document.removeEventListener(
+        'visibilitychange',
+        handleVisibilityChange,
+      );
+    };
+  }, [sidebarScrollStorageKey]);
 
   const saasBanner = useMemo(() => {
     if (saasSummary.isSubscriptionExpired) {
@@ -1122,6 +1410,19 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
 
   async function loadNotifications({ silent = false } = {}) {
     if (!safeUser?._id && !safeUser?.email) {
+      return;
+    }
+
+    /*
+      Notifications are non-essential while subscription access is blocked.
+      Skipping this poll prevents repeated 402/403 background responses from
+      competing with the Billing / Subscription Expired recovery screens.
+    */
+    if (saasSummary.isExpired || saasSummary.isSuspended) {
+      setNotifications([]);
+      setNotificationCount(0);
+      setNotificationMessage('');
+      setNotificationLoading(false);
       return;
     }
 
@@ -1328,6 +1629,10 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
   }, [setUser]);
 
   useEffect(() => {
+    if (saasSummary.isExpired || saasSummary.isSuspended) {
+      return undefined;
+    }
+
     let cancelled = false;
 
     async function loadPlatformBranding() {
@@ -1353,14 +1658,18 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
     return () => {
       cancelled = true;
     };
-  }, [page]);
+  }, [page, saasSummary.isExpired, saasSummary.isSuspended]);
 
   useEffect(() => {
     setPlatformLogoFailed(false);
   }, [platformLogoUrl]);
 
   useEffect(() => {
-    if (page !== 'dashboard') {
+    if (
+      page !== 'dashboard' ||
+      saasSummary.isExpired ||
+      saasSummary.isSuspended
+    ) {
       return undefined;
     }
 
@@ -1394,13 +1703,32 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
     };
     // Reload when returning to Dashboard so recently updated branding appears.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, tenantIdentity]);
+  }, [
+    page,
+    tenantIdentity,
+    saasSummary.isExpired,
+    saasSummary.isSuspended,
+  ]);
+
+  useEffect(() => {
+    const onBrandingUpdated = (event) => {
+      if (event?.detail?.companyName) {
+        setTenantBranding(event.detail);
+      }
+    };
+    window.addEventListener('yourcomate:tenant-branding-updated', onBrandingUpdated);
+    return () => window.removeEventListener('yourcomate:tenant-branding-updated', onBrandingUpdated);
+  }, []);
 
   useEffect(() => {
     setCompanyLogoFailed(false);
   }, [headerCompanyLogoUrl]);
 
   useEffect(() => {
+    if (saasSummary.isExpired || saasSummary.isSuspended) {
+      return undefined;
+    }
+
     let cancelled = false;
 
     async function refreshNotificationsFast() {
@@ -1445,7 +1773,46 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [safeUser?._id, safeUser?.email]);
+  }, [
+    safeUser?._id,
+    safeUser?.email,
+    saasSummary.isExpired,
+    saasSummary.isSuspended,
+  ]);
+
+  useEffect(() => {
+    if (typeof setPage !== 'function') {
+      return;
+    }
+
+    const recoveryPages = new Set([
+      'billing',
+      'subscription_expired',
+      'profile',
+    ]);
+
+    if (recoveryPages.has(page)) {
+      return;
+    }
+
+    let nextPage = '';
+
+    if (saasSummary.isExpired || saasSummary.isSuspended) {
+      nextPage = 'subscription_expired';
+    }
+
+    if (!nextPage || nextPage === page) {
+      return;
+    }
+
+    setPage(nextPage, { replace: true });
+  }, [
+    page,
+    setPage,
+    saasSummary.isExpired,
+    saasSummary.isSuspended,
+    canOpenTenantBilling,
+  ]);
 
   useEffect(() => {
     function handleOutsideClick(event) {
@@ -1465,8 +1832,29 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
   }, [notificationOpen]);
 
   function goTo(nextPage) {
+    const requestedPage = String(nextPage || 'dashboard').trim() || 'dashboard';
+    const recoveryPages = new Set([
+      'billing',
+      'subscription_expired',
+      'profile',
+    ]);
+
+    let resolvedPage = requestedPage;
+
+    /*
+      An expired/suspended tenant must not briefly render Dashboard or another
+      protected module and then wait for its API calls to fail.
+    */
+    if (!recoveryPages.has(requestedPage)) {
+      if (saasSummary.isExpired || saasSummary.isSuspended) {
+        resolvedPage = 'subscription_expired';
+      }
+    }
+
     if (typeof setPage === 'function') {
-      setPage(nextPage || 'dashboard');
+      setPage(resolvedPage, {
+        replace: resolvedPage !== requestedPage,
+      });
     }
 
     setSidebarOpen(false);
@@ -1475,49 +1863,16 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
 
   function goToBilling() {
     goTo('billing');
-
-    try {
-      window.history.pushState({}, '', '/hrms/billing');
-    } catch {
-      // Ignore browser history errors.
-    }
   }
 
   function goToSubscriptionExpired() {
     goTo('subscription_expired');
-
-    try {
-      window.history.pushState({}, '', '/hrms/subscription-expired');
-    } catch {
-      // Ignore browser history errors.
-    }
   }
 
   function goToNotificationTarget(target) {
     const normalizedTarget = String(target || 'notifications').trim() || 'notifications';
 
-    if (typeof setPage === 'function') {
-      setPage(normalizedTarget);
-    }
-
-    setSidebarOpen(false);
-    setNotificationOpen(false);
-
-    try {
-      const routeMap = {
-        billing: '/hrms/billing',
-        subscription_expired: '/hrms/subscription-expired',
-        premium_requests: '/hrms/premium-requests',
-      };
-
-      window.history.pushState(
-        {},
-        '',
-        routeMap[normalizedTarget] || '/hrms',
-      );
-    } catch {
-      // Ignore browser history errors.
-    }
+    goTo(normalizedTarget);
   }
 
   function logout() {
@@ -1528,7 +1883,7 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
     }
 
     if (typeof setPage === 'function') {
-      setPage('dashboard');
+      setPage('dashboard', { syncUrl: false });
     }
 
     setSidebarOpen(false);
@@ -1631,20 +1986,6 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
           box-shadow:
             0 18px 38px rgba(15, 23, 42, .14),
             inset 0 1px 0 rgba(255, 255, 255, .98);
-        }
-
-        .layout-photo-aware .side-brand.platform-side-brand::after {
-          content: '';
-          position: absolute;
-          z-index: -1;
-          width: 100px;
-          height: 100px;
-          right: -54px;
-          bottom: -62px;
-          border-radius: 999px;
-          background: rgba(79, 70, 229, .08);
-          pointer-events: none;
-          animation: platformAccentDrift 7s ease-in-out infinite;
         }
 
         .layout-photo-aware .platform-side-logo {
@@ -2649,7 +2990,11 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
           </div>
         ) : null}
 
-        <nav className="sidebar-navigation" aria-label="Primary navigation">
+        <nav
+          ref={sidebarNavigationRef}
+          className="sidebar-navigation"
+          aria-label="Primary navigation"
+        >
           <button
             type="button"
             className={`sidebar-nav-item sidebar-dashboard-item ${

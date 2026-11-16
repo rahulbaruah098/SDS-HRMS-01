@@ -506,19 +506,6 @@ export default function Assets() {
             box-shadow: 12px 14px 0 #c6d8f7, 0 28px 48px rgba(34,38,110,.13);
           }
 
-          .asset-hero-main::before {
-            content: "";
-            position: absolute;
-            z-index: -1;
-            width: 175px;
-            height: 175px;
-            right: 8%;
-            bottom: -98px;
-            border-radius: 38% 62% 58% 42% / 48% 43% 57% 52%;
-            background: linear-gradient(145deg, rgba(105,217,208,.30), rgba(132,181,241,.28));
-            transform: rotate(-18deg);
-          }
-
           .asset-eyebrow {
             display: inline-flex;
             align-items: center;

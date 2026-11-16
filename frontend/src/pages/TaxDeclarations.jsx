@@ -1828,16 +1828,6 @@ export default function TaxDeclarations({ user = {} }) {
           box-shadow: 0 16px 42px rgba(15, 23, 42, 0.07);
         }
 
-        .taxdec-hero::after {
-          position: absolute;
-          right: -48px;
-          bottom: -75px;
-          width: 210px;
-          height: 210px;
-          border-radius: 50%;
-          background: rgba(76, 94, 201, 0.07);
-          content: '';
-        }
 
         .taxdec-hero-content,
         .taxdec-hero-actions {

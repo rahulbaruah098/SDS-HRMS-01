@@ -6,6 +6,7 @@ from app.extensions import get_db
 from app.utils.auth import audit
 from app.middleware.tenant_guard import tenant_module_required
 from app.utils.serializers import clean_doc
+from app.services.active_employee_scope import active_employee_fields
 
 
 projects_bp = Blueprint("projects", __name__)
@@ -191,13 +192,7 @@ def get_current_employee(db):
         "$or": identifier_or,
     })
 
-    if employee:
-        return employee
-
-    return db.employees.find_one({
-        "is_deleted": {"$ne": True},
-        "$or": identifier_or,
-    })
+    return employee
 
 
 def current_employee_id(db):
@@ -636,10 +631,7 @@ def resolve_employee(db, employee_id, tenant_id=None):
     if not raw_id:
         return None
 
-    base = {
-        "is_deleted": {"$ne": True},
-        "status": {"$ne": "Inactive"},
-    }
+    base = active_employee_fields()
 
     if tenant_id:
         base["tenant_id"] = tenant_id
@@ -672,11 +664,7 @@ def resolve_employee_by_user_id(db, user_id, tenant_id=None):
     if not user_id:
         return None
 
-    q = {
-        "user_id": str(user_id),
-        "is_deleted": {"$ne": True},
-        "status": {"$ne": "Inactive"},
-    }
+    q = {"user_id": str(user_id), **active_employee_fields()}
 
     if tenant_id:
         q["tenant_id"] = tenant_id
@@ -971,7 +959,7 @@ def find_department_team_leader(db, tenant_id, department):
     employees = list(db.employees.find({
         "tenant_id": tenant_id,
         "is_deleted": {"$ne": True},
-        "status": {"$ne": "Inactive"},
+        **active_employee_fields(),
         "department": department,
     }))
 
@@ -983,7 +971,7 @@ def find_department_team_leader(db, tenant_id, department):
     employees = list(db.employees.find({
         "tenant_id": tenant_id,
         "is_deleted": {"$ne": True},
-        "status": {"$ne": "Inactive"},
+        **active_employee_fields(),
     }))
 
     for employee in employees:
@@ -1182,6 +1170,15 @@ def unique_people(people):
     return result
 
 
+def active_project_member(db, tenant_id, member, relation):
+    """Only currently active employee records are nodes in the project map."""
+    employee_ref = normalize_text(
+        member.get('employee_id') or member.get('_id') or member.get('id')
+    )
+    employee = resolve_employee(db, employee_ref, tenant_id)
+    return employee_member_payload(employee, relation) if employee else None
+
+
 def build_project_team_tree(db, project, latest=None):
     tenant_id = project.get("tenant_id") or current_tenant_id()
     latest = latest or {}
@@ -1192,7 +1189,7 @@ def build_project_team_tree(db, project, latest=None):
     if project.get("team_leader_id"):
         team_leader = resolve_employee(db, project.get("team_leader_id"), tenant_id)
 
-    if not team_leader and project.get("team_leader_name"):
+    if not team_leader and not project.get("team_leader_id") and project.get("team_leader_name"):
         team_leader = {
             "_id": project.get("team_leader_id") or "",
             "name": project.get("team_leader_name"),
@@ -1209,7 +1206,7 @@ def build_project_team_tree(db, project, latest=None):
         if mapped_ro_id:
             reporting_officer = resolve_employee(db, mapped_ro_id, tenant_id)
 
-    if not reporting_officer and project.get("reporting_officer_name"):
+    if not reporting_officer and not project.get("reporting_officer_id") and project.get("reporting_officer_name"):
         reporting_officer = {
             "_id": project.get("reporting_officer_id") or "",
             "name": project.get("reporting_officer_name"),
@@ -1219,9 +1216,10 @@ def build_project_team_tree(db, project, latest=None):
         }
 
     assigned_members = [
-        enrich_member_from_db(db, tenant_id, member, "assigned_member")
-        for member in project.get("assigned_members", [])
+        resolved for member in project.get("assigned_members", [])
         if isinstance(member, dict)
+        for resolved in [active_project_member(db, tenant_id, member, "assigned_member")]
+        if resolved
     ]
 
     primary_assignee_id = normalize_text(
@@ -1263,9 +1261,10 @@ def build_project_team_tree(db, project, latest=None):
     )
 
     collaborators = [
-        enrich_member_from_db(db, tenant_id, member, "collaborator")
-        for member in project.get("collaborators", [])
+        resolved for member in project.get("collaborators", [])
         if isinstance(member, dict)
+        for resolved in [active_project_member(db, tenant_id, member, "collaborator")]
+        if resolved
     ]
 
     latest_progress_person = None
@@ -1278,19 +1277,6 @@ def build_project_team_tree(db, project, latest=None):
         latest_employee = resolve_employee(db, latest_employee_id, tenant_id)
         if latest_employee:
             latest_progress_person = employee_member_payload(latest_employee, "latest_progress_by")
-
-    if not latest_progress_person and (latest.get("employee_name") or project.get("latest_progress_by_name")):
-        latest_progress_person = {
-            "employee_id": latest_employee_id,
-            "employee_name": latest.get("employee_name") or project.get("latest_progress_by_name"),
-            "name": latest.get("employee_name") or project.get("latest_progress_by_name"),
-            "employee_code": latest.get("employee_code", ""),
-            "department": latest.get("employee_department") or project.get("department", ""),
-            "designation": latest.get("employee_designation", ""),
-            "avatar": "",
-            "profile_photo": "",
-            "relation": "latest_progress_by",
-        }
 
     doing_people = assigned_members if assigned_members else []
     if not doing_people and latest_progress_person:
@@ -1623,16 +1609,13 @@ def project_card(project, latest=None, include_tree=True):
         else {}
     )
     primary_assignee_id = normalize_text(
-        project.get("assigned_to_id")
-        or project.get("primary_assignee_id")
-        or primary_assignee.get("employee_id")
+        primary_assignee.get("employee_id") if include_tree
+        else (project.get("assigned_to_id") or project.get("primary_assignee_id"))
     )
     primary_assignee_name = (
-        project.get("assigned_to_name")
-        or project.get("primary_assignee_name")
-        or primary_assignee.get("employee_name")
-        or primary_assignee.get("name")
-        or ""
+        (primary_assignee.get("employee_name") or primary_assignee.get("name") or "")
+        if include_tree else
+        (project.get("assigned_to_name") or project.get("primary_assignee_name") or "")
     )
     can_manage_team = can_manage_project_team(db, project)
 
@@ -1648,12 +1631,12 @@ def project_card(project, latest=None, include_tree=True):
         "due_date": project.get("due_date", ""),
         "priority": project.get("priority", "medium"),
 
-        "reporting_officer_id": project.get("reporting_officer_id", "") or reporting_officer.get("employee_id", ""),
-        "reporting_officer_name": project.get("reporting_officer_name", "") or reporting_officer.get("employee_name", ""),
+        "reporting_officer_id": reporting_officer.get("employee_id", ""),
+        "reporting_officer_name": reporting_officer.get("employee_name", ""),
         "reporting_officer": reporting_officer,
 
-        "team_leader_id": project.get("team_leader_id", "") or team_leader.get("employee_id", ""),
-        "team_leader_name": project.get("team_leader_name", "") or team_leader.get("employee_name", ""),
+        "team_leader_id": team_leader.get("employee_id", ""),
+        "team_leader_name": team_leader.get("employee_name", ""),
         "team_leader": team_leader,
 
         "assigned_to_id": primary_assignee_id,
@@ -1663,10 +1646,10 @@ def project_card(project, latest=None, include_tree=True):
         "primary_assignee": primary_assignee,
         "doing_person_id": primary_assignee_id,
         "doing_person_name": primary_assignee_name,
-        "assigned_employee_ids": project.get("assigned_employee_ids", []),
+        "assigned_employee_ids": [member.get("employee_id") for member in project_team_tree.get("assigned_members", [])] if project_team_tree else project.get("assigned_employee_ids", []),
         "assigned_members": project_team_tree.get("assigned_members", project.get("assigned_members", [])) if project_team_tree else project.get("assigned_members", []),
 
-        "collaborator_ids": project.get("collaborator_ids", []),
+        "collaborator_ids": [member.get("employee_id") for member in project_team_tree.get("collaborators", [])] if project_team_tree else project.get("collaborator_ids", []),
         "collaborators": project_team_tree.get("collaborators", project.get("collaborators", [])) if project_team_tree else project.get("collaborators", []),
 
         "doing_people": doing_people,
@@ -1964,7 +1947,7 @@ def project_assignable_employee_query(current_emp):
     base = {
         "tenant_id": tenant_id,
         "is_deleted": {"$ne": True},
-        "status": {"$ne": "Inactive"},
+        **active_employee_fields(),
     }
 
     if is_admin_view_user():
@@ -2033,7 +2016,7 @@ def project_team_leader_query(current_emp):
     base = {
         "tenant_id": tenant_id,
         "is_deleted": {"$ne": True},
-        "status": {"$ne": "Inactive"},
+        **active_employee_fields(),
     }
     capability_or = capability_query_or("team_leader")
 
@@ -2078,7 +2061,7 @@ def project_reporting_officer_query(current_emp):
     base = {
         "tenant_id": tenant_id,
         "is_deleted": {"$ne": True},
-        "status": {"$ne": "Inactive"},
+        **active_employee_fields(),
     }
     capability_or = capability_query_or("reporting_officer")
 

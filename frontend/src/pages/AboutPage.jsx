@@ -104,6 +104,51 @@ const trustDisciplines = [
   ["Human authority", "Keep material employment, payroll and selection decisions under authorised human control."],
 ];
 
+const teamMembers = [
+  {
+    name: "Rahul Baruah",
+    role: "IT Head & Team Leader, Sayanant Group · Senior Lead Developer",
+    summary:
+      "Built YourComate from scratch, leading the entire project from system architecture and development to deployment and ongoing improvements.",
+    handled: [
+      "Project leadership",
+      "System architecture",
+      "Full-stack development",
+      "Web & mobile integration",
+      "Deployment & maintenance",
+    ],
+    focus: "End-to-end project leadership",
+  },
+  {
+    name: "Shantanu Phukan",
+    role: "Web Designer & Frontend UI/UX Developer",
+    summary:
+      "Designed and developed YourComate’s web experience, focusing on responsive interfaces, intuitive user flows and a consistent visual experience across different screen sizes and devices.",
+    handled: [
+      "Web design",
+      "Frontend development",
+      "UI/UX design",
+      "Responsive layouts",
+      "Interface optimization",
+    ],
+    focus: "Web design & frontend experience",
+  },
+  {
+    name: "Atlanta Gogoi",
+    role: "Mobile App Developer",
+    summary:
+      "Developed the mobile app version of YourComate, bringing core HRMS features to mobile with responsive app interfaces, smooth user flows and reliable integration with the YourComate backend.",
+    handled: [
+      "Mobile app development",
+      "App UI implementation",
+      "API integration",
+      "Responsive app interfaces",
+      "Testing & optimization",
+    ],
+    focus: "Mobile app development & integration",
+  },
+];
+
 function YourComateSectionHeading({ eyebrow, title, copy }) {
   return (
     <header className="yc-ycprofile-heading">
@@ -626,6 +671,63 @@ export default function AboutPage() {
           </div>
         </div>
       </section>
+
+      <section className="yc-ycprofile-section yc-ycprofile-team">
+        <div className="page-width">
+          <div className="yc-ycprofile-team-editorial">
+            <div
+              className="yc-ycprofile-team-roster"
+              aria-label="YourComate developing team"
+            >
+              {teamMembers.map((member, index) => (
+                <article
+                  className="yc-ycprofile-team-member"
+                  key={member.name}
+                >
+                  <div className="yc-ycprofile-team-member-marker">
+                    <span>{String(index + 1).padStart(2, "0")}</span>
+                    <small>{member.focus}</small>
+                  </div>
+
+                  <div className="yc-ycprofile-team-member-copy">
+                    <h3>{member.name}</h3>
+                    <strong>{member.role}</strong>
+                    <p>{member.summary}</p>
+
+                    <div className="yc-ycprofile-team-member-areas">
+                      <span>KEY AREAS</span>
+                      <p>{member.handled.join(" · ")}</p>
+                    </div>
+                  </div>
+                </article>
+              ))}
+            </div>
+
+            <aside
+              className="yc-ycprofile-team-wordmark"
+              aria-label="Meet our developing team"
+            >
+              <small>MEET THE DEVELOPERS BEHIND YOURCOMATE</small>
+
+              <h2 aria-label="Meet Our Team">
+                <span>THE</span>
+                <span>MINDS</span>
+                <span>BEHIND</span>
+              </h2>
+
+              <p>
+                A focused product team bringing design, engineering, quality and
+                delivery together around the YourComate experience.
+              </p>
+            </aside>
+          </div>
+
+          <p className="yc-ycprofile-team-note">
+            Team details are presented as text-only profiles.
+          </p>
+        </div>
+      </section>
+
     </main>
   );
 }

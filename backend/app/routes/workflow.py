@@ -6,6 +6,7 @@ import os
 from app.extensions import get_db
 from app.utils.auth import roles_required, current_user_required, audit
 from app.utils.serializers import clean_doc
+from app.services.active_employee_scope import active_employee_fields
 from app.middleware.tenant_guard import tenant_module_required
 from app.routes.attendance import (
     attendance_schedule_for_tenant,
@@ -1225,7 +1226,7 @@ def department_employee_query(tenant_id, department_values):
     return {
         "tenant_id": tenant_id,
         "is_deleted": {"$ne": True},
-        "status": {"$ne": "Inactive"},
+        **active_employee_fields(),
         "$or": [
             {"department_id": {"$in": department_values}},
             {"department": {"$in": department_values}},
@@ -1274,7 +1275,7 @@ def team_employee_query(tenant_id, owner_values, team_type=""):
     return {
         "tenant_id": tenant_id,
         "is_deleted": {"$ne": True},
-        "status": {"$ne": "Inactive"},
+        **active_employee_fields(),
         "$or": team_or,
     }
 
@@ -1285,7 +1286,7 @@ def notification_department_options(db, tenant_id):
             {
                 "tenant_id": tenant_id,
                 "is_deleted": {"$ne": True},
-                "status": {"$ne": "Inactive"},
+                **active_employee_fields(),
             },
             {
                 "department": 1,
@@ -1324,7 +1325,7 @@ def notification_team_options(db, tenant_id):
             {
                 "tenant_id": tenant_id,
                 "is_deleted": {"$ne": True},
-                "status": {"$ne": "Inactive"},
+                **active_employee_fields(),
                 "$or": [
                     {"is_team_leader": True},
                     {"is_reporting_officer": True},
@@ -4531,6 +4532,126 @@ def application_status():
 # Leave management APIs
 # -----------------------------------------------------------------------------
 
+
+
+@workflow_bp.get("/leave_balances/export")
+@tenant_module_required("apply_leave")
+@roles_required(*LEAVE_BALANCE_MANAGER_ROLES)
+def export_leave_balances():
+    """Export a current balance snapshot and dated leave requests (not a backdated ledger)."""
+    from flask import Response
+    from app.services.leave_balance_export import build_leave_balance_workbook
+    from io import BytesIO
+
+    def parse_iso(value):
+        try:
+            return date.fromisoformat(str(value))
+        except (ValueError, TypeError):
+            return None
+
+    period = normalize_text(request.args.get("period") or "current").lower()
+    if period not in {"current", "weekly", "monthly", "custom"}:
+        return jsonify({"message": "Invalid export period"}), 400
+    anchor = parse_iso(request.args.get("on_date")) or date.today()
+    if period == "weekly":
+        start = anchor - timedelta(days=anchor.weekday())
+        end = start + timedelta(days=6)
+    elif period == "monthly":
+        start = anchor.replace(day=1)
+        next_month = (start.replace(day=28) + timedelta(days=4)).replace(day=1)
+        end = next_month - timedelta(days=1)
+    elif period == "custom":
+        start = parse_iso(request.args.get("date_from"))
+        end = parse_iso(request.args.get("date_to"))
+        if not start or not end:
+            return jsonify({"message": "Valid start and end dates are required"}), 400
+    else:
+        start = end = None
+    if start and (start > end or (end - start).days > 366):
+        return jsonify({"message": "Choose a valid range of up to 366 days"}), 400
+
+    tenant = current_tenant_id()
+    db = get_db()
+    search = normalize_text(request.args.get("search")).lower()
+    department = normalize_text(request.args.get("department"))
+    leave_type = normalize_text(request.args.get("leave_type") or "ALL").upper()
+    balance_filter = normalize_text(request.args.get("balance_filter") or "all").lower()
+    if leave_type not in {"ALL", "CL", "EL"} or balance_filter not in {"all", "zero", "positive", "negative"}:
+        return jsonify({"message": "Invalid balance filters"}), 400
+
+    employee_docs = list(db.employees.find({"tenant_id": tenant, "is_deleted": {"$ne": True}}).limit(5000))
+    excluded = {"inactive", "disabled", "resigned", "resign", "left", "terminated", "retired", "deleted", "alumni", "ex-employee", "ex_employee"}
+    def active(emp):
+        if emp.get("is_active") is False or emp.get("is_alumni") is True:
+            return False
+        return not any(str(emp.get(f) or "").strip().lower() in excluded for f in ("status", "employment_status", "employee_status"))
+    employees = {}
+    for emp in employee_docs:
+        if not active(emp):
+            continue
+        eid = str(emp["_id"])
+        name = employee_display_name(emp)
+        code = employee_code(emp)
+        dept = str(emp.get("department") or "")
+        designation = str(emp.get("designation") or "")
+        if department and dept != department:
+            continue
+        if search and search not in " ".join((name, code, dept, designation, str(emp.get("email") or ""))).lower():
+            continue
+        employees[eid] = (name, code, dept, designation)
+
+    balances = {eid: {} for eid in employees}
+    if employees:
+        query = {"tenant_id": tenant, "employee_id": {"$in": list(employees)}, "is_deleted": {"$ne": True}}
+        for b in db.leave_balances.find(query):
+            kind = normalize_leave_type(b.get("leave_type"))
+            if kind in {"CL", "EL"}:
+                balances[str(b["employee_id"])][kind] = b
+
+    snapshot = []
+    selected_ids = set()
+    for eid, details in sorted(employees.items(), key=lambda it: it[1][0].lower()):
+        types = ("CL", "EL") if leave_type == "ALL" else (leave_type,)
+        for kind in types:
+            b = balances[eid].get(kind, {})
+            available = float(b.get("available") or 0)
+            if balance_filter == "zero" and available != 0:
+                continue
+            if balance_filter == "positive" and available <= 0:
+                continue
+            if balance_filter == "negative" and available >= 0:
+                continue
+            snapshot.append([details[0], details[1], details[2], details[3], kind,
+                             float(b.get("opening_balance") or 0), float(b.get("credited") or 0),
+                             float(b.get("used") or 0), available])
+            selected_ids.add(eid)
+
+    activity = []
+    if start and selected_ids:
+        query = {"tenant_id": tenant, "employee_id": {"$in": list(selected_ids)},
+                 "is_deleted": {"$ne": True},
+                 "from_date": {"$lte": end.isoformat()}, "to_date": {"$gte": start.isoformat()}}
+        for leave in db.leave_requests.find(query).sort("from_date", 1).limit(10000):
+            kind = normalize_leave_type(leave.get("deducted_leave_type") or leave.get("leave_type"))
+            if leave_type != "ALL" and kind != leave_type:
+                continue
+            eid = str(leave.get("employee_id") or "")
+            details = employees.get(eid)
+            if not details:
+                continue
+            activity.append([details[0], details[1], details[2],
+                            leave.get("from_date") or "", leave.get("to_date") or "",
+                            kind or str(leave.get("leave_type") or ""),
+                            str(leave.get("status") or ""),
+                            float(leave.get("leave_days") or 0),
+                            "Yes" if leave.get("balance_deducted") else "No"])
+
+    workbook = build_leave_balance_workbook(snapshot, activity, period, start, end, tenant)
+    filename = f"Leave_Balances_{tenant}_{period}_{anchor.isoformat()}.xlsx"
+    return Response(workbook, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": f'attachment; filename="{filename}"',
+                             "Cache-Control": "no-store"})
+
 @workflow_bp.get("/leave_balances")
 @tenant_module_required("apply_leave")
 @current_user_required
@@ -4579,6 +4700,133 @@ def create_or_update_leave_balances():
         return jsonify({"message": "employee_id is required"}), 400
 
     return set_leave_balance(employee_id)
+
+
+@workflow_bp.patch("/leave_balances/<employee_id>/set-available")
+@tenant_module_required("apply_leave")
+@roles_required(*LEAVE_BALANCE_MANAGER_ROLES)
+def correct_leave_available_balance(employee_id):
+    """Rebase a CL/EL balance to an exact available amount; preserve used leave.
+
+    This is an administrative correction, not an additive credit. A before/after
+    snapshot is retained in an append-only correction record for audit review.
+    """
+    import math
+
+    employee_obj_id = safe_object_id(employee_id)
+    if not employee_obj_id:
+        return jsonify({"message": "Invalid employee id"}), 400
+
+    data = request.get_json(silent=True) or {}
+    leave_type = normalize_leave_type(data.get("leave_type"))
+    if leave_type not in LEAVE_TYPES_WITH_BALANCE:
+        return jsonify({"message": "Leave type must be CL or EL"}), 400
+
+    raw_target = data.get("available")
+    if isinstance(raw_target, bool) or raw_target is None or str(raw_target).strip() == "":
+        return jsonify({"message": "An exact available balance is required"}), 400
+    try:
+        target = float(raw_target)
+    except (ValueError, TypeError):
+        return jsonify({"message": "Available balance must be a number"}), 400
+    if not math.isfinite(target) or target < 0 or round(target * 2) != target * 2:
+        return jsonify({"message": "Balance must be non-negative in half-day increments"}), 400
+
+    reason = normalize_text(data.get("reason"))
+    if len(reason) < 5 or len(reason) > 500:
+        return jsonify({"message": "Provide a correction reason (5–500 characters)"}), 400
+
+    # Even super administrators correct only within their current tenant context.
+    # Never accept a tenant_id supplied in the request body.
+    tenant_id = current_tenant_id()
+    db = get_db()
+    employee = db.employees.find_one({
+        "_id": employee_obj_id,
+        "tenant_id": tenant_id,
+        "is_deleted": {"$ne": True},
+    })
+    if not employee:
+        return jsonify({"message": "Employee not found in this tenant"}), 404
+
+    balance = get_leave_balance(db, employee, leave_type)
+    if not balance:
+        # A missing balance is equivalent to zero; avoid inserting records until
+        # all validations have succeeded.
+        balance = ensure_leave_balance(db, employee, leave_type)
+
+    old_available = float(balance.get("available", 0) or 0)
+    old_used = float(balance.get("used", 0) or 0)
+    if not math.isfinite(old_used) or old_used < 0:
+        return jsonify({"message": "Stored used-leave value requires review"}), 409
+
+    # Prevent overwriting a newer value loaded in a second browser tab.
+    if "expected_available" in data:
+        try:
+            expected = float(data["expected_available"])
+        except (TypeError, ValueError):
+            return jsonify({"message": "Invalid expected balance"}), 400
+        if not math.isfinite(expected) or abs(expected - old_available) > 0.000001:
+            return jsonify({"message": "Balance changed; refresh before editing"}), 409
+
+    before = {
+        key: float(balance.get(key, 0) or 0)
+        for key in ("opening_balance", "credited", "used", "available")
+    }
+    # All three canonical fields remain consistent after this correction:
+    # opening + credited - used = exact requested available.
+    # Past leave requests and deductions are not changed.
+    after = {
+        "opening_balance": target + old_used,
+        "credited": 0.0,
+        "used": old_used,
+        "available": target,
+    }
+    now = datetime.utcnow()
+    match = {
+        "_id": balance["_id"],
+        "tenant_id": tenant_id,
+        "employee_id": str(employee_obj_id),
+        "is_deleted": {"$ne": True},
+        # Compare-and-swap prevents a concurrent leave deduction being lost.
+        "used": balance.get("used"),
+        "available": balance.get("available"),
+        "credited": balance.get("credited"),
+        "opening_balance": balance.get("opening_balance"),
+    }
+    updated = db.leave_balances.update_one(match, {"$set": {
+        **after,
+        "updated_at": now,
+        "updated_by": str(g.current_user["_id"]),
+        "updated_by_name": g.current_user.get("name") or g.current_user.get("email"),
+    }})
+    if updated.matched_count != 1:
+        return jsonify({"message": "Balance changed concurrently; refresh and retry"}), 409
+
+    audit_entry = {
+        "tenant_id": tenant_id,
+        "employee_id": str(employee_obj_id),
+        "leave_type": leave_type,
+        "action": "set_available",
+        "reason": reason,
+        "before": before,
+        "after": after,
+        "changed_by": str(g.current_user["_id"]),
+        "changed_by_name": g.current_user.get("name") or g.current_user.get("email"),
+        "created_at": now,
+    }
+    db.leave_balance_corrections.insert_one(audit_entry)
+    audit("correct_leave_balance", "leave_balances", str(balance["_id"]), {
+        "employee_id": str(employee_obj_id),
+        "leave_type": leave_type,
+        "reason": reason,
+        "before": before,
+        "after": after,
+    })
+    updated_balance = get_leave_balance(db, employee, leave_type)
+    return jsonify({
+        "message": "Leave balance corrected",
+        "item": clean_doc(updated_balance),
+    })
 
 
 @workflow_bp.patch("/leave_balances/<employee_id>")
@@ -4776,7 +5024,7 @@ def leave_request_options():
     member_query = {
         "tenant_id": tenant_id,
         "is_deleted": {"$ne": True},
-        "status": {"$ne": "Inactive"},
+        **active_employee_fields(),
     }
 
     if member_or_filters:
@@ -4874,6 +5122,42 @@ def leave_request_options():
         "projects": clean_doc(projects),
         "leave_balances": clean_doc(leave_balances),
     })
+
+
+def notice_leave_allocation_for_workflow(db, employee, leave_doc):
+    """Return a date-wise split, or None when Notice Period is disabled.
+
+    Use the same holiday eligibility check used by attendance reporting.
+    Fail closed when the legacy leave-day total differs from eligible days.
+    """
+    if not current_app.config.get("NOTICE_PERIOD_ENABLED", False):
+        return None
+    if not employee.get("notice_start_date") or not employee.get("last_working_day"):
+        return None
+    if str(employee.get("notice_status") or "").lower() not in (
+        "scheduled", "serving", "due_for_alumni"
+    ):
+        return None
+    if employee.get("notice_policy") != "leave_during_notice_is_lwp":
+        return None
+    from app.services.notice_leave_allocation import allocate_notice_leave
+    from app.routes.attendance import is_working_day_for_employee
+    first = parse_date(leave_doc.get("from_date"))
+    last = parse_date(leave_doc.get("to_date") or leave_doc.get("upto_date"))
+    if not first or not last or last < first or (last - first).days > 366:
+        raise ValueError("Invalid notice-period leave date range")
+    eligible = []
+    day = first
+    while day <= last:
+        if is_working_day_for_employee(db, employee, day):
+            eligible.append(day.isoformat())
+        day += timedelta(days=1)
+    return allocate_notice_leave(
+        employee, first, last, leave_doc.get("leave_days", 1), eligible,
+        is_half_day=(normalize_leave_type(leave_doc.get("leave_type")) == "HALF-DAY"
+                     or truthy(leave_doc.get("is_half_day"))
+                     or normalize_text(leave_doc.get("day_type")).lower() == "half_day"),
+    )
 
 
 @workflow_bp.get("/leave_requests")
@@ -5069,12 +5353,23 @@ def apply_leave_request():
         except ValueError as exc:
             return jsonify({"message": str(exc)}), 400
     else:
+        try:
+            notice_allocation = notice_leave_allocation_for_workflow(db, employee, {
+                "from_date": from_date.isoformat(),
+                "to_date": to_date.isoformat(),
+                "leave_days": leave_days,
+                "leave_type": leave_type,
+                "is_half_day": is_half_day_request,
+            })
+        except ValueError as exc:
+            return jsonify({"message": str(exc)}), 400
+        paid_check_days = float(notice_allocation["paid_days"]) if notice_allocation else leave_days
         sufficient, balance = has_sufficient_leave_balance(
             db,
             employee,
             leave_type,
-            leave_days,
-        )
+            paid_check_days,
+        ) if paid_check_days > 0 else (True, None)
 
         if not sufficient:
             return jsonify({
@@ -5171,6 +5466,160 @@ def apply_leave_request():
         "message": response_message,
         "item": clean_doc(enrich_leave_request_doc(doc)),
     }), 201
+
+
+class NoticeLeaveApprovalConflict(Exception):
+    """A safe, retryable notice-leave accounting conflict."""
+
+
+def finalize_notice_leave_transaction(
+    *, db, employee, existing, leave_obj_id, current_stage,
+    stage_fields, note, now, allocation, leave_type, leave_days,
+):
+    """Atomically approve and debit an eligible notice-period leave request.
+
+    All database reads/writes required for the balance debit and final status
+    transition share one MongoDB session. No external notification occurs here.
+    """
+    paid_days = float(allocation["paid_days"])
+    notice_lwp_days = float(allocation["notice_lwp_days"])
+    if paid_days < 0 or notice_lwp_days < 0 or abs(
+        paid_days + notice_lwp_days - leave_days
+    ) > 0.000001:
+        raise NoticeLeaveApprovalConflict("Leave allocation does not reconcile")
+
+    tenant = employee.get("tenant_id")
+    if not tenant or tenant != existing.get("tenant_id"):
+        raise NoticeLeaveApprovalConflict("Employee tenant mismatch")
+
+    if leave_type == "HALF-DAY" and paid_days not in (0.0, 0.5):
+        raise NoticeLeaveApprovalConflict("Invalid half-day allocation")
+
+    # A replica set alone is not sufficient: start_transaction and commit
+    # must both succeed; otherwise neither leave approval nor debit persists.
+    with db.client.start_session() as session:
+        with session.start_transaction():
+            active = db.leave_requests.find_one(
+                {
+                    "_id": leave_obj_id,
+                    "tenant_id": tenant,
+                    "status": {"$in": ["pending", "in_review"]},
+                    "approval_stage": existing.get("approval_stage"),
+                    "balance_deducted": {"$ne": True},
+                    "is_deleted": {"$ne": True},
+                },
+                session=session,
+            )
+            if active is None:
+                raise NoticeLeaveApprovalConflict(
+                    "Leave was already decided or changed; refresh"
+                )
+
+            current_employee = db.employees.find_one(
+                {"_id": employee["_id"], "tenant_id": tenant,
+                 "is_deleted": {"$ne": True}},
+                session=session,
+            )
+            if current_employee is None or any(
+                current_employee.get(field) != employee.get(field)
+                for field in (
+                    "notice_start_date", "last_working_day",
+                    "notice_status", "notice_policy", "notice_updated_at",
+                )
+            ):
+                raise NoticeLeaveApprovalConflict(
+                    "Notice schedule changed; refresh and re-approve"
+                )
+
+            deducted_type = leave_type
+            paid_balance_deducted = False
+            lwp_days = notice_lwp_days
+            if paid_days > 0:
+                choices = (["CL", "EL"] if leave_type == "HALF-DAY"
+                           else [leave_type])
+                found = False
+                for candidate in choices:
+                    balance = db.leave_balances.find_one(
+                        {"tenant_id": tenant,
+                         "employee_id": str(employee["_id"]),
+                         "leave_type": candidate,
+                         "is_deleted": {"$ne": True}},
+                        session=session,
+                    )
+                    if not balance or float(balance.get("available") or 0) < paid_days:
+                        continue
+                    updated_balance = db.leave_balances.update_one(
+                        {"_id": balance["_id"], "tenant_id": tenant,
+                         "available": {"$gte": paid_days}},
+                        {"$inc": {"available": -paid_days, "used": paid_days},
+                         "$set": {"updated_at": now}},
+                        session=session,
+                    )
+                    if updated_balance.modified_count != 1:
+                        raise NoticeLeaveApprovalConflict(
+                            "Leave balance changed; refresh and retry"
+                        )
+                    deducted_type = candidate
+                    paid_balance_deducted = True
+                    found = True
+                    break
+                if not found:
+                    if leave_type == "HALF-DAY":
+                        deducted_type = "LWP"
+                        lwp_days = leave_days
+                        # Explicit date ledger must follow the fallback LWP.
+                        allocation = {
+                            **allocation,
+                            "notice_lwp_dates": allocation["paid_dates"],
+                            "paid_dates": [],
+                        }
+                    else:
+                        raise NoticeLeaveApprovalConflict(
+                            "Insufficient paid leave balance at final approval"
+                        )
+
+            # A notice-only half day remains HALF-DAY with a precise LWP ledger.
+            if leave_type == "HALF-DAY" and paid_days == 0:
+                deducted_type = "HALF-DAY"
+
+            set_fields = {
+                "status": "approved",
+                "approval_stage": "approved",
+                "approval_stage_label": "Approved",
+                "decision_reason": note,
+                "approved_at": now,
+                "approved_by": str(g.current_user["_id"]),
+                "approved_by_name": (
+                    g.current_user.get("name") or g.current_user.get("email")
+                ),
+                "deducted_leave_type": deducted_type,
+                "deducted_leave_type_label": leave_type_label(deducted_type),
+                "balance_deducted": paid_balance_deducted,
+                "lwp_days": lwp_days,
+                "notice_lwp_dates": allocation["notice_lwp_dates"],
+                "notice_paid_dates": allocation["paid_dates"],
+                "notice_paid_balance_days": paid_days if paid_balance_deducted else 0.0,
+                "updated_at": now,
+                **stage_fields,
+            }
+            result = db.leave_requests.update_one(
+                {"_id": leave_obj_id, "tenant_id": tenant,
+                 "status": {"$in": ["pending", "in_review"]},
+                 "approval_stage": existing.get("approval_stage"),
+                 "balance_deducted": {"$ne": True}},
+                {"$set": set_fields,
+                 "$push": {"approval_history": create_leave_history_entry(
+                     "approved", current_stage, note
+                 )}},
+                session=session,
+            )
+            if result.modified_count != 1:
+                raise NoticeLeaveApprovalConflict(
+                    "Leave status changed concurrently; transaction rolled back"
+                )
+
+    # The transaction has committed before we fetch/publish the result.
+    return db.leave_requests.find_one({"_id": leave_obj_id, "tenant_id": tenant})
 
 
 @workflow_bp.patch("/leave_requests/<req_id>/decision")
@@ -5332,34 +5781,93 @@ def leave_decision(req_id):
     balance_deducted = False
     lwp_days = 0.0
 
+    # Notice allocation is computed before ANY balance write.
+    # Approved historical leave cannot be silently re-deducted here.
+    try:
+        notice_allocation = notice_leave_allocation_for_workflow(db, employee, existing)
+    except ValueError as exc:
+        return jsonify({"message": str(exc)}), 400
+
+    notice_paid_days = (float(notice_allocation["paid_days"])
+                        if notice_allocation is not None else leave_days)
+    notice_lwp_days = (float(notice_allocation["notice_lwp_days"])
+                       if notice_allocation is not None else 0.0)
+
+    if notice_allocation is not None and notice_lwp_days > 0 and leave_type == "COMP-OFF":
+        return jsonify({"message": "COMP-OFF across notice period requires HR review"}), 409
+
+    if notice_allocation is not None and existing.get("balance_deducted"):
+        return jsonify({"message": "Already-deducted leave requires balance reconciliation before notice approval"}), 409
+
+    # Notice-period final approval uses a single MongoDB transaction for both
+    # paid-leave balance accounting and final approval. Legacy approvals stay
+    # on their established path while Notice Period is disabled.
+    if notice_allocation is not None:
+        if leave_type == "COMP-OFF":
+            return jsonify({"message": "COMP-OFF notice leave requires HR review"}), 409
+        if leave_type not in LEAVE_TYPES_WITH_BALANCE and leave_type != "HALF-DAY":
+            return jsonify({"message": "Unsupported notice leave type requires HR review"}), 409
+        try:
+            updated = finalize_notice_leave_transaction(
+                db=db, employee=employee, existing=existing,
+                leave_obj_id=leave_obj_id, current_stage=current_stage,
+                stage_fields=current_stage_fields, note=note, now=now,
+                allocation=notice_allocation, leave_type=leave_type,
+                leave_days=leave_days,
+            )
+        except NoticeLeaveApprovalConflict as exc:
+            return jsonify({"message": str(exc)}), 409
+        except Exception:
+            current_app.logger.exception("Notice leave transaction failed")
+            return jsonify({"message": "Notice leave approval not completed; retry safely"}), 503
+
+        # External notifications and audit are deliberately outside the DB
+        # transaction. A retry sees an approved request and cannot deduct twice.
+        notify_employee_leave_decision(db, employee, updated, "approved")
+        notify_hr_leave_result(db, employee, updated, "approved")
+        audit("approve_leave_final", "leave_requests", req_id, data)
+        return jsonify({
+            "message": "Leave approved",
+            "item": clean_doc(enrich_leave_request_doc(updated)),
+        })
+
     if leave_type == "HALF-DAY" and not existing.get("balance_deducted"):
-        deduction_result = deduct_leave_balance(db, employee, existing)
-
-        deducted_leave_type = normalize_leave_type(
-            deduction_result.get("leave_type") if isinstance(deduction_result, dict) else leave_type
-        )
-        deducted_leave_type_label = leave_type_label(deducted_leave_type)
-
-        balance_deducted = deducted_leave_type in LEAVE_TYPES_WITH_BALANCE
-        lwp_days = leave_days if deducted_leave_type == "LWP" else 0.0
+        if notice_allocation is not None and notice_paid_days == 0:
+            deducted_leave_type = "HALF-DAY"
+            deducted_leave_type_label = leave_type_label("HALF-DAY")
+            lwp_days = notice_lwp_days
+        else:
+            deduction_result = deduct_leave_balance(db, employee, existing)
+            deducted_leave_type = normalize_leave_type(
+                deduction_result.get("leave_type") if isinstance(deduction_result, dict) else leave_type
+            )
+            deducted_leave_type_label = leave_type_label(deducted_leave_type)
+            balance_deducted = deducted_leave_type in LEAVE_TYPES_WITH_BALANCE
+            lwp_days = leave_days if deducted_leave_type == "LWP" else 0.0
 
     elif leave_type in LEAVE_TYPES_WITH_BALANCE and not existing.get("balance_deducted"):
-        sufficient, balance = has_sufficient_leave_balance(db, employee, leave_type, leave_days)
+        if notice_paid_days > 0:
+            sufficient, balance = has_sufficient_leave_balance(
+                db, employee, leave_type, notice_paid_days
+            )
+            if not sufficient:
+                return jsonify({
+                    "message": f"Insufficient {leave_type_label(leave_type)} balance at final approval",
+                    "available": float(balance.get("available", 0) or 0) if balance else 0,
+                }), 400
+            # Deduct paid working-day fraction, not the whole leave request.
+            paid_slice = {**existing, "leave_days": notice_paid_days}
+            result = deduct_leave_balance(db, employee, paid_slice)
+            if result is None:
+                return jsonify({"message": "Leave balance deduction failed; retry"}), 409
+            balance_deducted = True
+        lwp_days = notice_lwp_days
 
-        if not sufficient:
-            return jsonify({
-                "message": f"Insufficient {leave_type_label(leave_type)} balance at final approval",
-                "available": float(balance.get("available", 0) or 0) if balance else 0,
-            }), 400
-
-        deduct_leave_balance(db, employee, existing)
-        balance_deducted = True
-    
     elif leave_type == "COMP-OFF":
         balance_deducted = False
         deducted_leave_type = "COMP-OFF"
         deducted_leave_type_label = leave_type_label("COMP-OFF")
-        
+
     update_set = {
         "status": "approved",
         "approval_stage": "approved",
@@ -5371,6 +5879,11 @@ def leave_decision(req_id):
         "deducted_leave_type": deducted_leave_type,
         "deducted_leave_type_label": deducted_leave_type_label,
         "lwp_days": lwp_days,
+        **({
+            "notice_lwp_dates": notice_allocation["notice_lwp_dates"],
+            "notice_paid_dates": notice_allocation["paid_dates"],
+            "notice_paid_balance_days": notice_paid_days,
+        } if notice_allocation and notice_lwp_days > 0 else {}),
         "balance_deducted": balance_deducted,
         "compoff_status": "used" if leave_type == "COMP-OFF" else existing.get("compoff_status", ""),
         "updated_at": now,

@@ -18,6 +18,7 @@ import {
 import Stat from '../components/Stat';
 import Table from '../components/Table';
 import AttendanceWidget from '../components/AttendanceWidget';
+import SprintAdminOverview from './SprintAdminOverview';
 import { useCustomAlert } from '../components/CustomAlertProvider.jsx';
 
 function formatDate(value) {
@@ -551,7 +552,7 @@ function ProjectTeamRootCard({ project }) {
   );
 }
 
-export default function AdminDashboard({ setPage }) {
+export default function AdminDashboard({ setPage, user = {}, sprintEnabled = false }) {
   const alerts = useCustomAlert();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -3395,6 +3396,18 @@ export default function AdminDashboard({ setPage }) {
             <Stat key={label} label={label} value={value} />
           ))}
         </section>
+      )}
+      {/* Sprint Planning is restricted to non-admin roles. */}
+      {sprintEnabled && !([user.role, user.primary_role, ...(Array.isArray(user.roles) ? user.roles : [])]
+        .map(role => String(role || '').trim().toLowerCase().replaceAll('-', '_').replaceAll(' ', '_'))
+        .some(role => ['super_admin'].includes(role))) && (
+        <section
+        className="admin-sprint-analytics"
+        aria-label="Organisation Sprint Planning Analytics"
+        style={{ minWidth: 0 }}
+      >
+        <SprintAdminOverview setPage={setPage} />
+      </section>
       )}
 
       <section className="admin-project-hero">
