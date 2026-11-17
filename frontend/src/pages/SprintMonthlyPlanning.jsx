@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   CalendarDays, ClipboardList, Plus, Trash2, RefreshCw,
   Send, CheckCircle2, Printer, Download, FileText, ChevronDown
@@ -12,7 +13,9 @@ import SprintMonthlySavedFields from '../components/SprintMonthlySavedFields';
 import { useCustomAlert } from '../components/CustomAlertProvider';
 import SprintMonthlyTeamCompilation from './SprintMonthlyTeamCompilation';
 import SprintMonthlyApprovalQueue from './SprintMonthlyApprovalQueue';
-import { getEmployeeDirectory } from '../api/client';
+import SprintMonthlyPlanModal from '../components/SprintMonthlyPlanModal';
+import { api, getEmployeeDirectory } from '../api/client';
+import { tenantHolidayMap, dayType, nextWorkingDate, firstWorkingDate, monthCalendar } from '../utils/sprintWorkingCalendar.mjs';
 
 
 // Employee names are resolved from the existing tenant-scoped directory.
@@ -58,7 +61,7 @@ const makeRow = month => ({
   objective: '', activity: '', deliverable: '', kpi: '',
   target_quantity: '', unit: '', priority: 'medium',
   start_date: `${month}-01`, end_date: monthLastDate(month),
-  dependencies: '', weightage: '', remarks: '', weeks: []
+  dependencies: '', weightage: '', remarks: '', weeks: [], daily_targets: []
 });
 
 const labels = {
@@ -96,7 +99,7 @@ const csvEscape = value => {
 };
 
 function exportCsv(plan, rows, people = new Map()) {
-  const headers = ['Sl. No.', ...columns.map(c => c[1]), 'Weeks'];
+  const headers = ['Sl. No.', ...columns.map(c => c[1]), 'Weeks', 'Daily Targets'];
   const data = rows.map((row, index) => [
     index + 1,
     ...columns.map(([key]) =>
@@ -106,7 +109,8 @@ function exportCsv(plan, rows, people = new Map()) {
           : row.responsible_employee || plan.employee_id || '')
         : row[key] ?? ''
     ),
-    (row.weeks || []).join(', ')
+    (row.weeks || []).join(', '),
+    (row.daily_targets || []).map(t => `${t.date}: ${t.title} [Target: ${t.target}]`).join(' | ')
   ]);
   const csv = '\ufeff' + [
     headers.map(csvEscape).join(','),
@@ -124,7 +128,48 @@ function exportCsv(plan, rows, people = new Map()) {
 }
 
 function SheetTable({ rows, onChange, onRemove, month, readOnly = false, employeeId = '', template = null, employeeLabel = 'Current employee' }) {
-  const [selectedKey, setSelectedKey] = useState(() => readOnly ? null : rows[0]?.key || null);
+  const [holidayMap, setHolidayMap] = useState({});
+  const [calendarStatus, setCalendarStatus] = useState('loading');
+  useEffect(() => {
+    let active = true;
+    setCalendarStatus('loading');
+    setHolidayMap({});
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month || '')) {
+      setCalendarStatus('error');
+      return () => { active = false; };
+    }
+    api(`/attendance/holidays?date_from=${month}-01&date_to=${monthLastDate(month)}`)
+      .then(data => {
+        if (!active) return;
+        // The attendance endpoint applies JWT tenant scoping. For HR/Admin,
+        // additionally filter its cross-state response to the actor's state.
+        const state = data?.default_state || '';
+        if (!state) throw new Error('Employee state is not configured for holiday scheduling.');
+        setHolidayMap(tenantHolidayMap(data?.items || [], state));
+        setCalendarStatus('ready');
+      })
+      .catch(() => { if (active) setCalendarStatus('error'); });
+    return () => { active = false; };
+  }, [month]);
+  const appendTarget = (row) => {
+    if (calendarStatus !== 'ready') return;
+    const targets = row.daily_targets || [];
+    if (targets.length >= 31) return;
+    const firstDate = firstWorkingDate(row.start_date || `${month}-01`, row.end_date || monthLastDate(month), holidayMap);
+    const lastDate = targets.length ? targets[targets.length - 1].date : '';
+    const next = lastDate ? nextWorkingDate(lastDate, holidayMap, row.end_date || monthLastDate(month)) : firstDate;
+    if (!next || next < (row.start_date || `${month}-01`)) return;
+    onChange(row.key,'daily_targets',[...targets,{date:next,title:'',target:''}]);
+  };
+  const onTargetEnter = (event, row, index) => {
+    if (event.key !== 'Enter' || event.nativeEvent?.isComposing) return;
+    event.preventDefault();
+    const targets = row.daily_targets || [];
+    if (!targets[index]?.date || !targets[index]?.title?.trim() || !targets[index]?.target?.trim()) return;
+    if (index === targets.length - 1) appendTarget(row);
+    // Enter in an earlier row leaves existing later rows untouched.
+  };
+  const [selectedKey, setSelectedKey] = useState(null);
   useEffect(() => {
     if (!readOnly && selectedKey !== null && rows.length && !rows.some(row => row.key === selectedKey)) {
       setSelectedKey(rows[0].key);
@@ -206,6 +251,7 @@ function SheetTable({ rows, onChange, onRemove, month, readOnly = false, employe
             <div><dt>Target date</dt><dd>{row.end_date || 'Not set'}</dd></div>
             <div><dt>Weekly milestones</dt><dd>{(row.weeks || []).map(w => `W${w}`).join(', ') || 'Not set'}</dd></div>
             <div><dt>Weightage</dt><dd>{row.weightage === '' || row.weightage == null ? 'Not set' : `${row.weightage}%`}</dd></div>
+            <div><dt>Daily targets</dt><dd>{(row.daily_targets || []).length}</dd></div>
           </dl>
           {!readOnly && (
             <div className="mws-mobile-actions">
@@ -223,11 +269,34 @@ function SheetTable({ rows, onChange, onRemove, month, readOnly = false, employe
         </article>
       ))}
     </div>
+    {readOnly && (
+      <section className="mws-card" style={{padding:16,marginTop:12}} aria-label="Monthly date-wise schedule">
+        <h3 style={{margin:'0 0 10px'}}>Complete Month: Tasks, Holidays and Weekly Offs</h3>
+        {calendarStatus === 'loading' && <p className="mws-muted">Loading your tenant holiday calendar...</p>}
+        {calendarStatus === 'error' && <p role="alert">Holiday calendar unavailable. Refresh before relying on working-day labels.</p>}
+        {monthCalendar(month, holidayMap).map(day => {
+          const scheduled = rows.flatMap(row => (row.daily_targets || [])
+            .filter(t => t.date === day.date)
+            .map(t => ({...t, objective:row.objective})));
+          return (
+            <div key={day.date} style={{padding:'9px 10px',borderBottom:'1px solid var(--border,#e4e8f2)',background:calendarStatus === 'ready' && !day.working?'rgba(239,68,68,.055)':'transparent'}}>
+              <strong>{day.date} — {calendarStatus === 'ready' ? day.label : 'Calendar not verified'}</strong>
+              {scheduled.length ? scheduled.map((t,i) => (
+                <div key={i} style={{paddingTop:4}}>{t.title} · Target: {t.target} · {t.objective}</div>
+              )) : <div className="mws-muted">{calendarStatus === 'ready' && !day.working ? 'No work automatically scheduled' : 'No scheduled activity'}</div>}
+            </div>
+          );
+        })}
+      </section>
+    )}
     {/* STEP 44B.53D.1 - Historical custom fields */}
     {readOnly && template?.columns?.length > 0 && (
       <SprintMonthlySavedFields template={template} rows={rows} />
     )}
-    {!readOnly && selected && (
+    {!readOnly && selected && createPortal(
+      <div className="mws-activity-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) setSelectedKey(null); }}
+        onKeyDown={e => { if (e.key === 'Escape') { e.stopPropagation(); setSelectedKey(null); } }}>
+      <div role="dialog" aria-modal="true" aria-label="Edit monthly activity" className="mws-activity-dialog">
       <section className="mws-editor">
         <div className="mws-section-head">
           <div>
@@ -284,8 +353,38 @@ function SheetTable({ rows, onChange, onRemove, month, readOnly = false, employe
             ))}
           </div>
         </div>
-        <p className="mws-muted">Changes are reflected immediately in the table. Save the Monthly Sheet to store your plan.</p>
+        <section className="mws-card" style={{marginTop:16,padding:16}}>
+          <h4 style={{margin:'0 0 6px'}}>Day-wise targets for this monthly activity</h4>
+          <p className="mws-muted">Enter the scheduled date, task and daily target once. Approved tasks will automatically appear in Weekly & Day-Wise Planning.</p>
+          <p className="mws-muted">Complete a date, task and target, then press Enter in the target field to create the next working-day row. You can edit any date manually and add multiple tasks on one date.</p>
+          {calendarStatus === 'loading' && <p className="mws-muted">Checking the tenant's holiday calendar...</p>}
+          {calendarStatus === 'error' && <p role="alert">Holiday calendar could not be loaded. Automatic next-date scheduling is unavailable; reload the page.</p>}
+          {(selected.daily_targets || []).map((target, i) => (
+            <div key={i} style={{marginBottom:10}}>
+              <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(145px,1fr))',gap:8}}>
+                <input aria-label={`Day ${i+1} date`} type="date" min={selected.start_date || `${month}-01`} max={selected.end_date || monthLastDate(month)} value={target.date || ''}
+                  onChange={e => onChange(selected.key,'daily_targets',(selected.daily_targets || []).map((t,j) => j===i ? {...t,date:e.target.value}:t))}/>
+                <input aria-label={`Day ${i+1} task`} placeholder="Daily task" maxLength={200} value={target.title || ''}
+                  onChange={e => onChange(selected.key,'daily_targets',(selected.daily_targets || []).map((t,j) => j===i ? {...t,title:e.target.value}:t))}/>
+                <input aria-label={`Day ${i+1} target`} placeholder="Measurable daily target — Enter for next day" maxLength={500} value={target.target || ''}
+                  onChange={e => onChange(selected.key,'daily_targets',(selected.daily_targets || []).map((t,j) => j===i ? {...t,target:e.target.value}:t))}
+                  onKeyDown={e => onTargetEnter(e, selected, i)}/>
+                <button type="button" className="mws-button" onClick={() => onChange(selected.key,'daily_targets',(selected.daily_targets || []).filter((_,j)=>j!==i))}>Remove</button>
+              </div>
+              {target.date && calendarStatus === 'ready' && !dayType(target.date,holidayMap).working && (
+                <p style={{color:'#b45309',margin:'4px 0 0',fontSize:12}}>Non-working date: {dayType(target.date,holidayMap).label}. Manually selected dates remain editable.</p>
+              )}
+            </div>
+          ))}
+          <button type="button" className="mws-button" disabled={calendarStatus !== 'ready' || (selected.daily_targets || []).length >= 31 || !(selected.daily_targets || []).length && !firstWorkingDate(selected.start_date || `${month}-01`,selected.end_date || monthLastDate(month),holidayMap) || (selected.daily_targets || []).length > 0 && !nextWorkingDate((selected.daily_targets || []).at(-1).date,holidayMap,selected.end_date || monthLastDate(month))}
+            onClick={() => appendTarget(selected)}>+ Add Next Working Day</button>
+          <p className="mws-muted">Important unplanned work: employees use the existing approved Daily Change Request flow. Approved changes are tracked separately in the KPI summary.</p>
+        </section>
+        <p className="mws-muted">Your activity edits are kept in the form until you save the monthly sheet.</p>
+        <div className="mws-activity-footer"><button type="button" className="mws-button mws-primary"
+          onClick={() => setSelectedKey(null)}>Done editing activity</button></div>
       </section>
+      </div></div>, document.body
     )}
     </>
   );
@@ -297,10 +396,12 @@ export default function SprintMonthlyPlanning() {
   const [title, setTitle] = useState('');
   const [rows, setRows] = useState(() => [makeRow(currentMonth())]);
   const [plans, setPlans] = useState([]);
+  const [requiresTeamCompilation, setRequiresTeamCompilation] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [submittingId, setSubmittingId] = useState('');
   const [expandedId, setExpandedId] = useState('');
+  const [monthlyModalPlan, setMonthlyModalPlan] = useState(null);
   const [editingId, setEditingId] = useState('');
   // STEP 44B.53C.6 - Department template state
   const [latestMonthlyTemplate, setLatestMonthlyTemplate] = useState(null);
@@ -311,11 +412,26 @@ export default function SprintMonthlyPlanning() {
    const [directoryWarning, setDirectoryWarning] = useState(false);
 
   const [editingStatus, setEditingStatus] = useState('');
+  const [showComposer, setShowComposer] = useState(false); // YC_MONTHLY_FORM_POPUPS_V1
+  useEffect(() => {
+    if (!showComposer) return undefined;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const onEscape = e => {
+      if (e.key === 'Escape' && !document.querySelector('.mws-activity-backdrop')) setShowComposer(false);
+    };
+    document.addEventListener('keydown', onEscape);
+    return () => {document.body.style.overflow = previousOverflow;document.removeEventListener('keydown', onEscape);};
+  }, [showComposer]);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      setPlans(extract(await getMonthlyPlans()));
+      const response = await getMonthlyPlans();
+      setPlans(extract(response));
+      setRequiresTeamCompilation(Boolean(
+        response?.requires_team_compilation ?? response?.data?.requires_team_compilation
+      ));
     } catch (error) {
       notify({ type: 'error', title: 'Unable to load monthly plans', message: error?.message || 'Request failed' });
     } finally {
@@ -410,6 +526,7 @@ export default function SprintMonthlyPlanning() {
     setActiveMonthlyTemplate(plan.sprint_template_snapshot || null);
     setEditingId(id);
     setEditingStatus(status);
+    setShowComposer(true);
     setMonth(plan.month);
     setTitle(plan.title || '');
     setRows(restored.length ? restored : [makeRow(plan.month)]);
@@ -433,6 +550,7 @@ export default function SprintMonthlyPlanning() {
     setEditingStatus('');
     setTitle('');
     setRows([makeRow(month)]);
+    setShowComposer(false);
   };
 
   const totalWeight = useMemo(
@@ -466,6 +584,10 @@ export default function SprintMonthlyPlanning() {
     for (const [index, row] of rows.entries()) {
       if (!row.objective.trim() || !row.activity.trim() || !row.deliverable.trim() || !row.kpi.trim()) {
         notify({ type: 'warning', title: 'Incomplete activity', message: `Complete the objective, activity, deliverable and KPI in row ${index + 1}.` });
+        return;
+      }
+      if ((row.daily_targets || []).some(day => !day.date || !day.title?.trim() || !day.target?.trim() || day.date < row.start_date || day.date > row.end_date)) {
+        notify({ type: 'warning', title: 'Incomplete day-wise target', message: `Check the scheduled dates, titles and targets in row ${index+1}.` });
         return;
       }
       if (!row.start_date || !row.end_date || row.start_date > row.end_date ||
@@ -532,6 +654,7 @@ export default function SprintMonthlyPlanning() {
       setEditingStatus('');
       setTitle('');
       setRows([makeRow(month)]);
+      setShowComposer(false);
       await load();
     } catch (error) {
       notify({ type: 'error', title: 'Unable to save monthly sheet', message: error?.message || 'Save failed.' });
@@ -543,14 +666,14 @@ export default function SprintMonthlyPlanning() {
   const submit = async plan => {
     const id = String(plan._id || plan.id || '');
     const yes = await customConfirm(
-      'Submit this monthly work plan to your Reporting Team Leader for approval?',
+      'Submit this monthly work plan to your assigned reviewer for approval?',
       { title: 'Submit Monthly Work Plan', confirmText: 'Submit Plan' }
     );
     if (!yes) return;
     setSubmittingId(id);
     try {
       await submitMonthlyPlan(id);
-      notify({ type: 'success', title: 'Plan submitted', message: 'Sent to your Reporting Team Leader.' });
+      notify({ type: 'success', title: 'Plan submitted', message: 'Sent to your assigned reviewer.' });
       await load();
     } catch (error) {
       notify({ type: 'error', title: 'Submission failed', message: error?.message || 'Request failed.' });
@@ -564,6 +687,37 @@ export default function SprintMonthlyPlanning() {
       <style>{`
         .mws-page { max-width:100%;padding:clamp(12px,2vw,25px);color:var(--text,#202846); }
         .mws-head,.mws-toolbar,.mws-section-head { display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap; }
+        /* YC_MONTHLY_FORM_POPUPS_V1 — only presentation changes; form handlers unchanged */
+        .mws-quick-start { display:flex;align-items:center;justify-content:space-between;gap:18px;padding:19px 22px;border:1px solid #dfe5f2;border-radius:17px;background:#fff;margin:18px 0; }
+        .mws-quick-start strong {font-size:17px;color:#17244b;}
+        .mws-quick-start p {margin:7px 0 0;font-size:13px;line-height:1.5;}
+        .mws-form-backdrop,.mws-activity-backdrop {position:fixed;inset:0;background:rgba(13,24,50,.56);z-index:2400;display:flex;align-items:center;justify-content:center;padding:16px;}
+        .mws-form-dialog {background:#fff;width:min(100%,1100px);max-height:calc(100dvh - 32px);overflow:auto;overscroll-behavior:contain;border-radius:19px;box-shadow:0 24px 80px rgba(10,25,60,.25);}
+        .mws-form-dialog-top {position:sticky;top:0;z-index:2;background:#fff;padding:14px 22px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #e7e9f2;font-weight:750;}
+        .mws-form-close {border:1px solid #e0e5f3;border-radius:10px;background:#fff;cursor:pointer;font-size:24px;min-width:40px;min-height:40px;}
+        .mws-form-dialog>.mws-card {margin:0;border:0;box-shadow:none;border-radius:0;}
+        .mws-form-dialog .mws-sheet-scroll,.mws-form-dialog .mws-desktop-hint {display:none!important;}
+        .mws-form-dialog .mws-mobile-cards {display:grid!important;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:12px;margin:12px 0;}
+        .mws-form-dialog .mws-mobile-activity {border:1px solid #e0e5f3;border-radius:14px;padding:15px;margin:0;background:#fff;}
+        .mws-form-dialog .mws-mobile-activity-head {display:flex;gap:8px;justify-content:space-between;}
+        .mws-form-dialog .mws-mobile-activity-title {display:grid;gap:4px;min-width:0;overflow-wrap:anywhere;}
+        .mws-form-dialog .mws-mobile-facts {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:12px 0;}
+        .mws-form-dialog .mws-mobile-facts dt {font-size:11px;color:#64748b;}
+        .mws-form-dialog .mws-mobile-facts dd {font-size:12px;margin:3px 0;overflow-wrap:anywhere;}
+        .mws-form-dialog .mws-mobile-actions {display:flex;gap:8px;align-items:center;}
+        .mws-form-dialog .mws-mobile-actions button:first-child {flex:1;}
+        .mws-activity-backdrop {z-index:2500;}
+        .mws-activity-dialog {width:min(100%,980px);max-height:calc(100dvh - 32px);overflow:auto;background:#fff;border-radius:18px;box-shadow:0 24px 80px rgba(10,25,60,.3);overscroll-behavior:contain;}
+        .mws-activity-dialog .mws-editor {margin:0;background:#fff;border:0;box-shadow:none;}
+        .mws-activity-footer {position:sticky;bottom:0;background:#fff;border-top:1px solid #e0e5f3;margin-top:16px;padding:12px 0 2px;text-align:right;}
+        .mws-activity-dialog .mws-editor-grid {grid-template-columns:repeat(2,minmax(0,1fr));}
+        @media(max-width:640px) {
+          .mws-quick-start {flex-direction:column;align-items:stretch;}
+          .mws-form-backdrop,.mws-activity-backdrop {padding:0;}
+          .mws-form-dialog,.mws-activity-dialog {border-radius:0;max-height:100dvh;height:100dvh;width:100%;}
+          .mws-form-dialog .mws-mobile-cards {grid-template-columns:1fr;}
+          .mws-activity-dialog .mws-editor-grid {grid-template-columns:1fr;}
+        }
         .mws-eyebrow { color:#6253cc;font-size:11px;font-weight:800;letter-spacing:.12em;text-transform:uppercase; }
         .mws-head h1 { margin:5px 0;font-size:clamp(21px,2.6vw,30px); }
         .mws-muted { font-size:12px;color:#78849d;line-height:1.6; }
@@ -921,6 +1075,15 @@ export default function SprintMonthlyPlanning() {
         <button type="button" className="mws-button mws-no-print" onClick={load} disabled={loading}><RefreshCw size={15}/> Refresh</button>
       </div>
 
+      <div className="mws-quick-start mws-no-print">
+        <div><strong>Monthly planning made simple</strong><p className="mws-muted">Create your plan, add activities and date-wise targets, then save a draft. All fields open in focused popups.</p></div>
+        <button type="button" className="mws-button mws-primary" onClick={() => setShowComposer(true)}><Plus size={16}/>{editingId ? 'Continue editing draft' : 'Create Monthly Plan'}</button>
+      </div>
+      {showComposer && createPortal(
+        <div className="mws-form-backdrop" onMouseDown={e=>{if(e.currentTarget===e.target)setShowComposer(false);}}>
+          <div className="mws-form-dialog" role="dialog" aria-modal="true" aria-label="Monthly planning form">
+            <div className="mws-form-dialog-top"><span>{editingId ? 'Edit monthly plan' : 'Create monthly plan'}</span>
+              <button type="button" className="mws-form-close" onClick={()=>setShowComposer(false)} aria-label="Close monthly planning form">×</button></div>
       <form className="mws-card" onSubmit={save}>
         <div className="mws-section-head">
           <div><h2 style={{margin:'0 0 5px',fontSize:19}}>
@@ -984,7 +1147,9 @@ export default function SprintMonthlyPlanning() {
         </div>
 
         <div className="mws-toolbar mws-no-print">
-                     <span className="mws-muted mws-guidance">Saving creates a draft only. Use Submit for Approval on the saved plan when everything is ready.</span>
+                     <span className="mws-muted mws-guidance">{requiresTeamCompilation
+                       ? 'Save your own plan as a draft. After reviewing team member plans, compile the team month and submit the compilation to the Reporting Officer.'
+                       : 'Saving creates a draft only. Use Submit for Approval on the saved plan when everything is ready.'}</span>
           <div style={{display:'flex',gap:9,flexWrap:'wrap'}}>
             <button type="button" className="mws-button" onClick={() => window.print()}><Printer size={15}/> Print</button>
             {editingId && (
@@ -997,6 +1162,9 @@ export default function SprintMonthlyPlanning() {
           </div>
         </div>
       </form>
+          </div>
+        </div>, document.body
+      )}
 
       <SprintMonthlyApprovalQueue month={month} />
       <SprintMonthlyTeamCompilation month={month} />
@@ -1028,8 +1196,8 @@ export default function SprintMonthlyPlanning() {
                 </div>
                 <div className="mws-toolbar mws-no-print" style={{justifyContent:'flex-start',marginTop:12}}>
                   <button type="button" className="mws-button"
-                    onClick={() => setExpandedId(expanded ? '' : id)}>
-                    <ChevronDown size={14}/>{expanded ? 'Hide Sheet' : 'View Sheet'}
+                    onClick={() => setMonthlyModalPlan(plan)}>
+                    <ChevronDown size={14}/> View Sheet
                   </button>
                   <button type="button" className="mws-button" onClick={() => exportCsv(plan, sheetRows, employeeLookup)}>
                     <Download size={14}/> Export CSV
@@ -1040,11 +1208,14 @@ export default function SprintMonthlyPlanning() {
                       <FileText size={14}/> Edit Sheet
                     </button>
                   )}
-                  {['draft', 'rejected'].includes(status) && (
+                  {['draft', 'rejected'].includes(status) && !requiresTeamCompilation && (
                     <button type="button" className="mws-button mws-primary" disabled={submittingId === id}
                       onClick={() => submit(plan)}><Send size={14}/>
                       {submittingId === id ? 'Submitting?' : 'Submit for Approval'}
                     </button>
+                  )}
+                  {['draft', 'rejected'].includes(status) && requiresTeamCompilation && (
+                    <span className="mws-muted" role="status">TL draft: included through Team Monthly Compilation, not direct RO submission.</span>
                   )}
                 </div>
                 {expanded && <div style={{marginTop:15}}>
@@ -1067,6 +1238,9 @@ export default function SprintMonthlyPlanning() {
             );
           })}
       </section>
+      {monthlyModalPlan && <SprintMonthlyPlanModal plan={monthlyModalPlan} month={monthlyModalPlan.month}
+        employeeName={employeeName(employeeLookup, monthlyModalPlan.employee_id) === 'Employee profile unavailable' ? 'My monthly plan' : employeeName(employeeLookup, monthlyModalPlan.employee_id)}
+        onClose={() => setMonthlyModalPlan(null)} />}
     </div>
   );
 }

@@ -255,9 +255,15 @@ def new_monthly_plan(
             if any(week not in (1, 2, 3, 4, 5) for week in weeks):
                 raise PlanningError("Invalid weekly milestone")
 
+            from app.services.sprint_monthly_daily import validate_targets
+            daily_targets = validate_targets(
+                row.get("daily_targets", []), start_date, end_date,
+            )
+
             cleaned_rows.append({
                 "objective": objective,
                 "activity": activity,
+                "daily_targets": daily_targets,
                 "deliverable": deliverable,
                 "kpi": kpi,
                 "target_quantity": field("target_quantity", 40),

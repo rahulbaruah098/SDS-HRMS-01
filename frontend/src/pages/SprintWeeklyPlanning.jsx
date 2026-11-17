@@ -26,6 +26,27 @@ const emptyActivity = () => ({
 
 const cleanDate = (value) => String(value || '').slice(0, 10);
 
+// Local calendar dates (never UTC) keep the selected day stable in every time zone.
+const localDay = (date = new Date()) => [date.getFullYear(),
+  String(date.getMonth() + 1).padStart(2, '0'),
+  String(date.getDate()).padStart(2, '0')].join('-');
+const dateFromDay = (day) => new Date(`${day}T12:00:00`);
+const shiftDay = (day, days) => {
+  const date = dateFromDay(day);
+  if (Number.isNaN(date.getTime())) return localDay();
+  date.setDate(date.getDate() + days);
+  return localDay(date);
+};
+const mondayOf = (day) => {
+  const date = dateFromDay(day);
+  if (Number.isNaN(date.getTime())) return localDay();
+  return shiftDay(day, -((date.getDay() + 6) % 7));
+};
+const readableDay = (day, options = { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }) => {
+  const date = dateFromDay(day);
+  return Number.isNaN(date.getTime()) ? day : new Intl.DateTimeFormat('en-IN', options).format(date);
+};
+
 const getId = (item) => String(item?._id || item?.id || '');
 
 const getItems = (response) => {
@@ -134,6 +155,7 @@ export default function SprintWeeklyPlanning() {
 
   const [monthly, setMonthly] = useState([]);
   const [weekly, setWeekly] = useState([]);
+  const [selectedDate, setSelectedDate] = useState(() => localDay());
   const [monthId, setMonthId] = useState('');
   const [weekStart, setWeekStart] = useState('');
   const [weekEnd, setWeekEnd] = useState('');
@@ -491,6 +513,14 @@ export default function SprintWeeklyPlanning() {
   const label = { display: 'block', marginBottom: 6, fontSize: 13, fontWeight: 600 };
   const stack = { display: 'grid', gap: 13 };
 
+  const weekDays = Array.from({ length: 7 }, (_, offset) => shiftDay(mondayOf(selectedDate), offset));
+  const dailyPlanGroups = weekly.filter(plan =>
+    (plan.activities || []).some(activity => cleanDate(activity.planned_date) === selectedDate) ||
+    (plan.status === 'approved' && cleanDate(plan.week_start) <= selectedDate && selectedDate <= cleanDate(plan.week_end))
+  );
+  const selectedTasks = dailyPlanGroups.reduce((count, plan) => count +
+    (plan.activities || []).filter(activity => cleanDate(activity.planned_date) === selectedDate).length, 0);
+
   const changeForm = (plan, activity) => {
     const key = activity?.activity_id || `add-${getId(plan)}`;
     const data = changes[key] || {};
@@ -576,6 +606,21 @@ export default function SprintWeeklyPlanning() {
         .swp-page details[open] > .swp-disclosure .swp-disclosure-icon { transform:rotate(90deg); }
         .swp-page .swp-disclosure-text { min-width:0; flex:1 1 160px; overflow-wrap:break-word; }
         .swp-page .swp-empty { padding:16px; border:1px dashed var(--border,#dbe1e8); border-radius:12px; color:var(--text-muted,#64748b); }
+        .swp-page .swp-day-toolbar { display:flex; align-items:center; flex-wrap:wrap; justify-content:space-between; gap:12px; margin-bottom:16px; }
+        .swp-page .swp-day-strip { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); gap:8px; margin:12px 0 16px; }
+        .swp-page .swp-day-button { display:flex; flex-direction:column; align-items:center; gap:5px; padding:12px 4px; background:#f8f9fe; color:#273354; border:1px solid #e0e5f2; border-radius:13px; cursor:pointer; min-width:0; font:inherit; }
+        .swp-page .swp-day-button[aria-pressed="true"] { border-color:#6254da; background:#f0efff; color:#3b2da4; box-shadow:inset 0 0 0 1px #6254da; }
+        .swp-page .swp-day-button .swp-day-number { font-weight:750; font-size:18px; }
+        .swp-page .swp-day-button .swp-day-label { font-size:12px; }
+        .swp-page .swp-day-button .swp-day-count { font-size:11px; color:#68748b; }
+        .swp-page .swp-day-button .swp-day-today { height:5px; width:5px; border-radius:50%; background:#6254da; }
+        .swp-page .swp-task-disclosure { border:1px solid #e0e5f2; border-radius:13px; overflow:hidden; background:#fff; margin:12px 0; }
+        .swp-page .swp-task-disclosure > summary { cursor:pointer; list-style:none; padding:14px; display:flex; justify-content:space-between; align-items:center; gap:10px; }
+        .swp-page .swp-task-disclosure > summary::-webkit-details-marker { display:none; }
+        .swp-page .swp-task-disclosure[open] > summary { border-bottom:1px solid #e0e5f2; }
+        .swp-page .swp-task-inner { padding:0 14px 14px; }
+        .swp-page .swp-manual-planning > summary { cursor:pointer; padding:12px; color:#5045a9; font-weight:650; }
+        @media(max-width:600px) { .swp-page .swp-day-strip { gap:3px; } .swp-page .swp-day-button { padding:9px 2px; border-radius:9px; } .swp-page .swp-day-button .swp-day-number { font-size:15px; } .swp-page .swp-day-button .swp-day-label { font-size:10px; } .swp-page .swp-day-button .swp-day-count { font-size:9px; } }
         @media(max-width:700px) {
           .swp-page .swp-form-grid { grid-template-columns:minmax(0,1fr); }
           .swp-page .swp-header > .btn { width:100%; }
@@ -619,17 +664,48 @@ export default function SprintWeeklyPlanning() {
       `}</style>
       <header className="swp-header" style={{ marginBottom: 24 }}>
         <h1 className="swp-heading" style={{ margin: 0 }}>
-          <CalendarDays size={27} /> Weekly & Day-Wise Planning
+          <CalendarDays size={27} /> My Daily Work Planner
         </h1>
         <p className="swp-subtitle">
-          Plan each day's activities, report work honestly and request approval for unexpected assignments.
+          Today’s tasks first. Choose any date to view your assignments, record progress or request changes.
         </p>
         <button type="button" className="btn btn-secondary" onClick={load} disabled={loading}>
           <RefreshCw size={16} /> Refresh Plans
         </button>
       </header>
 
-      <section className="card" style={card}>
+      <section className="card" style={card} aria-label="Daily work calendar">
+        <div className="swp-day-toolbar">
+          <div>
+            <h2 className="swp-section-heading" style={{ marginBottom: 4 }}>{readableDay(selectedDate)}</h2>
+            <p className="swp-muted" style={{ fontSize: 13, margin: 0 }}>
+              {selectedTasks} {selectedTasks === 1 ? 'task' : 'tasks'} scheduled for this day
+            </p>
+          </div>
+          <div className="swp-page-actions">
+            <button className="btn btn-secondary" type="button" onClick={() => setSelectedDate(shiftDay(selectedDate, -7))} aria-label="Previous week">← Previous</button>
+            <button className="btn btn-secondary" type="button" onClick={() => setSelectedDate(localDay())}>Today</button>
+            <button className="btn btn-secondary" type="button" onClick={() => setSelectedDate(shiftDay(selectedDate, 7))} aria-label="Next week">Next →</button>
+            <input type="date" value={selectedDate} onChange={event => { if (event.target.value) setSelectedDate(event.target.value); }} aria-label="Choose a day" style={{ ...field, width: 175 }} />
+          </div>
+        </div>
+        <div className="swp-day-strip" role="group" aria-label="Choose work date">
+          {weekDays.map(day => {
+            const count = weekly.reduce((total, plan) => total + (plan.activities || []).filter(a => cleanDate(a.planned_date) === day).length, 0);
+            const isToday = day === localDay();
+            return <button key={day} type="button" className="swp-day-button" aria-pressed={selectedDate === day} onClick={() => setSelectedDate(day)}>
+              <span className="swp-day-label">{readableDay(day, { weekday: 'short' })}</span>
+              <span className="swp-day-number">{Number(day.slice(-2))}</span>
+              <span className="swp-day-count">{count ? `${count} ${count === 1 ? 'task' : 'tasks'}` : '—'}</span>
+              {isToday && <span className="swp-day-today" aria-label="Today" />}
+            </button>;
+          })}
+        </div>
+        {!loading && selectedTasks === 0 && <p className="swp-empty">No tasks scheduled for {readableDay(selectedDate)}. Choose another date to view your work.</p>}
+      </section>
+
+      <details className="card swp-manual-planning" style={card}>
+        <summary>Advanced / Manual Weekly Planning</summary>
         <h2 className="swp-section-heading">Create Weekly Planning Sheet</h2>
         <form onSubmit={createPlan} style={stack}>
           <div>
@@ -703,43 +779,49 @@ export default function SprintWeeklyPlanning() {
             disabled={busy || weeklyTemplateLoading}
           />
 </form>
-      </section>
+      </details>
 
       <section className="card" style={card}>
         <h2 className="swp-section-heading">
-          <ClipboardCheck size={20} /> My Weekly Planning Sheets
+          <ClipboardCheck size={20} /> Tasks for {readableDay(selectedDate)}
         </h2>
-        {loading ? <p>Loading planning sheets...</p> : weekly.length === 0
-          ? <p className="swp-empty">No weekly plans created yet.</p>
-          : weekly.map(plan => (
+        {loading ? <p>Loading planning sheets...</p> : dailyPlanGroups.length === 0
+          ? <p className="swp-empty">Nothing to report for this date.</p>
+          : dailyPlanGroups.map(plan => (
             <article key={getId(plan)} className="swp-plan-card">
               <div className="swp-plan-top">
-                <strong className="swp-plan-dates">{plan.week_start} to {plan.week_end}</strong>
+                <strong className="swp-plan-dates">Week of {readableDay(cleanDate(plan.week_start), { day: 'numeric', month: 'short' })} – {readableDay(cleanDate(plan.week_end), { day: 'numeric', month: 'short', year: 'numeric' })}</strong>
                 <span className="swp-plan-status" style={{ color: statusColor(plan.status) }}>
                   {statusLabel(plan.status)}
                 </span>
               </div>
-              {plan.status === 'draft' && (
+              {plan.generated_from_monthly && plan.status === 'draft' && (
+                <p className="swp-muted" role="status">Automatically scheduled from your Monthly Sheet. Awaiting final team approval; no separate weekly submission is needed.</p>
+              )}
+              {plan.generated_from_monthly && plan.status === 'approved' && (
+                <p className="swp-muted">Auto-generated from your approved Monthly Sheet.</p>
+              )}
+              {plan.status === 'draft' && !plan.generated_from_monthly && (
                 <button className="btn btn-primary" style={{ marginTop: 12 }}
                   type="button" disabled={busy} onClick={() => submit(plan)}>
                   <Send size={15} /> {submissionCopy.button}
                 </button>
               )}
 
-              {(plan.activities || []).map(activity => {
+              {(plan.activities || []).filter(activity => cleanDate(activity.planned_date) === selectedDate).map(activity => {
                 const id = activity.activity_id;
                 const report = reports[id] || {};
                 const currentStatus = report.status || activity.status || 'planned';
                 return (
-                  <div key={id} className="swp-plan-activity">
-                    <div className="swp-activity-name">
-                      <FileText size={17} />
-                      <strong>{activity.title}</strong>
-                      <span style={{ fontSize: 13, color: statusColor(currentStatus) }}>{statusLabel(currentStatus)}</span>
-                    </div>
-                    <p className="swp-muted" style={{ fontSize: 13, margin: '7px 0' }}>
-                      {cleanDate(activity.planned_date)} — {activity.description || activity.expected_deliverable || 'No description'}
-                    </p>
+                  <details key={id} className="swp-task-disclosure">
+                    <summary>
+                      <span className="swp-activity-name"><FileText size={17} /> <strong>{activity.title}</strong></span>
+                      <span style={{ fontSize: 13, color: statusColor(currentStatus) }}>{statusLabel(currentStatus)} ▾</span>
+                    </summary>
+                    <div className="swp-task-inner">
+                      <p className="swp-muted" style={{ fontSize: 13, margin: '12px 0' }}>
+                        {activity.description || activity.expected_deliverable || 'No description'}
+                      </p>
 
                                         {/* STEP 44B.53G.8F.8-R3 */}
                     {['draft', 'rejected'].includes(plan.status) &&
@@ -893,7 +975,8 @@ export default function SprintWeeklyPlanning() {
                         </details>
                       </>
                     )}
-                  </div>
+                    </div>
+                  </details>
                 );
               })}
 

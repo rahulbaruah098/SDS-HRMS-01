@@ -579,8 +579,31 @@ def _monthly_compilation_coverage(db, leader, month, selected=None):
         'is_deleted': {'$ne': True},
     }))
 
+    # TL's own saved draft is part of the compilation; member drafts are not.
+    # A TL must not bypass normal validation of their draft's required fields.
+    leader_plan = next(
+        (plan for plan in plans if str(plan.get('employee_id')) == leader_id),
+        None,
+    )
+    if leader_plan and leader_plan.get('status') in ('draft', 'pending_approval'):
+        if not (leader_plan.get('sheet_rows') or leader_plan.get('goals')):
+            raise PlanningError('Team Leader must fill their monthly sheet before compiling')
+        snapshot = leader_plan.get('sprint_template_snapshot') or {}
+        if snapshot:
+            from app.services.sprint_template_values import validate_template_values
+            from app.services.sprint_template_service import SprintTemplateError
+            for index, row in enumerate(leader_plan.get('sheet_rows') or [], start=1):
+                try:
+                    validate_template_values(
+                        snapshot.get('columns') or [], row.get('custom_values') or {},
+                    )
+                except SprintTemplateError as exc:
+                    raise PlanningError(f'Team Leader monthly row {index}: {exc}') from exc
+
     try:
-        coverage = build_team_coverage(members, plans, selected)
+        coverage = build_team_coverage(
+            members, plans, selected, leader_id=leader_id,
+        )
     except CoverageError as exc:
         raise PlanningError(str(exc))
 
@@ -588,7 +611,7 @@ def _monthly_compilation_coverage(db, leader, month, selected=None):
     snapshots = []
 
     for item in coverage['members']:
-        if item['submission_status'] != 'approved':
+        if item['submission_status'] not in ('approved', 'ready_for_compilation'):
             continue
 
         source = by_id[item['employee_id']]
@@ -614,7 +637,7 @@ def _monthly_compilation_coverage(db, leader, month, selected=None):
                 if source.get('sprint_template_snapshot')
                 else {}
             ),
-            'source_status': 'approved',
+            'source_status': item['submission_status'],
         })
 
     return coverage, snapshots
@@ -763,6 +786,14 @@ def monthly_team_compilations():
             )
         except PlanningError as exc:
             return _error(str(exc), 409)
+
+        leader_line = next(
+            (item for item in coverage['members'] if item['employee_id'] == own_id), None,
+        )
+        if not leader_line or leader_line['submission_status'] not in (
+            'approved', 'ready_for_compilation',
+        ):
+            return _error('Team Leader must save their own monthly plan before compilation', 409)
 
         if not coverage['ready_to_submit']:
             return _error(
@@ -1113,6 +1144,13 @@ def submit_monthly_team_compilation(compilation_id):
         except PlanningError as exc:
             return _error(str(exc), 409)
 
+        leader_line = next(
+            (item for item in coverage['members'] if item['employee_id'] == leader_id), None,
+        )
+        if not leader_line or leader_line['submission_status'] not in (
+            'approved', 'ready_for_compilation',
+        ):
+            return _error('Team Leader monthly plan missing; refresh compilation', 409)
         if not coverage['ready_to_submit']:
             return _error(
                 'Team submission status changed; refresh and confirm missing employees',
@@ -1186,7 +1224,7 @@ def submit_monthly_team_compilation(compilation_id):
             {
                 '_id': doc['_id'],
                 'tenant_id': _tenant(),
-                'status': 'draft',
+                'status': {'$in': ['draft', 'pending_approval']},
                 'is_deleted': {'$ne': True},
             },
             {
@@ -1243,6 +1281,56 @@ def review_monthly_team_compilation(compilation_id):
         if decision == 'rejected' and len(remarks) < 5:
             return _error('Rejection requires remarks of at least five characters', 400)
 
+        # If this compilation contains a TL draft, RO approval of the
+        # compilation also authorizes that monthly source plan. Otherwise
+        # weekly planning would remain blocked by the original approved-
+        # monthly-plan requirement.
+        tl_source = None
+        tl_plan = None
+        if decision == 'approved':
+            sources = [source for source in (doc.get('source_plans') or [])
+                       if source.get('source_status') == 'ready_for_compilation']
+            if len(sources) > 1:
+                return _error('Invalid compilation: multiple TL drafts', 409)
+            if sources:
+                tl_source = sources[0]
+                if str(tl_source.get('employee_id')) != str(doc['team_leader_employee_id']):
+                    return _error('Invalid Team Leader monthly source', 409)
+                tl_plan = db.sprint_monthly_plans.find_one({
+                    '_id': _oid(tl_source['monthly_plan_id']),
+                    'tenant_id': _tenant(),
+                    'employee_id': str(doc['team_leader_employee_id']),
+                    'month': doc['month'],
+                    'status': 'draft',
+                    'is_deleted': {'$ne': True},
+                })
+                if tl_plan is None or (tl_plan.get('sheet_rows') or []) != (tl_source.get('sheet_rows') or []) or (tl_plan.get('goals') or []) != (tl_source.get('goals') or []):
+                    return _error('Team Leader draft changed; refresh the compilation', 409)
+
+        from uuid import uuid4
+        token = uuid4().hex
+        if decision == 'approved':
+            from app.services.sprint_monthly_daily import projected_weeks
+            for source in doc.get('source_plans') or []:
+                plan_identifier = source.get('monthly_plan_id')
+                if not plan_identifier:
+                    continue
+                source_monthly = db.sprint_monthly_plans.find_one({
+                    '_id': _oid(plan_identifier), 'tenant_id': _tenant(),
+                    'is_deleted': {'$ne': True},
+                })
+                if source_monthly is None:
+                    return _error('Compilation monthly source is missing', 409)
+                for (week_start, week_end) in projected_weeks(source_monthly):
+                    existing_week = db.sprint_weekly_plans.find_one({
+                        'tenant_id': _tenant(),
+                        'employee_id': source_monthly['employee_id'],
+                        'week_start': week_start, 'week_end': week_end,
+                        'is_deleted': {'$ne': True},
+                    })
+                    if existing_week and str(existing_week.get('generated_from_monthly')) != str(source_monthly['_id']):
+                        return _error('Existing weekly work prevents automatic projection; no approved work was overwritten', 409)
+
         result = db.sprint_monthly_team_compilations.find_one_and_update(
             {
                 '_id': doc['_id'],
@@ -1254,6 +1342,7 @@ def review_monthly_team_compilation(compilation_id):
                 '$set': {
                     'status': decision,
                     'updated_at': utc_now(),
+                    'review_commit_token': token,
                 },
                 '$push': {
                     'approval_history': {
@@ -1262,6 +1351,7 @@ def review_monthly_team_compilation(compilation_id):
                         'role': 'reporting_officer',
                         'remarks': remarks[:1000],
                         'at': utc_now(),
+                        'review_commit_token': token,
                     }
                 },
             },
@@ -1269,6 +1359,56 @@ def review_monthly_team_compilation(compilation_id):
         if result is None:
             return _error('Compilation already reviewed', 409)
 
+        if tl_plan is not None:
+            # Optimistic compare-and-set prevents approving a TL draft that
+            # was edited during the RO review. Undo this review if CAS fails.
+            promoted = db.sprint_monthly_plans.update_one({
+                '_id': tl_plan['_id'],
+                'tenant_id': _tenant(),
+                'employee_id': str(doc['team_leader_employee_id']),
+                'status': tl_plan['status'],
+                'updated_at': tl_plan.get('updated_at'),
+                'is_deleted': {'$ne': True},
+            }, {
+                '$set': {'status': 'approved', 'updated_at': utc_now(),
+                         'approval_kind': 'ro',
+                         'approver_employee_id': str(doc['approver_employee_id'])},
+                '$push': {'approval_history': {
+                    'action': 'approved_via_team_compilation',
+                    'actor_id': _actor(), 'at': utc_now(),
+                    'team_compilation_id': str(doc['_id']),
+                }},
+            })
+            if not promoted.modified_count:
+                db.sprint_monthly_team_compilations.update_one({
+                    '_id': doc['_id'], 'tenant_id': _tenant(),
+                    'status': 'approved', 'review_commit_token': token,
+                }, {
+                    '$set': {'status': 'pending_approval',
+                             'updated_at': utc_now()},
+                    '$unset': {'review_commit_token': ''},
+                    '$pull': {'approval_history': {'review_commit_token': token}},
+                })
+                return _error('Team Leader draft changed; review not completed. Refresh.', 409)
+
+        # Activate the TL monthly daily targets after final RO approval.
+        # Employee members are handled when their individual plans are approved.
+        if decision == 'approved':
+            from app.services.sprint_monthly_daily import sync_approved_month
+            for source in doc.get('source_plans') or []:
+                plan_id_value = source.get('monthly_plan_id') or source.get('plan_id')
+                if not plan_id_value:
+                    continue
+                try:
+                    source_oid = ObjectId(str(plan_id_value))
+                except (InvalidId, TypeError, ValueError):
+                    continue
+                individual = db.sprint_monthly_plans.find_one({
+                    '_id': source_oid, 'tenant_id': _tenant(),
+                    'status': 'approved', 'is_deleted': {'$ne': True},
+                })
+                if individual:
+                    sync_approved_month(db, individual, _actor(), activate=True)
         audit('review', 'sprint_monthly_team_compilation', compilation_id, {
             'decision': decision
         })
@@ -1750,6 +1890,30 @@ def submit_plan(kind, plan_id):
             return _error('Forbidden', 403)
         if doc['status'] not in ('draft', 'rejected'):
             return _error('Only draft or rejected plans may be submitted', 409)
+        # Auto-generated weekly drafts become active only after the team's
+        # final RO compilation approval. They must not be resubmitted manually.
+        if kind == 'weekly' and doc.get('generated_from_monthly'):
+            return _error('Auto-generated weekly work is waiting for final monthly approval', 409)
+
+        # TLs with team members must compile their own draft with their
+        # members' plans, then send that compilation to the RO. Solo TLs
+        # retain their direct individual submission workflow.
+        if kind == 'monthly':
+            owner = _employee(db)
+            if owner is None or str(owner['_id']) != str(doc['employee_id']):
+                return _error('Monthly plan owner mismatch', 403)
+            try:
+                is_tl = _monthly_approval_kind(db, str(owner['_id'])) == 'ro'
+                has_team = is_tl and bool(_monthly_team_members(db, str(owner['_id'])))
+            except PlanningError as exc:
+                return _error(str(exc), 409)
+            if has_team:
+                return _error(
+                    'Team Leader monthly sheet must be included in the team '
+                    'compilation. Review team member plans, compile the month, '
+                    'then submit the compiled team plan to your Reporting Officer.',
+                    409,
+                )
         # STEP 44B.53G.8F.24
         # Drafts may omit required files, but submission may not.
         if kind == 'monthly':
@@ -1895,6 +2059,17 @@ def review_plan(kind, plan_id):
         remarks = str(body.get('remarks') or '').strip()
         if decision == 'rejected' and len(remarks) < 5:
             return _error('Rejection requires remarks of at least five characters')
+        if kind == 'monthly' and decision == 'approved':
+            from app.services.sprint_monthly_daily import projected_weeks
+            for (week_start, week_end) in projected_weeks(doc):
+                existing_week = db.sprint_weekly_plans.find_one({
+                    'tenant_id': _tenant(), 'employee_id': doc['employee_id'],
+                    'week_start': week_start, 'week_end': week_end,
+                    'is_deleted': {'$ne': True},
+                })
+                if existing_week and str(existing_week.get('generated_from_monthly')) != str(doc['_id']):
+                    return _error('An existing weekly plan conflicts with monthly day-wise automation; it was preserved', 409)
+
         result = db[collection].update_one({
             '_id': doc['_id'],
             'tenant_id': _tenant(),
@@ -1909,6 +2084,14 @@ def review_plan(kind, plan_id):
         })
         if not result.modified_count:
             return _error('Plan is not awaiting approval', 409)
+        # Date-wise monthly targets project into the existing weekly schema.
+        if kind == 'monthly' and decision == 'approved':
+            from app.services.sprint_monthly_daily import sync_approved_month
+            approved_doc = _document(db, collection, plan_id)
+            sync_approved_month(
+                db, approved_doc, _actor(),
+                activate=(approved_doc.get('approval_kind') != 'tl'),
+            )
         audit('review', f'sprint_{kind}_plan', plan_id, {'decision': decision})
         return _serialize(_document(db, collection, plan_id))
     return _safe_call(action)
@@ -1925,7 +2108,20 @@ def list_plans(kind):
             return _error('Forbidden', 403)
         query = {'tenant_id': _tenant(), 'employee_id': employee_id, 'is_deleted': {'$ne': True}}
         documents = list(db[f'sprint_{kind}_plans'].find(query).sort('created_at', -1).limit(100))
-        return _serialize({'items': documents, 'count': len(documents)})
+        response = {'items': documents, 'count': len(documents)}
+        if kind == 'monthly' and employee_id == _own_id(db):
+            owner = _employee(db)
+            if owner is not None:
+                try:
+                    is_tl = _monthly_approval_kind(db, str(owner['_id'])) == 'ro'
+                    response['requires_team_compilation'] = (
+                        is_tl and bool(_monthly_team_members(db, str(owner['_id'])))
+                    )
+                except PlanningError:
+                    # Fail closed on unresolved hierarchy: route submission
+                    # still performs the authoritative validation.
+                    response['requires_team_compilation'] = True
+        return _serialize(response)
     return _safe_call(action)
 
 
@@ -3273,7 +3469,19 @@ def get_sprint_employee_metrics():
             if completed else 0.0
         )
 
+        applied_changes = db.sprint_change_requests.count_documents({
+            'tenant_id': tenant, 'employee_id': employee_id,
+            'planned_date': {'$gte': start, '$lte': end},
+            'status': 'applied', 'is_deleted': {'$ne': True},
+        })
+        pending_changes = db.sprint_change_requests.count_documents({
+            'tenant_id': tenant, 'employee_id': employee_id,
+            'planned_date': {'$gte': start, '$lte': end},
+            'status': 'pending_approval', 'is_deleted': {'$ne': True},
+        })
         result = {
+            'approved_daily_task_changes': applied_changes,
+            'pending_daily_task_changes': pending_changes,
             'employee_id': employee_id,
             'month': month,
             'period_start': start,
@@ -4779,4 +4987,44 @@ def download_sprint_attachment(attachment_id):
             max_age=0,
         )
 
+    return _safe_call(action)
+
+
+@sprint_planning_bp.route('/api/v1/sprint-planning/monthly/automation-status', methods=['GET'])
+@current_user_required
+def sprint_monthly_automation_status():
+    def action():
+        db = get_db()
+        employee_id = _own_id(db)
+        month = str(request.args.get('month') or '').strip()
+        if not __import__('re').fullmatch(r'\d{4}-(0[1-9]|1[0-2])', month):
+            return _error('month must be YYYY-MM', 400)
+        start = month + '-01'
+        from calendar import monthrange
+        end = f"{month}-{monthrange(int(month[:4]), int(month[5:]))[1]:02d}"
+        monthly = db.sprint_monthly_plans.find_one({
+            'tenant_id': _tenant(), 'employee_id': employee_id,
+            'month': month, 'is_deleted': {'$ne': True},
+        })
+        weekly = list(db.sprint_weekly_plans.find({
+            'tenant_id': _tenant(), 'employee_id': employee_id,
+            'week_start': {'$lte': end}, 'week_end': {'$gte': start},
+            'is_deleted': {'$ne': True},
+        }, {'activities': 1, 'generated_from_monthly': 1, 'status': 1}))
+        activities = [a for w in weekly for a in w.get('activities') or []
+                      if start <= str(a.get('planned_date') or '') <= end]
+        changes = list(db.sprint_change_requests.find({
+            'tenant_id': _tenant(), 'employee_id': employee_id,
+            'planned_date': {'$gte': start, '$lte': end},
+            'is_deleted': {'$ne': True},
+        }, {'status': 1}))
+        return _serialize({
+            'month': month, 'monthly_status': (monthly or {}).get('status'),
+            'scheduled_daily_tasks': len(activities),
+            'completed': sum(a.get('status') == 'completed' for a in activities),
+            'unfinished': sum(a.get('status') in ('in_progress', 'not_completed') for a in activities),
+            'approved_changes': sum(c.get('status') in ('applied', 'approved', 'approved_pending_application') for c in changes),
+            'pending_changes': sum(c.get('status') == 'pending_approval' for c in changes),
+            'auto_generated_weeks': sum(bool(w.get('generated_from_monthly')) for w in weekly),
+        })
     return _safe_call(action)

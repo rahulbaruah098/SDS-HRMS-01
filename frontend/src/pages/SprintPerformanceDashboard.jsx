@@ -361,6 +361,7 @@ export default function SprintPerformanceDashboard({ employeeId, initialMonth })
           <p className="ycp-panel-description">Interactive daily trend from actual planning records—not a simulated live feed.</p>
           <DailyTrend points={data.daily_trend}/>
         </section>
+        <div className="ycp-banner" role="status">Approved daily changes: <strong>{num(data.approved_daily_task_changes)}</strong> · Pending approvals: <strong>{num(data.pending_daily_task_changes)}</strong>. Authorized extra work is tracked separately from original planned tasks.</div>
         <p className="ycp-footnote"><Info size={15}/><span>Only approved weekly plans contribute to these figures. Evidence coverage counts submitted references and does not independently verify work quality.{data.evidence_note && !/evidence coverage|submitted references|independent.*verif/i.test(String(data.evidence_note)) ? ` ${data.evidence_note}` : ''}</span></p>
       </>}
     </section>

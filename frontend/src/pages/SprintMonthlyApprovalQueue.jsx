@@ -4,6 +4,8 @@ import {
   ChevronDown, AlertTriangle, CalendarDays, UserRound
 } from 'lucide-react';
 import SprintMonthlySavedFields from '../components/SprintMonthlySavedFields';
+import SprintMonthlyPlanModal from '../components/SprintMonthlyPlanModal';
+import SprintMonthlyDailyReview from '../components/SprintMonthlyDailyReview';
 import { getMonthlyReviewInbox, reviewMonthlyPlan } from '../api/sprintPlanning';
 import { useCustomAlert } from '../components/CustomAlertProvider';
 
@@ -24,6 +26,7 @@ export default function SprintMonthlyApprovalQueue({ month = '' }) {
   const [busyId, setBusyId] = useState('');
   const [remarks, setRemarks] = useState({});
   const [expanded, setExpanded] = useState({});
+  const [monthlyModalPlan, setMonthlyModalPlan] = useState(null);
   const [truncated, setTruncated] = useState(false);
 
   const load = useCallback(async () => {
@@ -162,7 +165,7 @@ export default function SprintMonthlyApprovalQueue({ month = '' }) {
                 <div className="sma-meta">
                   <span><CalendarDays size={14} aria-hidden="true" /> {valueOrDash(plan.month)}</span>
                   <span>{rows.length} {rows.length === 1 ? 'activity' : 'activities'}</span>
-                  <span><UserRound size={14} aria-hidden="true" /> Employee: {valueOrDash(plan.employee_name || plan.requester_name || plan.employee?.name || 'Employee profile unavailable')}</span>
+                  <span><UserRound size={14} aria-hidden="true" /> Employee: <button type="button" className="smpm-name-link" onClick={() => setMonthlyModalPlan(plan)}>{valueOrDash(plan.employee_name || plan.requester_name || plan.employee?.name || 'Employee profile unavailable')}</button></span>
                   {department && <span>Department: {department.trim()}</span>}
                   <span>{plan.reviewer_label || 'Assigned Approver'}</span>
                 </div>
@@ -179,30 +182,9 @@ export default function SprintMonthlyApprovalQueue({ month = '' }) {
             </button>
             {isExpanded && (
               <div id={`sma-details-${id}`}>
-                <div className="sma-table-wrap" role="region" aria-label={`Planning activities for ${plan.title || 'monthly plan'}`} tabIndex={0}>
-                  <table className="sma-table">
-                    <thead><tr>
-                      <th scope="col">No.</th><th scope="col">Objective</th><th scope="col">Activity</th>
-                      <th scope="col">Deliverable</th><th scope="col">KPI</th>
-                      <th scope="col">Target Date</th><th scope="col">Weightage</th>
-                    </tr></thead>
-                    <tbody>
-                      {rows.length ? rows.map((row, index) => (
-                        <tr key={row.row_id || row.key || index}>
-                          <td>{index + 1}</td>
-                          <td>{valueOrDash(row.objective)}</td>
-                          <td>{valueOrDash(row.activity)}</td>
-                          <td>{valueOrDash(row.deliverable)}</td>
-                          <td>{valueOrDash(row.kpi)}</td>
-                          <td>{valueOrDash(row.end_date)}</td>
-                          <td>{valueOrDash(row.weightage)}</td>
-                        </tr>
-                      )) : <tr><td colSpan={7}>No activities are available in this planning sheet.</td></tr>}
-                    </tbody>
-                  </table>
-                </div>
-                <div className="sma-saved-fields">
-                  <SprintMonthlySavedFields template={plan.sprint_template_snapshot || null} rows={rows} />
+                <div className="smpm-review-summary">
+                  <p>{rows.length} monthly activities. Open the employee's sheet to inspect every goal, KPI, date-wise task, target and non-working date.</p>
+                  <button type="button" className="sma-button" onClick={() => setMonthlyModalPlan(plan)}>View complete monthly plan</button>
                 </div>
                 <div className="sma-review">
                   <label htmlFor={`sma-review-note-${id}`} style={{ fontSize: 14, fontWeight: 750 }}>Review Remarks</label>
@@ -229,6 +211,9 @@ export default function SprintMonthlyApprovalQueue({ month = '' }) {
           </article>
         );
       })}
+      {monthlyModalPlan && <SprintMonthlyPlanModal plan={monthlyModalPlan} month={monthlyModalPlan.month}
+        employeeName={monthlyModalPlan.employee_name || monthlyModalPlan.requester_name || monthlyModalPlan.employee?.name || 'Employee'}
+        onClose={() => setMonthlyModalPlan(null)} />}
     </section>
   );
 }

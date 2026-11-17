@@ -1,4 +1,6 @@
 import SprintMonthlyInlineFields from '../components/SprintMonthlyInlineFields';
+import SprintMonthlyPlanModal from '../components/SprintMonthlyPlanModal';
+import SprintMonthlyDailyReview from '../components/SprintMonthlyDailyReview';
 import { useCallback, useEffect, useState } from 'react';
 import {
   ClipboardList, RefreshCw, Send, CheckCircle2, XCircle, ChevronDown
@@ -32,6 +34,7 @@ const displayStatus = value => ({
   rejected: 'Rejected',
   not_submitted: 'Not Submitted',
   draft: 'Draft',
+  ready_for_compilation: 'TL Draft — Include in Team Plan',
 })[value] || String(value || '').replaceAll('_', ' ');
 
 export default function SprintMonthlyTeamCompilation({ month }) {
@@ -43,6 +46,7 @@ export default function SprintMonthlyTeamCompilation({ month }) {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [expandedId, setExpandedId] = useState('');
+  const [monthlyModalPlan, setMonthlyModalPlan] = useState(null);
   const [remarks, setRemarks] = useState({});
 
   const reload = useCallback(async () => {
@@ -121,7 +125,7 @@ export default function SprintMonthlyTeamCompilation({ month }) {
   const compile = async () => {
     if (!confirmationComplete || existingCompilation) return;
     const confirmed = await customConfirm(
-      'Compile approved activities and record the confirmed missing employees?',
+      'Compile approved member activities and the Team Leader draft, recording any confirmed missing employees?',
       { title: 'Compile Team Monthly Plan', confirmText: 'Compile Plan' }
     );
     if (confirmed) {
@@ -532,8 +536,8 @@ export default function SprintMonthlyTeamCompilation({ month }) {
                 </p>
               )}
               <p className="mws-muted" style={{ marginTop: 10 }}>
-                Only approved activities are merged. Pending, rejected and
-                missing plans remain separately visible in the submission record.
+                Approved member activities and the Team Leader's own saved draft are included.
+                Pending, rejected and missing member plans remain visible separately.
               </p>
             </>
           ) : (
@@ -577,7 +581,7 @@ export default function SprintMonthlyTeamCompilation({ month }) {
         <p className="mws-muted">No team compilation exists for the selected month.</p>
       ) : items.map(item => {
         const id = String(item._id || item.id);
-        const expanded = expandedId === id;
+        const expanded = expandedId === id || Boolean(item.can_review);
         const canEdit = Boolean(item.can_submit) &&
           ['draft', 'rejected'].includes(item.status) &&
           validMonth(month) && confirmationComplete;
@@ -680,7 +684,11 @@ export default function SprintMonthlyTeamCompilation({ month }) {
                         <tbody>
                           {item.coverage_members.map(member => (
                             <tr key={member.employee_id}>
-                              <td>{member.employee_name || member.employee_id}</td>
+                              <td>{(item.source_plans || []).some(plan => String(plan.employee_id) === String(member.employee_id))
+                                ? <button type="button" className="smpm-name-link"
+                                    onClick={() => { const plan = (item.source_plans || []).find(p => String(p.employee_id) === String(member.employee_id)); setMonthlyModalPlan({ ...plan, month: item.month || plan.month }); }}>
+                                    {member.employee_name || member.employee_id}</button>
+                                : (member.employee_name || member.employee_id)}</td>
                               <td>{displayStatus(member.submission_status)}</td>
                             </tr>
                           ))}
@@ -690,41 +698,19 @@ export default function SprintMonthlyTeamCompilation({ month }) {
                   </div>
                 )}
 
-                <div className="mws-scroll">
-                  <table className="mws-table smtp-activities-table" style={{ minWidth: 880 }}>
-                    <thead>
-                      <tr>
-                        <th>Employee</th><th>Monthly Plan</th>
-                        <th>Objective / Activity</th><th>Deliverable</th>
-                        <th>Target / KPI</th>
-                        <th>Department Planning Fields</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(item.source_plans || []).flatMap(plan => {
-                        const rows = plan.sheet_rows?.length
-                          ? plan.sheet_rows
-                          : (plan.goals || []).map(goal => ({ activity: goal }));
-                        return rows.map((row, index) => (
-                          <tr key={`${plan.employee_id}-${index}`}
-                            className={index === 0 ? 'smtp-employee-start' : undefined}>
-                            <td>{plan.employee_name || plan.employee_id}</td>
-                            <td>{plan.title || 'Monthly Plan'}</td>
-                            <td>{row.objective ? `${row.objective} — ` : ''}{row.activity}</td>
-                            <td>{row.deliverable || '—'}</td>
-                            <td>{row.kpi || '—'}</td>
-                            <td>
-                              {/* STEP 44B.53D.3 - Per-plan custom values */}
-                              <SprintMonthlyInlineFields
-                                template={plan.sprint_template_snapshot || null}
-                                row={row}
-                              />
-                            </td>
-                          </tr>
-                        ));
-                      })}
-                    </tbody>
-                  </table>
+                <div className="smpm-employee-list" aria-label="Employee monthly planning sheets">
+                  <h4>Employee monthly plans</h4>
+                  <p className="mws-muted">Select an employee to review their full monthly objectives, KPIs and date-wise schedule.</p>
+                  {(item.source_plans || []).length ? (item.source_plans || []).map((plan, index) => (
+                    <button key={`${plan.monthly_plan_id || plan.employee_id || 'employee'}-${index}`}
+                      type="button" className="smpm-employee-button"
+                      onClick={() => setMonthlyModalPlan({ ...plan, month: item.month || plan.month })}>
+                      <span className="smpm-avatar" aria-hidden="true">{String(plan.employee_name || 'E').slice(0, 1).toUpperCase()}</span>
+                      <span><strong>{plan.employee_name || plan.employee_id || 'Employee'}</strong>
+                        <small>{plan.title || 'Monthly plan'} · {(plan.sheet_rows || []).length} activities</small></span>
+                      <ChevronDown size={16} aria-hidden="true"/>
+                    </button>
+                  )) : <p className="mws-muted">No employee plan snapshots are included in this compilation.</p>}
                 </div>
                 <div className="mws-approval">
                   <strong>Approval History</strong>
@@ -774,6 +760,9 @@ export default function SprintMonthlyTeamCompilation({ month }) {
           </article>
         );
       })}
+      {monthlyModalPlan && <SprintMonthlyPlanModal plan={monthlyModalPlan} month={monthlyModalPlan.month || month}
+        employeeName={monthlyModalPlan.employee_name || monthlyModalPlan.employee_id || 'Employee'}
+        onClose={() => setMonthlyModalPlan(null)} />}
     </section>
   );
 }

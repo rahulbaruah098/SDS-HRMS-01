@@ -180,13 +180,13 @@ function RequestDetails({ item }) {
   );
 }
 
-function SprintApprovalsBody() {
+function SprintApprovalsBody({ viewMode = "needs" }) {
   const { notify, confirm: customConfirm } = useCustomAlert();
 
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState('');
-  const [filter, setFilter] = useState('all');
+  const [filter, setFilter] = useState('all'); // preserved for compatibility
   const [detailsOpen, setDetailsOpen] = useState({});
   const [remarks, setRemarks] = useState({});
   const [employeeLookup, setEmployeeLookup] = useState(() => new Map());
@@ -230,11 +230,15 @@ function SprintApprovalsBody() {
     return () => { active = false; };
   }, []);
 
-  const visible = useMemo(() => (
-    filter === 'all'
-      ? items
-      : items.filter(item => item.planning_type === filter)
-  ), [items, filter]);
+  const visible = useMemo(() => {
+    if (viewMode === 'needs') return items.filter(item => (item.allowed_actions || []).some(action =>
+      ['tl_review', 'ro_review', 'apply_change'].includes(action)));
+    if (viewMode === 'weekly') return items.filter(item => item.planning_type === 'weekly');
+    if (viewMode === 'changes') return items.filter(item => item.planning_type === 'daily_change');
+    if (viewMode === 'history') return items.filter(item => !((item.allowed_actions || []).some(action =>
+      ['tl_review', 'ro_review', 'apply_change'].includes(action))));
+    return items.filter(item => item.planning_type === 'monthly');
+  }, [items, viewMode]);
 
   const actionable = items.filter(item =>
     (item.allowed_actions || []).some(action =>
@@ -388,61 +392,24 @@ function SprintApprovalsBody() {
         @media(prefers-reduced-motion:reduce) { .sra-page .btn { transition:none; } }
         @media print { .sra-page > header { background:#fff; border:0; box-shadow:none; } .sra-page .card { box-shadow:none; } }
         /* YC_FIX03D_APPROVAL_CORE_END */
+        .sraw-mini-toolbar {display:flex;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:14px;padding:10px 13px;border:1px solid var(--sra-border,#dfe5f2);border-radius:14px;background:var(--surface,#fff)}
+        .sraw-context {font-weight:750;font-size:14px;flex:1 1 190px}
+        .sraw-counter {font-size:12px;color:var(--text-muted,#64748b)}
+        .sraw-mini-toolbar button {min-height:36px!important}
+        .sraw-requests {display:grid;gap:12px}
+        .sra-page .sra-request {padding:16px!important;box-shadow:none!important}
+        .sra-page .sra-person {margin-top:10px;padding:8px 10px}
+        .sraw-requester {min-height:0!important;display:inline!important;border:none;background:transparent;padding:0!important;font-weight:750;text-decoration:underline;text-underline-offset:3px;color:var(--primary,#5142ce);text-align:left;cursor:pointer}
+        .sra-page .sra-review-box {margin-top:12px}
+        @media(max-width:640px){.sraw-mini-toolbar{align-items:stretch}.sraw-mini-toolbar .sra-refresh{width:auto!important}.sra-page .sra-request{padding:13px!important}}
         @media(prefers-reduced-motion:reduce) { .sra-page * { scroll-behavior:auto !important; } }
       `}</style>
-      <header style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        flexWrap: 'wrap',
-        gap: 14,
-        marginBottom: 22
-      }}>
-        <div>
-          <h2 className="sra-title" style={{ display: 'flex', alignItems: 'center', gap: 10, margin: 0 }}>
-            <ShieldCheck size={24} /> Sprint Planning Approvals
-          </h2>
-          <p className="sra-muted" style={{ color: 'var(--text-muted, #64748b)' }}>
-            Review planning sheets and authorised day-wise changes.
-          </p>
-        </div>
-        <button type="button" className="btn btn-secondary sra-refresh"
-          onClick={load} disabled={loading} aria-label="Refresh approval requests">
-          <RefreshCw size={16} /> Refresh
+      <div className="sraw-mini-toolbar">
+        <span className="sraw-context">{viewMode === 'needs' ? 'Requests assigned to you' : viewMode === 'weekly' ? 'Weekly plan reviews' : viewMode === 'changes' ? 'Daily change requests' : viewMode === 'history' ? 'Available review history' : 'Monthly plan reviews'}</span>
+        <span className="sraw-counter">{actionable} need action · {visible.length} shown</span>
+        <button type="button" className="btn btn-secondary sra-refresh" onClick={load} disabled={loading}>
+          <RefreshCw size={15} /> Refresh requests
         </button>
-      </header>
-
-      <div className="sra-summary-grid" aria-label="Approval request summary">
-        {[
-          ['Visible Requests', items.length, ClipboardCheck],
-          ['Awaiting My Action', actionable, Clock3]
-        ].map(([label, value, Icon]) => (
-          <div className="card sra-stat" key={label} style={{ padding: 18, borderRadius: 12 }}>
-            <Icon size={20} />
-            <div style={{ fontSize: 28, fontWeight: 700, marginTop: 8 }}>
-              {value}
-            </div>
-            <div style={{ fontSize: 13, color: '#64748b' }}>
-              {label}
-            </div>
-          </div>
-        ))}
-      </div>
-
-      <div className="sra-filter-bar" role="group" aria-label="Filter approval requests">
-        {[
-          ['all', 'All Requests'],
-          ['monthly', 'Monthly'],
-          ['weekly', 'Weekly'],
-          ['daily_change', 'Day-Wise Changes']
-        ].map(([value, label]) => (
-          <button key={value} type="button"
-            className={`sra-filter-tab ${filter === value ? 'is-active' : ''}`}
-            aria-pressed={filter === value}
-            onClick={() => setFilter(value)}>
-            {label}
-          </button>
-        ))}
       </div>
 
       {loading ? (
@@ -450,11 +417,11 @@ function SprintApprovalsBody() {
       ) : visible.length === 0 ? (
         <div className="card" style={{ padding: 28, textAlign: 'center' }}>
           <CheckCircle2 size={30} style={{ marginBottom: 12 }} />
-          <h3 style={{margin:'3px 0 6px',fontSize:17}}>You're all caught up</h3>
+          <h3 style={{margin:'3px 0 6px',fontSize:17}}>{viewMode === 'history' ? 'No available review history' : 'Nothing needs your attention here'}</h3>
           <p className="sra-muted" style={{margin:0}}>No requests match this view. Check another category or refresh to see new submissions.</p>
         </div>
       ) : (
-        <div style={{ display: 'grid', gap: 14 }}>
+        <div className="sraw-requests">
           {visible.map(item => {
             const id = getId(item);
             const detailKey = `${item.planning_type}:${id}`;
@@ -491,7 +458,11 @@ function SprintApprovalsBody() {
                          {requester.name === 'Employee profile unavailable' ? '—' : requester.name.slice(0, 1).toUpperCase()}
                        </span>
                        <div>
-                         <div className="sra-person-name">{requester.name}</div>
+                         <button type="button" className="sraw-requester" title="View request details"
+                           aria-expanded={Boolean(detailsOpen[detailKey])}
+                           onClick={() => setDetailsOpen(previous => ({ ...previous, [detailKey]: !previous[detailKey] }))}>
+                           {requester.name}
+                         </button>
                          <div className="sra-person-meta">{requester.meta}</div>
                        </div>
                      </div>
@@ -506,7 +477,7 @@ function SprintApprovalsBody() {
                     ...previous, [detailKey]: !previous[detailKey]
                   }))}>
                   <Eye size={15} />
-                  {detailsOpen[detailKey] ? 'Hide Details' : 'View Details'}
+                  {detailsOpen[detailKey] ? 'Hide Details' : 'Review Details'}
                 </button>
 
                 {detailsOpen[detailKey] && <RequestDetails item={item} />}
@@ -518,7 +489,7 @@ function SprintApprovalsBody() {
                   </p>
                 )}
 
-                {reviewActions.map(action => {
+                {detailsOpen[detailKey] && reviewActions.map(action => {
                   const role = action === 'ro_review' ? 'ro' : 'tl';
                   const key = `${id}:${role}`;
                   return (
@@ -582,14 +553,57 @@ function SprintApprovalsBody() {
  * - Monthly individual approvals use their own reporting-line checks.
  * - Compiled team plans require separate Reporting Officer approval.
  */
+const WORKSPACE_TABS = [
+  ['needs', 'Needs Action', Clock3],
+  ['team', 'Team Plans', CalendarRange],
+  ['monthly', 'Monthly', CalendarDays],
+  ['weekly', 'Weekly', ClipboardCheck],
+  ['changes', 'Daily Changes', ListChecks],
+  ['history', 'History', CheckCircle2]
+];
+
 export default function SprintApprovals(props) {
+  const [tab, setTab] = useState('needs');
   return (
-    <>
-      <div style={{ padding: '0 clamp(12px, 2vw, 25px)' }}>
-        <SprintMonthlyApprovalQueue month="" />
-        <SprintMonthlyTeamCompilation month="" />
+    <div className="sraw-workspace">
+      <style>{`
+        .sraw-workspace {max-width:1360px;margin:auto;padding:clamp(10px,2vw,24px);min-width:0}
+        .sraw-intro {border:1px solid var(--border,#dde4f2);border-radius:18px;background:var(--surface,#fff);padding:18px 20px;margin-bottom:14px;display:flex;align-items:center;gap:12px}
+        .sraw-intro h2 {font-size:clamp(20px,2.5vw,26px);line-height:1.25;margin:0 0 4px}
+        .sraw-intro p {font-size:13px;color:var(--text-muted,#64748b);margin:0}
+        .sraw-tabs {display:flex;gap:6px;overflow-x:auto;padding:3px 0 10px;scrollbar-width:thin;margin-bottom:5px}
+        .sraw-tab {border:1px solid var(--border,#dde4f2);background:var(--surface,#fff);border-radius:11px;display:inline-flex;align-items:center;gap:7px;padding:10px 13px;min-height:42px;white-space:nowrap;font-size:13px;font-weight:700;cursor:pointer}
+        .sraw-tab[aria-selected="true"] {border-color:var(--primary,#6355d8);background:var(--surface-secondary,#f1f0ff);color:var(--primary,#5142ce);box-shadow:inset 0 0 0 1px var(--primary,#6355d8)}
+        .sraw-tab:focus-visible {outline:2px solid var(--primary,#6355d8);outline-offset:2px}
+        .sraw-content {min-width:0}
+        .sraw-content > div {min-width:0}
+        @media(max-width:640px){.sraw-workspace {padding:9px}.sraw-intro{padding:14px}.sraw-tab{padding:9px 11px}}
+      `}</style>
+      <header className="sraw-intro">
+        <ShieldCheck size={25} color="var(--primary,#5142ce)" aria-hidden="true" />
+        <div>
+          <h2>Sprint Approval Workspace</h2>
+          <p>Review assigned requests, team compilations and saved plans without long scrolling.</p>
+        </div>
+      </header>
+      <div className="sraw-tabs" role="tablist" aria-label="Sprint approval categories">
+        {WORKSPACE_TABS.map(([id, label, Icon]) => (
+          <button type="button" role="tab" key={id} className="sraw-tab"
+            id={`sraw-tab-${id}`} aria-controls="sraw-current-panel" aria-selected={tab === id}
+            onClick={() => setTab(id)}>
+            <Icon size={16} aria-hidden="true" /> {label}
+          </button>
+        ))}
       </div>
-      <SprintApprovalsBody {...props} />
-    </>
+      <div id="sraw-current-panel" className="sraw-content" role="tabpanel" aria-labelledby={`sraw-tab-${tab}`}>
+        {(tab === 'team' || tab === 'history') && <SprintMonthlyTeamCompilation month="" />}
+        {tab === 'monthly' && <SprintMonthlyApprovalQueue month="" />}
+        {tab === 'needs' && <>
+          <SprintMonthlyApprovalQueue month="" />
+          <SprintApprovalsBody viewMode="needs" {...props} />
+        </>}
+        {['weekly','changes','history'].includes(tab) && <SprintApprovalsBody viewMode={tab} {...props} />}
+      </div>
+    </div>
   );
 }

@@ -16,7 +16,7 @@ def _key(value):
     return str(value or "").strip()
 
 
-def build_team_coverage(members, plans, missing_ids=None):
+def build_team_coverage(members, plans, missing_ids=None, leader_id=None):
     members = list(members)
     plans = list(plans)
     selected = set(map(_key, missing_ids or []))
@@ -53,7 +53,12 @@ def build_team_coverage(members, plans, missing_ids=None):
         plan = by_employee.get(employee_id)
         status = _key(plan.get("status")).lower() if plan else ""
 
-        if status in ("approved", "pending_approval", "rejected"):
+        if (leader_id and employee_id == _key(leader_id)
+                and status in ("draft", "pending_approval")):
+            # Include the authenticated TL's existing submitted plan.
+            # Member plans still require normal approval.
+            classification = "ready_for_compilation"
+        elif status in ("approved", "pending_approval", "rejected"):
             classification = status
         else:
             classification = "not_submitted"
@@ -63,7 +68,7 @@ def build_team_coverage(members, plans, missing_ids=None):
                 "Submitted plans cannot be marked as missing"
             )
 
-        approved = classification == "approved"
+        approved = classification in ("approved", "ready_for_compilation")
 
         result.append({
             "employee_id": employee_id,
