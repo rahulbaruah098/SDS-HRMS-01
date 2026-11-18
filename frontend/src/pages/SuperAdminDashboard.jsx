@@ -8,6 +8,7 @@ import { api } from '../api/client';
 import { allModules, SUPERADMIN_PLATFORM_MODULE_KEYS } from '../data/modules';
 import Table from '../components/Table';
 import ModuleGrid from '../components/ModuleGrid';
+import { FaceAccess } from '../components/FaceAccess';
 
 function formatDateTime(value) {
   if (!value) return '—';
@@ -1443,6 +1444,7 @@ const [loading, setLoading] = useState(false);
         </div>
 
         <div className="hero-actions">
+            <FaceAccess setPage={setPage} />
           <button
             type="button"
             className="primary"

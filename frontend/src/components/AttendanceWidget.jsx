@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import FaceCamera from './FaceCamera';
 import {
   buildAttendancePayload,
   createHolidayWorkRequest,
@@ -541,6 +542,34 @@ export default function AttendanceWidget({ onSuccess }) {
   const [earlyCheckoutReasonCode, setEarlyCheckoutReasonCode] = useState('');
   const [earlyCheckoutOtherReason, setEarlyCheckoutOtherReason] = useState('');
   const [sprintCheckout, setSprintCheckout] = useState(null);
+  const [faceAction, setFaceAction] = useState(null);
+  const finishScan = useRef(null);
+  const attendanceMounted = useRef(true);
+  useEffect(() => {
+    attendanceMounted.current = true;
+    return () => {
+      attendanceMounted.current = false;
+      finishScan.current?.(null);
+      finishScan.current = null;
+    };
+  }, []);
+  function closeScan(proof) {
+    const finish = finishScan.current;
+    finishScan.current = null;
+    setFaceAction(null);
+    finish?.(proof);
+  }
+  async function identityFields(action) {
+    const status = statusData || await getAttendanceStatus();
+    if (!attendanceMounted.current) return null;
+    if (!status.face_attendance?.requires_camera) return {};
+    if (finishScan.current) return null;
+    const proof = await new Promise(resolve => {
+      finishScan.current = resolve;
+      setFaceAction(action);
+    });
+    return proof && attendanceMounted.current ? { face_proof: proof } : null;
+  }
 
 
 
@@ -1028,6 +1057,8 @@ if (type === 'check-out' && !sprintReportAlreadySaved) {
 
   try {
     setLoadingType(type);
+    const identity = await identityFields(type);
+    if (!identity) return false;
     alerts.info('Capturing GPS location. Please wait...', 'GPS Capture');
 
     if (type === 'check-in') {
@@ -1044,7 +1075,8 @@ if (type === 'check-out' && !sprintReportAlreadySaved) {
         ),
       });
 
-      await submitCheckIn(payload);
+      if (!attendanceMounted.current) return false;
+      await submitCheckIn({ ...payload, ...identity });
 
       alerts.success('Checked in successfully.', 'Checked In');
 
@@ -1064,7 +1096,8 @@ if (type === 'check-out' && !sprintReportAlreadySaved) {
         ),
       });
 
-      await submitCheckOut(payload);
+      if (!attendanceMounted.current) return false;
+      await submitCheckOut({ ...payload, ...identity });
 
       alerts.success('Checked out successfully.', 'Checked Out');
       setEarlyCheckoutReasonCode('');
@@ -1167,6 +1200,7 @@ async function submitHolidayWorkRequest(event) {
 
   return (
     <div className="attendance-card attendance-pro-card">
+      {faceAction && <FaceCamera action={faceAction} onFinish={closeScan} />}
       <style>{`
         .attendance-reason-panel {
           display: grid;

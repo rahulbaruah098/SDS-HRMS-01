@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 from bson import ObjectId
 
 from app.extensions import get_db
+from app.services.face_attendance import check_assistant_policy
 from app.routes.workflow import (
     normalize_leave_type,
     leave_type_label,
@@ -5150,6 +5151,7 @@ def _submit_ai_check_in(data=None, user_context=None):
 
     employee = _attendance_employee(user_context)
     tenant_id = _attendance_tenant_id(employee, user_context)
+    check_assistant_policy(tenant_id)
 
     now = _attendance_now_local()
     today_date = now.date()
@@ -5334,6 +5336,7 @@ def _submit_ai_check_out(data=None, user_context=None):
 
     employee = _attendance_employee(user_context)
     tenant_id = _attendance_tenant_id(employee, user_context)
+    check_assistant_policy(tenant_id)
 
     now = _attendance_now_local()
     today_date = now.date()

@@ -6,6 +6,8 @@ from datetime import datetime, time, date, timedelta, timezone
 from bson import ObjectId
 
 from app.extensions import get_db
+from app.services import face_attendance
+from pymongo.errors import DuplicateKeyError
 from app.utils.auth import current_user_required, roles_required, audit
 from app.middleware.tenant_guard import tenant_module_required
 from app.utils.serializers import clean_doc
@@ -2635,6 +2637,7 @@ def attendance_status():
 
     return jsonify({
         "today": today,
+        "face_attendance": face_attendance.policy(db, e),
         "office_start": attendance_schedule["check_in_time"],
         "late_cutoff": attendance_schedule["late_cutoff_time"],
         "break_start": attendance_schedule["break_start_time"],
@@ -2673,6 +2676,9 @@ def check_in():
 
     data = request.get_json(silent=True) or {}
 
+    if not isinstance(data, dict):
+        return jsonify({"message":"Expected an attendance request object"}), 400
+    face_attendance.check_submission(db, e, data)
     offline_ctx = offline_attendance_context(data)
 
     now = offline_ctx["attendance_time"]
@@ -2886,7 +2892,17 @@ def check_in():
         "updated_at": server_received_at,
     }
 
-    res = db.attendance_logs.insert_one(doc)
+    method = face_attendance.consume(db, e, data, "check-in")
+    if method:
+        doc["check_in_identity_method"] = method
+    try:
+        res = db.attendance_logs.insert_one(doc)
+    except DuplicateKeyError:
+        existing = db.attendance_logs.find_one({"tenant_id": tenant_id, "employee_id": str(e["_id"]),
+                                                "date": today, "is_deleted": {"$ne": True}})
+        if existing and (created_offline or client_id_matches(existing, client_attendance_id)):
+            return jsonify({"message":"Check-in already synced", "attendance":clean_doc(existing), "holiday":holiday_info})
+        return jsonify({"message":"Attendance already exists for this employee and date."}), 409
     doc["_id"] = res.inserted_id
 
     if mode == "field":
@@ -2940,6 +2956,9 @@ def check_out():
 
     data = request.get_json(silent=True) or {}
 
+    if not isinstance(data, dict):
+        return jsonify({"message":"Expected an attendance request object"}), 400
+    face_attendance.check_submission(db, e, data)
     offline_ctx = offline_attendance_context(data)
 
     now = offline_ctx["attendance_time"]
@@ -3102,10 +3121,19 @@ def check_out():
             "client_attendance_ids": client_attendance_id,
         }
 
-    db.attendance_logs.update_one(
-        {"_id": rec["_id"]},
+    method = face_attendance.consume(db, e, data, "check-out")
+    if method:
+        set_data["check_out_identity_method"] = method
+    changed = db.attendance_logs.update_one(
+        {"_id": rec["_id"], "tenant_id": tenant_id, "employee_id": str(e["_id"]),
+         "check_out": {"$in": [None, "", False]}, "is_deleted": {"$ne": True}},
         update_doc,
     )
+    if changed.matched_count == 0:
+        latest = db.attendance_logs.find_one({"_id":rec["_id"], "tenant_id":tenant_id, "is_deleted":{"$ne":True}})
+        if latest and latest.get("check_out") and (created_offline or client_id_matches(latest, client_attendance_id)):
+            return jsonify({"message":"Check-out already synced", "attendance":clean_doc(latest), "compoff":None})
+        return jsonify({"message":"Attendance changed. Refresh and check today's status."}), 409
 
     updated = db.attendance_logs.find_one({"_id": rec["_id"]})
 

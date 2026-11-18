@@ -26,6 +26,7 @@ import {
 
 import { api, normalizeProfilePhotoUrl } from '../api/client';
 import SprintTemplateBuilder from '../components/SprintTemplateBuilder';
+import FaceAttendanceSettings from '../components/FaceAttendanceSettings';
 import { getSprintPlanningSettings, updateSprintPlanningSettings } from '../api/sprintPlanning';
 import { normalizeRoleList } from '../data/modules';
 
@@ -4309,6 +4310,13 @@ export default function Settings({ user, setPage }) {
             </div>
           )}
         </section>
+      )}
+
+      {hasSprintSettingsManagerRole && (
+        <FaceAttendanceSettings
+          confirmChange={showConfirm}
+          onOpenEnrollment={() => setPage('face_attendance')}
+        />
       )}
 
       {/* STEP 44B.53B.1 - Dynamic department planning templates */}

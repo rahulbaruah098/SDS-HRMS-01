@@ -1,3 +1,4 @@
+import FaceVerifiedBadge from '../components/FaceVerifiedBadge';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowUpRight,
@@ -5786,7 +5787,7 @@ const reportingProjectAverage = projectSummary.reporting_average_progress || ave
             <div className="employee-identity-copy">
               <span className="kicker">Employee Self Service</span>
 
-              <AutoFitEmployeeName name={displayName} />
+              <AutoFitEmployeeName name={displayName} /> <FaceVerifiedBadge />
 
               <p className="employee-dashboard-subtitle">
                 Manage attendance, leave, projects, approvals, support requests,

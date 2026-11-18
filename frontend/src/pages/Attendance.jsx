@@ -25,6 +25,7 @@ import {
   isReportingOfficer,
 } from '../utils/authHelpers';
 import AttendanceWidget from '../components/AttendanceWidget';
+import { FaceAccess } from '../components/FaceAccess';
 import Table from '../components/Table';
 import { useCustomAlert } from '../components/CustomAlertProvider.jsx';
 
@@ -3862,6 +3863,7 @@ return (
           </p>
 
           <div className="hero-actions attendance-action-stack">
+            <FaceAccess setPage={setPage} />
             <button
               type="button"
               className="secondary"

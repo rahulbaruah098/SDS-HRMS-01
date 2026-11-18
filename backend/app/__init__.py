@@ -15,6 +15,9 @@ from .routes.payroll import payroll_bp
 from .routes.payroll_branding import payroll_branding_bp
 from .routes.dashboard import dashboard_bp
 from .routes.attendance import attendance_bp
+from .routes.face_attendance import face_bp, error_response
+from .services.face_vision import FaceError
+from .services.face_attendance import initialize as initialize_face_attendance
 from .routes.field_visits import field_visits_bp
 from .routes.workflow import workflow_bp
 from .routes.projects import projects_bp
@@ -124,6 +127,8 @@ def create_app():
 
     database = init_db(app)
     ensure_recruitment_indexes(database)
+    with app.app_context():
+        initialize_face_attendance(database)
 
     @app.before_request
     def enforce_platform_maintenance():
@@ -218,6 +223,8 @@ def create_app():
     # holiday work approval requests, team field tracking, holiday calendar,
     # comp-off generation and comp-off claim.
     app.register_blueprint(attendance_bp, url_prefix="/api/v1/attendance")
+    app.register_blueprint(face_bp, url_prefix="/api/v1/face-attendance")
+    app.register_error_handler(FaceError, error_response)
 
     # My Visit APIs:
     # employee visit scheduling, notes, optional photos, rescheduling/cancellation,

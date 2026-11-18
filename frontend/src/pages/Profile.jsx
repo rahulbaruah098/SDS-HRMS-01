@@ -1,3 +1,5 @@
+import FaceVerifiedBadge from '../components/FaceVerifiedBadge';
+import FaceSelfEnrollment from '../components/FaceSelfEnrollment';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowUpRight,
@@ -2392,7 +2394,7 @@ export default function Profile() {
               <Sparkles size={13} />
               My Profile
             </span>
-            <h1>{mainName}</h1>
+            <h1>{mainName}<FaceVerifiedBadge /></h1>
             <p>{mainRole}</p>
 
             <div className="profile-inline-meta">
@@ -2442,6 +2444,10 @@ export default function Profile() {
               )}
             </strong>
           </div>
+        </div>
+
+        <div className="profile-face-verification-area">
+          <FaceSelfEnrollment />
         </div>
 
         <div className="profile-shell-feedback">

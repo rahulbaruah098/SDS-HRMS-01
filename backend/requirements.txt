@@ -49,3 +49,5 @@ urllib3==2.7.0
 WeasyPrint==69.0
 websockets==16.0
 Werkzeug==3.0.3
+opencv-python-headless==4.13.0.92
+Pillow==12.2.0

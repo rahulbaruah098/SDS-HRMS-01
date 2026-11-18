@@ -1,0 +1,2 @@
+# Used only by isolated tests when a mongod executable is unavailable.
+mongomock==4.3.0

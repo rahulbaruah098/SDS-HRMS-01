@@ -23,6 +23,7 @@ import SuperAdminDashboard from './pages/SuperAdminDashboard';
 import AdminDashboard from './pages/AdminDashboard';
 import EmployeeDashboard from './pages/EmployeeDashboard';
 import Attendance from './pages/Attendance';
+import FaceManagement from './pages/FaceManagement';
 import AttendanceLogs from './pages/AttendanceLogs.jsx';
 import MyVisits from './pages/MyVisits.jsx';
 import Companies from './pages/Companies';
@@ -1105,6 +1106,8 @@ function PageRouter({ page, user, setPage, sprintEnabled = false }) {
     return <DashboardRouter user={safeUser} setPage={setPage} sprintEnabled={sprintEnabled} />;
   }
 
+  if (normalizedPage === 'face_attendance') return <FaceManagement setPage={setPage} />;
+
   if (normalizedPage === 'superadmin_attendance_correction') {
     const userRoles = normalizeRoles(safeUser);
 
@@ -1792,6 +1795,9 @@ export default function App() {
       setPage(normalizedPage);
       return;
     }
+
+    // The attendance API enforces subscription, tenant and management permissions.
+    if (normalizedPage === 'face_attendance') return;
 
     if (normalizedPage === 'superadmin_attendance_correction') {
       const userRoles = normalizeRoles(normalizedUser);

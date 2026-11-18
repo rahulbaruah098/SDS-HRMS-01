@@ -1,0 +1,457 @@
+.yc-face {
+  --ink: #142841;
+  --copy: #4b6075;
+  --stroke: #d3e1e9;
+  --blue: #174b77;
+  color: var(--ink);
+  font: inherit;
+  box-sizing: border-box;
+}
+.yc-face * {
+  box-sizing: border-box;
+}
+.yc-face h1,
+.yc-face h2,
+.yc-face p {
+  margin: 0;
+}
+.yc-face p,
+.yc-face small {
+  color: var(--copy);
+  line-height: 1.55;
+}
+.yc-face svg {
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+.yc-face button,
+.yc-face input,
+.yc-face select {
+  font: inherit;
+}
+.yc-face button {
+  cursor: pointer;
+}
+.yc-face button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.yc-face :focus-visible {
+  outline: 3px solid #218d9f;
+  outline-offset: 3px;
+}
+.yf-dialog {
+  position: fixed;
+  inset: 0;
+  margin: auto;
+  width: min(520px, calc(100vw - 24px));
+  max-height: calc(100dvh - 28px);
+  padding: 0;
+  overflow: auto;
+  background: white;
+  border-radius: 20px;
+  border: 1px solid var(--stroke);
+  box-shadow: 0 24px 80px #0a1b344a;
+  overscroll-behavior: contain;
+}
+.yf-dialog::backdrop {
+  background: #0a193aad;
+}
+.yf-head,
+.yf-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  justify-content: space-between;
+  padding: 17px 22px;
+}
+.yf-head {
+  border-bottom: 1px solid var(--stroke);
+}
+.yf-head h2 {
+  font-size: 1.25rem;
+}
+.yf-actions {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  border-top: 1px solid var(--stroke);
+}
+.yf-actions button,
+.yf-icon,
+.yf-tabs button,
+.yf-back {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  color: var(--ink);
+  border: 1px solid var(--stroke);
+  background: #fff;
+  border-radius: 9px;
+  padding: 9px 13px;
+}
+.yf-actions .yf-primary {
+  background: var(--blue);
+  border-color: var(--blue);
+  color: white;
+}
+.yf-actions .yf-danger {
+  color: #a43232;
+}
+.yf-icon {
+  border: 0;
+  background: #f0f5f8;
+  border-radius: 50%;
+  padding: 8px;
+}
+.yf-body,
+.yf-camera-copy {
+  display: grid;
+  gap: 13px;
+  padding: 20px 22px;
+}
+.yf-camera-copy {
+  text-align: center;
+  gap: 4px;
+  min-height: 91px;
+}
+.yf-camera-copy strong {
+  font-size: 1.18rem;
+}
+.yf-view {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  aspect-ratio: 4/3;
+  max-height: 50dvh;
+  background: radial-gradient(ellipse, #1b455d, #071c30);
+}
+.yf-view video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  transform: scaleX(-1);
+}
+.yf-guide {
+  position: relative;
+  height: 76%;
+  aspect-ratio: 0.8;
+  border: 2px solid #b5e4ef;
+  border-radius: 48%;
+  box-shadow: 0 0 0 100vmax #09203a55;
+  overflow: hidden;
+  animation: yf-focus 0.55s ease-out;
+}
+.yf-scanning .yf-guide {
+  border-color: #78f2ce;
+}
+.yf-sweep {
+  display: none;
+  position: absolute;
+  inset: 0 0 auto;
+  height: 20%;
+  background: linear-gradient(transparent, #51f3c74d);
+  border-bottom: 2px solid #84f9db;
+}
+.yf-scanning .yf-sweep {
+  display: block;
+  animation: yf-scan 2s ease-in-out infinite alternate;
+}
+.yf-mark {
+  position: absolute;
+  color: #b5dfe8;
+  display: grid;
+  place-items: center;
+}
+.yf-mark svg {
+  width: 44px;
+  height: 44px;
+}
+.yf-matched .yf-guide {
+  border-color: #70efb8;
+  background: #1c84674a;
+}
+.yf-matched .yf-mark {
+  width: 66px;
+  height: 66px;
+  border-radius: 50%;
+  color: white;
+  background: #087c5c;
+  animation: yf-lock 0.55s ease-out;
+}
+.yf-step {
+  position: absolute;
+  right: 13px;
+  bottom: 12px;
+  padding: 4px 10px;
+  border-radius: 15px;
+  background: #0b2139e6;
+  color: white;
+  font-size: 0.78rem;
+}
+.yf-management {
+  width: 100%;
+  max-width: 960px;
+  margin: auto;
+  display: grid;
+  gap: 16px;
+}
+.yf-pagehead,
+.yf-panel {
+  padding: clamp(18px, 3vw, 30px);
+  border: 1px solid var(--stroke);
+  border-radius: 18px;
+  background: white;
+}
+.yf-pagehead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: linear-gradient(120deg, #f7fbff, #e7f4f5);
+}
+.yf-pagehead h1 {
+  font-size: clamp(1.6rem, 3vw, 2.2rem);
+  margin: 4px 0;
+}
+.yf-back {
+  border: 0;
+  background: transparent;
+  color: var(--blue);
+  padding: 0 0 8px;
+}
+.yf-panel {
+  display: grid;
+  gap: 15px;
+}
+.yf-search {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 11px;
+  border: 1px solid var(--stroke);
+  border-radius: 10px;
+}
+.yf-search input {
+  border: 0;
+  width: 100%;
+  background: none;
+}
+.yf-person {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-align: left;
+  width: 100%;
+  padding: 14px 5px;
+  border: 0;
+  border-bottom: 1px solid var(--stroke);
+  background: #fff;
+  color: var(--ink);
+}
+.yf-person:hover {
+  background: #f2f8fa;
+}
+.yf-person span,
+.yf-history li,
+.yf-body label {
+  display: grid;
+  gap: 4px;
+}
+.yf-person span {
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+.yf-person i {
+  font-size: 0.78rem;
+  font-style: normal;
+  padding: 4px 7px;
+  border-radius: 6px;
+  background: #edf1f5;
+}
+.yf-person [data-status='Registered'],
+.yf-info {
+  color: #16624b;
+  background: #e3f5ee;
+}
+.yf-person [data-status='Needs Retraining'] {
+  background: #fff0ce;
+  color: #76531e;
+}
+.yf-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 9px;
+  background: #eef4f8;
+}
+.yf-tabs button {
+  flex: 1;
+  border: 0;
+  background: transparent;
+}
+.yf-tabs button[aria-pressed='true'] {
+  background: #fff;
+  box-shadow: 0 1px 4px #17264122;
+}
+.yf-body label input:not([type='file']),
+.yf-body select {
+  width: 100%;
+  border: 1px solid var(--stroke);
+  border-radius: 8px;
+  background: white;
+  color: var(--ink);
+  padding: 9px;
+}
+.yf-body .yf-upload {
+  position: relative;
+  justify-items: center;
+  gap: 5px;
+  padding: 18px;
+  border: 1px dashed #5e9eaf;
+  border-radius: 12px;
+  background: #f2f9fb;
+  color: var(--blue);
+}
+.yf-upload input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  width: 100%;
+  height: 100%;
+  cursor: pointer;
+}
+.yf-upload:focus-within {
+  outline: 3px solid #218d9f;
+}
+.yf-photos {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+}
+.yf-photos > div {
+  position: relative;
+}
+.yf-photos img {
+  width: 60px;
+  height: 65px;
+  object-fit: cover;
+  border-radius: 8px;
+}
+.yf-photos button {
+  position: absolute;
+  right: -4px;
+  top: -3px;
+  border: 0;
+  background: #18344c;
+  color: white;
+  border-radius: 50%;
+  width: 20px;
+  height: 20px;
+}
+.yf-history {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 8px;
+}
+.yf-history strong {
+  text-transform: capitalize;
+}
+.yf-progress svg {
+  animation: yf-spin 1s linear infinite;
+}
+.yc-face .yf-info,
+.yc-face .yf-error-text {
+  padding: 9px 12px;
+  border-radius: 8px;
+}
+.yc-face .yf-error-text {
+  color: #8c3833;
+  background: #fff1ed;
+}
+@keyframes yf-focus {
+  from {
+    transform: scale(1.12);
+    opacity: 0.3;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+@keyframes yf-scan {
+  from {
+    top: 0;
+  }
+  to {
+    top: 79%;
+  }
+}
+@keyframes yf-lock {
+  from {
+    transform: scale(0.8);
+    opacity: 0.4;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+@keyframes yf-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (max-width: 480px) {
+  .yf-body,
+  .yf-actions,
+  .yf-head,
+  .yf-camera-copy {
+    padding: 15px;
+  }
+  .yf-pagehead > svg,
+  .yf-person > svg {
+    display: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .yc-face * {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+
+/* YourComate facial enrollment: mobile containment fix (2026-11-18). */
+.yc-face.yf-dialog {
+  box-sizing: border-box;
+  inline-size: min(520px, calc(100vw - 24px));
+  max-inline-size: calc(100vw - 24px);
+  min-inline-size: 0;
+  overflow-x: hidden;
+}
+.yc-face.yf-dialog :is(.yf-head, .yf-body, .yf-actions, .yf-panel, .yf-camera-copy, .yf-tabs, .yf-search, .yf-photos, .yf-management) {
+  box-sizing: border-box;
+  min-inline-size: 0;
+  max-inline-size: 100%;
+}
+.yc-face.yf-dialog :is(h2, p, strong, small, label, .yf-person span) {
+  overflow-wrap: anywhere;
+}
+.yc-face.yf-dialog :is(img, video, canvas) {
+  max-inline-size: 100%;
+}
+@media (max-width: 480px) {
+  .yc-face.yf-dialog { inline-size: calc(100vw - 20px); max-inline-size: calc(100vw - 20px); }
+  .yc-face.yf-dialog .yf-head { gap: 8px; }
+  .yc-face.yf-dialog .yf-head h2 { min-inline-size: 0; flex: 1; }
+  .yc-face.yf-dialog .yf-tabs { flex-wrap: wrap; }
+  .yc-face.yf-dialog .yf-tabs button { min-inline-size: 0; flex: 1 1 auto; }
+  .yc-face.yf-dialog .yf-photos { max-inline-size: 100%; }
+}
