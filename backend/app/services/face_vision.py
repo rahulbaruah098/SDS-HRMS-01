@@ -69,7 +69,7 @@ class Vision:
         for name, expected in MODELS.items():
             path = Path(directory) / name
             with path.open("rb") as file:
-                if hashlib.file_digest(file, "sha256").hexdigest() != expected:
+                if hashlib.sha256(file.read()).hexdigest() != expected:
                     raise RuntimeError(f"Face model checksum mismatch: {name}")
             paths.append(str(path))
         self.detector = cv2.FaceDetectorYN.create(
