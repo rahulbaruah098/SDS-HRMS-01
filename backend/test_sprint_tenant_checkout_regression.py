@@ -70,6 +70,8 @@ class SprintRegression(unittest.TestCase):
     def _checkout(self, tenant, enabled, planned, ready):
         """Invoke real checkout body, with every DB dependency replaced by mocks."""
         db = MagicMock()
+        # New LC checkout gate: empty mock collection means no active visits.
+        db.field_visits.find_one.return_value = None
         attendance_record = {
             '_id': 'isolated-attendance-id', 'tenant_id': tenant,
             'employee_id': 'isolated-employee-id', 'date': WORK_DATE,

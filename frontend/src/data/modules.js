@@ -672,6 +672,20 @@ export const coreModules = [
 ],
 
   [
+    'my_local_conveyance',
+    'My Local Conveyance',
+    Receipt,
+    'Generate and download monthly local conveyance bills from completed visits.',
+    ALL_COMMON_ROLES,
+  ],
+  [
+    'lc_verification',
+    'Local Conveyance Verification',
+    FileText,
+    'Verify reference-numbered LC bills through HR and Accounts controls.',
+    [...HR_ROLES, 'finance', 'accounts_finance'],
+  ],
+  [
     'attendance_logs',
     'Attendance Logs',
     Clock,

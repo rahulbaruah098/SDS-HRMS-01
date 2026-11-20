@@ -3892,6 +3892,7 @@ return (
         {showEmployeeSelfAttendancePanel && (
           <div className="attendance-widget-stack">
             <AttendanceWidget
+              onNavigate={setPage}
               onSuccess={() => {
                 showInlineFeedback(
                   'attendance-widget',

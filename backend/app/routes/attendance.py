@@ -11,6 +11,7 @@ from pymongo.errors import DuplicateKeyError
 from app.utils.auth import current_user_required, roles_required, audit
 from app.middleware.tenant_guard import tenant_module_required
 from app.utils.serializers import clean_doc
+from app.services.local_conveyance import has_active_visit
 
 
 
@@ -2938,10 +2939,18 @@ def check_in():
         "client_attendance_id": client_attendance_id,
     })
 
+    # Advisory only: a successful field check-in must never be rolled back
+    # because an employee has not yet started My Visit.
+    field_reminder = bool(mode == "field" and not has_active_visit(db, tenant_id, e))
     return jsonify({
         "message": "Check-in successful",
         "attendance": clean_doc(doc),
         "holiday": holiday_info,
+        "field_visit_reminder": {
+            "required": field_reminder,
+            "code": "FIELD_VISIT_NOT_STARTED" if field_reminder else "",
+            "message": "You have marked Field attendance. Start My Visit with travel details to make a completed Local Conveyance claim." if field_reminder else "",
+        },
     })
 
 
@@ -3005,6 +3014,17 @@ def check_out():
         return jsonify({
             "message": "Already checked out",
             "attendance": clean_doc(rec),
+        }), 409
+
+    # An active started/reached visit must be ended before checkout. This guard
+    # also applies when offline Flutter attendance is eventually synchronised;
+    # an unsuccessful sync does not alter the saved attendance record.
+    active_visit = has_active_visit(db, tenant_id, e)
+    if active_visit:
+        return jsonify({
+            "message": "You have an ongoing My Visit. End all active visits before attendance checkout.",
+            "code": "ACTIVE_VISIT_NOT_COMPLETED", "checkout_allowed": False,
+            "active_visit_id": str(active_visit["_id"]),
         }), 409
 
     # SPRINT PLANNING FEATURE FLAG - DEFAULT OFF

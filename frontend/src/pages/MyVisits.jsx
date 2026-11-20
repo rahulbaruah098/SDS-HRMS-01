@@ -14,6 +14,7 @@ import {
   NotebookPen,
   Plus,
   RefreshCw,
+  ReceiptText,
   RotateCcw,
   Search,
   Sparkles,
@@ -30,6 +31,7 @@ import {
   createFieldVisit,
   endFieldVisit,
   getFieldVisit,
+  getLocalConveyanceSettings,
   getMyFieldVisits,
   getTeamFieldVisits,
   markFieldVisitReached,
@@ -38,6 +40,28 @@ import {
   updateFieldVisit,
   uploadFieldVisitPicture,
 } from '../api/client';
+
+const TRAVEL_MODES = [
+  ['own_two_wheeler', 'Own Vehicle — Two Wheeler'],
+  ['own_four_wheeler', 'Own Vehicle — Four Wheeler'],
+  ['public_transport', 'Public Transport'],
+  ['official_vehicle', 'Official Vehicle / N/A'],
+];
+const EMPTY_TRAVEL_FORM = {
+  travel_mode: '', vehicle_number: '', start_km: '',
+  transport_type: '', transport_other: '', fare: '',
+  from_location: '', to_location: '', purpose: '', project: '', remarks: '',
+};
+const TRAVEL_INPUT = { width: '100%', padding: '10px 12px', border: '1px solid #bdc8dc', borderRadius: 9,
+  fontSize: 14, background: '#fff', color: '#152039', boxSizing: 'border-box' };
+const TRAVEL_GRID = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 205px), 1fr))', gap: 12 };
+function LcField({ label, value, onChange, type = 'text', children, required = false, readOnly = false }) {
+  return <label style={{ display: 'grid', gap: 6, minWidth: 0, fontWeight: 600, fontSize: 13 }}>
+    {label}{children ? <select style={TRAVEL_INPUT} value={value || ''} onChange={onChange} required={required}>{children}</select> :
+      <input style={TRAVEL_INPUT} type={type} min={type === 'number' ? '0' : undefined}
+        step={type === 'number' ? '0.01' : undefined} value={value ?? ''} onChange={onChange} required={required} readOnly={readOnly} />}
+  </label>;
+}
 
 const EMPTY_CREATE_FORM = {
   date: '',
@@ -502,6 +526,11 @@ function VisitCard({ visit, onOpen }) {
             {visit.department}
           </span>
         ) : null}
+        {visit.travel?.mode ? <span>
+          <ReceiptText size={16}/>
+          {TRAVEL_MODES.find(([id]) => id === visit.travel.mode)?.[1] || 'Legacy journey'}
+          {visit.travel.eligible && visit.status === 'completed' ? ` · ₹${Number(visit.travel.amount || 0).toFixed(2)}` : ''}
+        </span> : null}
       </div>
     </button>
   );
@@ -529,6 +558,13 @@ export default function MyVisits({ user = {} }) {
   const [selectedVisit, setSelectedVisit] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState('');
+  const [travelForm, setTravelForm] = useState({ ...EMPTY_TRAVEL_FORM });
+  const [endKm, setEndKm] = useState('');
+  const [lcRates, setLcRates] = useState({ two_wheeler_rate: 4, four_wheeler_rate: 14 });
+  useEffect(() => {
+    getLocalConveyanceSettings().then(setLcRates).catch(() => {});
+  }, []);
+  const updateTravelField = (key, value) => setTravelForm(old => ({ ...old, [key]: value }));
   const [visitNotes, setVisitNotes] = useState('');
   const [savingNotes, setSavingNotes] = useState(false);
   const [rescheduleDate, setRescheduleDate] = useState('');
@@ -829,6 +865,8 @@ export default function MyVisits({ user = {} }) {
     if (!visitId) return;
 
     setSelectedVisit(visit);
+    setTravelForm({ ...EMPTY_TRAVEL_FORM });
+    setEndKm('');
     setVisitNotes(visit.visit_notes || '');
     setRescheduleDate(visit.scheduled_date || '');
     setPicturePreview('');
@@ -1021,9 +1059,13 @@ export default function MyVisits({ user = {} }) {
       const location = await captureCurrentLocation();
       let response;
 
-      if (action === 'start') response = await startFieldVisit(visitId, location);
-      else if (action === 'reached') response = await markFieldVisitReached(visitId, location);
-      else response = await endFieldVisit(visitId, location);
+      if (action === 'start') {
+        if (!travelForm.travel_mode) throw new Error('Select the mode of travel before starting your visit.');
+        response = await startFieldVisit(visitId, { ...location, ...travelForm });
+      } else if (action === 'reached') response = await markFieldVisitReached(visitId, location);
+      else response = await endFieldVisit(visitId, {
+        ...location, ...(selectedVisit.travel?.mode === 'own_two_wheeler' || selectedVisit.travel?.mode === 'own_four_wheeler' ? { end_km: endKm } : {}),
+      });
 
       setSelectedVisit(response?.item || selectedVisit);
       showFeedback(
@@ -3199,6 +3241,70 @@ export default function MyVisits({ user = {} }) {
                     </div>
                   ) : null}
 
+                  {selectedStatus === 'scheduled' && isOwnScope ? (
+                    <div className="mv-section" style={{ border: '1px solid #d8e1f1', borderRadius: 12, padding: 15 }}>
+                      <h3 style={{ marginTop: 0 }}>Mode of Travel</h3>
+                      <div style={TRAVEL_GRID}>
+                        <LcField label="Mode of Travel" value={travelForm.travel_mode} onChange={e => updateTravelField('travel_mode', e.target.value)} required>
+                          <option value="">Select travel mode</option>
+                          {TRAVEL_MODES.map(([code, label]) => <option key={code} value={code}>{label}</option>)}
+                        </LcField>
+                        {['own_two_wheeler', 'own_four_wheeler'].includes(travelForm.travel_mode) ? <>
+                          <LcField label="Vehicle Number" value={travelForm.vehicle_number} onChange={e => updateTravelField('vehicle_number', e.target.value)} />
+                          <LcField label="Starting Odometer (KM)" type="number" value={travelForm.start_km} onChange={e => updateTravelField('start_km', e.target.value)} required />
+                        </> : null}
+                        {travelForm.travel_mode === 'public_transport' ? <>
+                          <LcField label="Type of Public Transport" value={travelForm.transport_type} onChange={e => updateTravelField('transport_type', e.target.value)} required>
+                            <option value="">Select type</option>
+                            <option value="auto">Auto</option><option value="bus">Bus</option>
+                            <option value="rented_car_taxi">Rented Car / Taxi</option><option value="other">Other</option>
+                          </LcField>
+                          {travelForm.transport_type === 'other' ? <LcField label="Specify Transport" value={travelForm.transport_other} onChange={e => updateTravelField('transport_other', e.target.value)} required /> : null}
+                          <LcField label="Fare Paid (₹)" type="number" value={travelForm.fare} onChange={e => updateTravelField('fare', e.target.value)} required />
+                        </> : null}
+                        {travelForm.travel_mode && travelForm.travel_mode !== 'official_vehicle' ? <>
+                          <LcField label="From Location" value={travelForm.from_location} onChange={e => updateTravelField('from_location', e.target.value)} required />
+                          <LcField label="To Location" value={travelForm.to_location} onChange={e => updateTravelField('to_location', e.target.value)} required />
+                          <LcField label="Purpose" value={travelForm.purpose} onChange={e => updateTravelField('purpose', e.target.value)} required />
+                          <LcField label="Project (if applicable)" value={travelForm.project} onChange={e => updateTravelField('project', e.target.value)} />
+                          <LcField label="Remarks (optional)" value={travelForm.remarks} onChange={e => updateTravelField('remarks', e.target.value)} />
+                        </> : null}
+                      </div>
+                      {travelForm.travel_mode === 'own_two_wheeler' ? <p>Applicable rate: ₹{lcRates.two_wheeler_rate}/km</p> : null}
+                      {travelForm.travel_mode === 'own_four_wheeler' ? <p>Applicable rate: ₹{lcRates.four_wheeler_rate}/km</p> : null}
+                      {travelForm.travel_mode === 'official_vehicle' ? <p>Office vehicle — no personal reimbursement.</p> : null}
+                    </div>
+                  ) : null}
+
+                  {selectedVisit.travel?.mode && selectedStatus !== 'scheduled' ? (
+                    <div className="mv-section" style={{ border: '1px solid #d8e1f1', borderRadius: 12, padding: 15 }}>
+                      <h3 style={{ marginTop: 0 }}>Journey & Local Conveyance</h3>
+                      <p><strong>Mode:</strong> {TRAVEL_MODES.find(([key]) => key === selectedVisit.travel.mode)?.[1] || 'Legacy visit (no eligible LC)'}
+                        {' · '}<strong>From:</strong> {selectedVisit.travel.from_location || 'N/A'}
+                        {' · '}<strong>To:</strong> {selectedVisit.travel.to_location || 'N/A'}</p>
+                      <p><strong>Purpose:</strong> {selectedVisit.travel.purpose || 'N/A'}
+                        {' · '}<strong>Project:</strong> {selectedVisit.travel.project || 'N/A'}</p>
+                      {selectedVisit.travel.mode === 'public_transport' ? <p><strong>Fare saved:</strong> ₹{Number(selectedVisit.travel.fare || 0).toFixed(2)}
+                        {' · '}<strong>Transport:</strong> {selectedVisit.travel.transport_type === 'other' ? selectedVisit.travel.transport_other : selectedVisit.travel.transport_type}</p> : null}
+                      {['own_two_wheeler', 'own_four_wheeler'].includes(selectedVisit.travel.mode) ? <>
+                        <p><strong>Vehicle:</strong> {selectedVisit.travel.vehicle_number || 'Not provided'}
+                          {' · '}<strong>Start KM:</strong> {selectedVisit.travel.start_km}
+                          {' · '}<strong>Rate:</strong> ₹{selectedVisit.travel.rate}/km</p>
+                        {selectedStatus === 'reached' && isOwnScope ? (
+                          <div style={TRAVEL_GRID}>
+                            <LcField label="Ending Odometer (KM)" type="number" value={endKm} onChange={e => setEndKm(e.target.value)} required />
+                            <div><strong>Distance:</strong> {endKm !== '' && Number(endKm) >= Number(selectedVisit.travel.start_km) ? (Number(endKm) - Number(selectedVisit.travel.start_km)).toFixed(2) : '—'} km
+                              <p><strong>Estimated LC:</strong> ₹{endKm !== '' && Number(endKm) >= Number(selectedVisit.travel.start_km) ? ((Number(endKm) - Number(selectedVisit.travel.start_km)) * Number(selectedVisit.travel.rate)).toFixed(2) : '—'}</p></div>
+                          </div>
+                        ) : null}
+                        {selectedStatus === 'completed' ? <p><strong>End KM:</strong> {selectedVisit.travel.end_km}
+                          {' · '}<strong>Distance:</strong> {selectedVisit.travel.distance_km} km</p> : null}
+                      </> : null}
+                      {selectedStatus === 'completed' ? <p><strong>LC Eligible Amount:</strong> {selectedVisit.travel.eligible ? `₹${Number(selectedVisit.travel.amount || 0).toFixed(2)}` : 'N/A'}</p> : null}
+                      {selectedVisit.travel.mode === 'official_vehicle' ? <p>Official vehicle: no LC reimbursement.</p> : null}
+                    </div>
+                  ) : null}
+
                   {isOwnScope && !isHistoryVisit ? (
                     <>
                       <div className="mv-actions-grid">
@@ -3273,7 +3379,7 @@ export default function MyVisits({ user = {} }) {
 
                       <div className="mv-progress-action mv-action-stack">
                         {selectedStatus === 'scheduled' ? (
-                          <button type="button" className="mv-button mv-button--primary mv-button--full" onClick={() => runLocationAction('start')} disabled={Boolean(actionLoading)}>
+                          <button type="button" className="mv-button mv-button--primary mv-button--full" onClick={() => runLocationAction('start')} disabled={Boolean(actionLoading) || !travelForm.travel_mode}>
                             {actionLoading === 'start' ? <Loader2 className="mv-spin" size={19} /> : <Navigation size={19} />}
                             Start Visit
                           </button>
@@ -3287,7 +3393,7 @@ export default function MyVisits({ user = {} }) {
                         ) : null}
 
                         {selectedStatus === 'reached' ? (
-                          <button type="button" className="mv-button mv-button--success mv-button--full" onClick={() => runLocationAction('end')} disabled={Boolean(actionLoading)}>
+                          <button type="button" className="mv-button mv-button--success mv-button--full" onClick={() => runLocationAction('end')} disabled={Boolean(actionLoading) || (['own_two_wheeler', 'own_four_wheeler'].includes(selectedVisit.travel?.mode) && (endKm === '' || Number(endKm) < Number(selectedVisit.travel?.start_km)))}>
                             {actionLoading === 'end' ? <Loader2 className="mv-spin" size={19} /> : <Square size={18} />}
                             {actionLoading === 'end' ? 'Ending Visit...' : 'End Visit'}
                           </button>

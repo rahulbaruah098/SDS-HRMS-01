@@ -18,6 +18,7 @@ from app.extensions import get_db
 from app.middleware.tenant_guard import tenant_module_required
 from app.utils.auth import audit
 from app.utils.serializers import clean_doc
+from app.services.local_conveyance import start_travel, finish_travel, tenant_rates
 
 
 field_visits_bp = Blueprint("field_visits", __name__)
@@ -567,8 +568,13 @@ def update_visit(visit_id):
             return jsonify({"message": "Visit title cannot be empty"}), 400
         updates["title"] = title
 
-    db.field_visits.update_one({"_id": visit["_id"]}, {"$set": updates})
-    updated = db.field_visits.find_one({"_id": visit["_id"]})
+    changed = db.field_visits.update_one({
+        "_id": visit["_id"], "tenant_id": current_tenant_id(),
+        "status": {"$nin": sorted(HISTORY_STATUSES)},
+    }, {"$set": updates})
+    if not changed.matched_count:
+        return jsonify({"message": "Visit changed. Refresh before editing."}), 409
+    updated = db.field_visits.find_one({"_id": visit["_id"], "tenant_id": current_tenant_id()})
     return jsonify({"message": "Visit updated successfully", "item": clean_doc(updated)})
 
 
@@ -593,13 +599,17 @@ def reschedule_visit(visit_id):
         return jsonify({"message": "A valid rescheduled date is required"}), 400
 
     now = now_utc()
-    db.field_visits.update_one({"_id": visit["_id"]}, {"$set": {
+    changed = db.field_visits.update_one({
+        "_id": visit["_id"], "tenant_id": current_tenant_id(), "status": "scheduled",
+    }, {"$set": {
         "rescheduled_from": visit.get("scheduled_date"),
         "scheduled_date": new_date,
         "rescheduled_at": now,
         "updated_at": now,
     }})
-    updated = db.field_visits.find_one({"_id": visit["_id"]})
+    if not changed.matched_count:
+        return jsonify({"message": "Visit changed. Refresh before rescheduling."}), 409
+    updated = db.field_visits.find_one({"_id": visit["_id"], "tenant_id": current_tenant_id()})
     return jsonify({"message": "Visit rescheduled successfully", "item": clean_doc(updated)})
 
 
@@ -618,13 +628,18 @@ def cancel_visit(visit_id):
 
     payload = request.get_json(silent=True) or {}
     now = now_utc()
-    db.field_visits.update_one({"_id": visit["_id"]}, {"$set": {
+    changed = db.field_visits.update_one({
+        "_id": visit["_id"], "tenant_id": current_tenant_id(),
+        "status": {"$in": sorted(ACTIVE_STATUSES)},
+    }, {"$set": {
         "status": "cancelled",
         "cancellation_reason": normalize_text(payload.get("reason")),
         "cancelled_at": now,
         "updated_at": now,
     }})
-    updated = db.field_visits.find_one({"_id": visit["_id"]})
+    if not changed.matched_count:
+        return jsonify({"message": "Visit changed. Refresh before cancellation."}), 409
+    updated = db.field_visits.find_one({"_id": visit["_id"], "tenant_id": current_tenant_id()})
     return jsonify({"message": "Visit cancelled successfully", "item": clean_doc(updated)})
 
 
@@ -653,11 +668,28 @@ def transition_visit(visit_id, expected_status, next_status, location_field, tim
         timestamp_field: now,
         "updated_at": now,
     }
-    if next_status == "completed" and "visit_notes" in payload:
-        updates["visit_notes"] = normalize_text(payload.get("visit_notes"))
+    try:
+        if next_status == "started":
+            # Existing mobile API callers without a mode remain functional, but
+            # their visits are intentionally ineligible for reimbursement.
+            updates["travel"] = start_travel(
+                payload, tenant_rates(db, current_tenant_id()), allow_legacy=True)
+        elif next_status == "completed":
+            updates["travel"] = finish_travel(visit.get("travel"), payload)
+            if "visit_notes" in payload:
+                updates["visit_notes"] = normalize_text(payload.get("visit_notes"))
+    except ValueError as exc:
+        return jsonify({"message": str(exc), "code": "INVALID_LC_TRAVEL"}), 400
 
-    db.field_visits.update_one({"_id": visit["_id"]}, {"$set": updates})
-    updated = db.field_visits.find_one({"_id": visit["_id"]})
+    # Compare-and-set prevents a second start/end request overwriting a completed
+    # expense snapshot (including requests from the mobile application).
+    changed = db.field_visits.update_one({
+        "_id": visit["_id"], "tenant_id": current_tenant_id(),
+        "status": expected_status, "is_deleted": {"$ne": True},
+    }, {"$set": updates})
+    if not changed.matched_count:
+        return jsonify({"message": "Visit changed. Refresh and try again.", "code": "VISIT_STATE_CHANGED"}), 409
+    updated = db.field_visits.find_one({"_id": visit["_id"], "tenant_id": current_tenant_id()})
     return jsonify({
         "message": f"Visit marked as {next_status} successfully",
         "item": clean_doc(updated),

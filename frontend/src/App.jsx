@@ -26,6 +26,7 @@ import Attendance from './pages/Attendance';
 import FaceManagement from './pages/FaceManagement';
 import AttendanceLogs from './pages/AttendanceLogs.jsx';
 import MyVisits from './pages/MyVisits.jsx';
+import LocalConveyance from './pages/LocalConveyance.jsx';
 import Companies from './pages/Companies';
 import UserControl from './pages/UserControl';
 import ModuleCrud from './pages/ModuleCrud';
@@ -1268,6 +1269,12 @@ if (normalizedPage === 'attendance_logs') {
   return <AttendanceLogs setPage={setPage} user={safeUser} />;
 }
 
+if (normalizedPage === 'my_local_conveyance') {
+  return <LocalConveyance user={safeUser} manage={false} />;
+}
+if (normalizedPage === 'lc_verification') {
+  return <LocalConveyance user={safeUser} manage />;
+}
 if (normalizedPage === 'my_visits') {
   return <MyVisits setPage={setPage} user={safeUser} />;
 }

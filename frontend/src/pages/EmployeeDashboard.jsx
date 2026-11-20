@@ -5928,7 +5928,7 @@ const reportingProjectAverage = projectSummary.reporting_average_progress || ave
           </div>
         </div>
 
-        <AttendanceWidget onSuccess={loadDashboard} />
+        <AttendanceWidget onSuccess={loadDashboard} onNavigate={setPage} />
       </section>
 
       {message && <div className="inline-message">{message}</div>}

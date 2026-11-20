@@ -530,10 +530,11 @@ function sprintValidationMessage(item) {
   return '';
 }
 
-export default function AttendanceWidget({ onSuccess }) {
+export default function AttendanceWidget({ onSuccess, onNavigate }) {
   const alerts = useCustomAlert();
 
   const [mode, setMode] = useState('office');
+  const [visitPrompt, setVisitPrompt] = useState('');
   const [fieldLocation, setFieldLocation] = useState('');
   const [fieldPhotoFile, setFieldPhotoFile] = useState(null);
   const [fieldPhotoPreview, setFieldPhotoPreview] = useState('');
@@ -1076,7 +1077,9 @@ if (type === 'check-out' && !sprintReportAlreadySaved) {
       });
 
       if (!attendanceMounted.current) return false;
-      await submitCheckIn({ ...payload, ...identity });
+      const checkInResult = await submitCheckIn({ ...payload, ...identity });
+      if (mode === 'field' && checkInResult?.field_visit_reminder?.required) setVisitPrompt('field');
+      else setVisitPrompt('');
 
       alerts.success('Checked in successfully.', 'Checked In');
 
@@ -1098,6 +1101,7 @@ if (type === 'check-out' && !sprintReportAlreadySaved) {
 
       if (!attendanceMounted.current) return false;
       await submitCheckOut({ ...payload, ...identity });
+      setVisitPrompt('');
 
       alerts.success('Checked out successfully.', 'Checked Out');
       setEarlyCheckoutReasonCode('');
@@ -1111,6 +1115,7 @@ if (type === 'check-out' && !sprintReportAlreadySaved) {
     }
     return true;
   } catch (error) {
+    if (type === 'check-out' && error?.code === 'ACTIVE_VISIT_NOT_COMPLETED') setVisitPrompt('checkout');
     let latestStatus = null;
 
     try {
@@ -1520,6 +1525,17 @@ async function submitHolidayWorkRequest(event) {
         }
       `}</style>
 
+      {visitPrompt ? <div role="alert" style={{border: '1px solid #e9c7a0', borderRadius: 12, padding: 14, marginBottom: 12, background: '#fff9f0'}}>
+        <strong>{visitPrompt === 'checkout' ? 'Active Visit Not Completed' : 'Field Visit Reminder'}</strong>
+        <p style={{margin: '8px 0'}}>{visitPrompt === 'checkout' ?
+          'Please end all ongoing visits in My Visit, including final odometer readings, before checking out.' :
+          'You marked Field attendance. Start your journey in My Visit with travel details; completed visits are required for monthly LC claims.'}</p>
+        <button type="button" onClick={() => typeof onNavigate === 'function' && onNavigate('my_visits')}
+          style={{border: 'none', borderRadius: 8, padding: '9px 14px', background: '#264d8b', color: 'white', cursor: 'pointer'}}>
+          Go to My Visit
+        </button>
+        <button type="button" onClick={() => setVisitPrompt('')} style={{marginLeft: 10, padding: 8, cursor: 'pointer'}}>Dismiss</button>
+      </div> : null}
       <div className="attendance-head">
         <div>
           <p className="attendance-kicker">Today&apos;s Attendance</p>

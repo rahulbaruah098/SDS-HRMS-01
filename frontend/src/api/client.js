@@ -3979,6 +3979,40 @@ function fieldVisitId(value) {
   return encodeURIComponent(normalized);
 }
 
+export function getLocalConveyanceSettings() {
+  return api('/local-conveyance/settings');
+}
+export function updateLocalConveyanceSettings(payload) {
+  return api('/local-conveyance/settings', { method: 'PUT', body: JSON.stringify(payload) });
+}
+export function listLocalConveyanceBills(params = {}) {
+  return api(`/local-conveyance/bills${buildQuery(params)}`);
+}
+export function generateLocalConveyanceBills(year, month) {
+  return api('/local-conveyance/bills/generate', { method: 'POST', body: JSON.stringify({ year, month }) });
+}
+export function getLocalConveyanceBill(reference) {
+  return api(`/local-conveyance/bills/${encodeURIComponent(reference)}`);
+}
+export function verifyLocalConveyanceBill(reference, action, remarks = '') {
+  return api(`/local-conveyance/bills/${encodeURIComponent(reference)}/verify`, {
+    method: 'POST', body: JSON.stringify({ action, remarks }),
+  });
+}
+export async function downloadLocalConveyancePdf(reference) {
+  const blob = await api(`/local-conveyance/bills/${encodeURIComponent(reference)}/pdf`, {
+    responseType: 'blob', timeoutMs: 60000,
+  });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = `${reference.replaceAll('/', '-')}.pdf`;
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
+}
+
 export function getFieldVisits(params = {}) {
   return api(`/field-visits${buildQuery(params)}`);
 }

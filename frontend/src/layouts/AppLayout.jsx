@@ -266,7 +266,7 @@ const SIDEBAR_SECTIONS = [
   {
     name: 'Attendance & Leave',
     keys: [
-      'attendance', 'leave_requests', 'team_approvals', 'application_status',
+      'attendance', 'team_field_attendance', 'my_local_conveyance', 'leave_requests', 'team_approvals', 'application_status',
       'team_field_attendance', 'attendance_logs', 'leave', 'leave_balances',
       'holiday_work_requests', 'compoff_credits', 'compoff_records',
       'holiday_calendar', 'attendance_mode_requests',
@@ -282,7 +282,7 @@ const SIDEBAR_SECTIONS = [
   {
     name: 'Payroll & Finance',
     keys: [
-      'payslips', 'payroll_runs', 'reimbursements', 'loans_advances',
+      'payslips', 'payroll_runs', 'reimbursements', 'lc_verification', 'loans_advances',
       'payroll_banking', 'payroll_reports', 'tax_declarations',
       'payroll_configuration', 'payslip_designer',
     ],

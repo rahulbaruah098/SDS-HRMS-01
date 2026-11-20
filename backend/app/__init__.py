@@ -19,6 +19,7 @@ from .routes.face_attendance import face_bp, error_response
 from .services.face_vision import FaceError
 from .services.face_attendance import initialize as initialize_face_attendance
 from .routes.field_visits import field_visits_bp
+from .routes.local_conveyance import lc_bp
 from .routes.workflow import workflow_bp
 from .routes.projects import projects_bp
 from .routes.grievances import grievances_bp
@@ -232,6 +233,7 @@ def create_app():
     # Team Leader / Reporting Officer review with employee, date and department filters.
     # Keep this before generic CRUD so visit workflow routes are resolved explicitly.
     app.register_blueprint(field_visits_bp, url_prefix="/api/v1/field-visits")
+    app.register_blueprint(lc_bp, url_prefix="/api/v1/local-conveyance")
 
     # Dedicated Project APIs:
     # project detail, project assignment, daily progress submission,
