@@ -1,3 +1,4 @@
+# YC_MYVISIT_FARE_DEVICE_TIME_V1
 """My Visit local-conveyance rules. No attendance side effects.
 
 All money is validated/calculated server-side with Decimal. Visits created by an
@@ -105,7 +106,10 @@ def start_travel(payload, rates, allow_legacy=True):
             raise ValueError("Specify the other public transport type")
         fields["transport_type"] = transport
         fields["transport_other"] = detail if transport == "other" else ""
-        fields["fare"] = _money(_amount(payload.get("fare"), "Fare paid", MAX_FARE))
+        # Fare is optional at Start Visit, and must be entered by End Visit.
+        starting_fare = _amount(payload.get("fare"), "Fare paid", MAX_FARE, mandatory=False)
+        if starting_fare is not None:
+            fields["fare"] = _money(starting_fare)
     return fields
 
 
@@ -123,8 +127,13 @@ def finish_travel(travel, payload):
         travel.update({"end_km": _money(ending), "distance_km": _money(distance),
                        "rate": _money(rate), "amount": _money(distance * rate), "eligible": True})
     elif mode == MODE_PUBLIC:
-        fare = _amount(travel.get("fare"), "Saved fare", MAX_FARE)
-        travel.update({"amount": _money(fare), "eligible": True})
+        # End Visit can supply the actual fare or revise an earlier estimate.
+        # A blank End Visit value retains the fare saved at Start Visit.
+        final_fare = payload.get("fare")
+        if final_fare is None or str(final_fare).strip() == "":
+            final_fare = travel.get("fare")
+        fare = _amount(final_fare, "Public transport fare at End Visit", MAX_FARE)
+        travel.update({"fare": _money(fare), "amount": _money(fare), "eligible": True})
     else:
         travel.update({"eligible": False, "amount": 0.0})
     return travel

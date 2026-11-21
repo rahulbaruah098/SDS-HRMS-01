@@ -15,7 +15,9 @@ from app.services.local_conveyance import (MODE_TWO, MODE_FOUR, MODE_PUBLIC,
     tenant_rates, validate_rates)
 from app.services.local_conveyance_pdf import render_lc_bill_pdf
 from app.services.lc_workflow import (ACCOUNT_ROLES, PAYMENT_ROLES, OVERSIGHT_ROLES,
-    can_read, can_mark_paid, correction_lines, is_approver, resolve_approver, MANAGER_ROLES)
+    can_read, can_mark_paid, can_verify_accounts, can_confirm_payment,
+    senior_direct_accounts_eligible, is_direct_accounts_bill, correction_lines,
+    is_approver, resolve_approver, MANAGER_ROLES)
 from app.utils.auth import audit
 from app.utils.serializers import clean_doc
 
@@ -60,8 +62,9 @@ def _serialize_with_actions(db, bill):
         'can_submit': _owner(bill, employee) and bill.get('status') in {'draft', 'rejected', 'pending_verification'},
         'can_correct': _owner(bill, employee) and bill.get('status') == 'rejected',
         'can_manager_validate': is_approver(bill, employee, roles) and bill.get('status') == 'pending_manager',
-        'can_accounts_verify': bool(roles & ACCOUNT_ROLES) and bill.get('status') == 'pending_accounts',
-        'can_mark_paid': can_mark_paid(roles, employee) and bill.get('status') == 'verified',
+        'can_accounts_verify': can_verify_accounts(bill, employee, roles, current_user_id()) and bill.get('status') == 'pending_accounts',
+        'can_mark_paid': can_confirm_payment(bill, employee, roles, current_user_id()) and bill.get('status') == 'verified',
+        'direct_accounts': is_direct_accounts_bill(bill),
     }
     return visible
 
@@ -97,6 +100,42 @@ def _user_ids_for_roles(db, roles):
                            '$or': [{'role': {'$in': sorted(roles)}},
                                    {'roles': {'$in': sorted(roles)}}]})
     return [str(user['_id']) for user in users]
+
+
+def _direct_manager_user_ids(db, claimant_user_id):
+    """Find real, active Accounts Managers in this tenant (not the claimant).
+
+    Finance-role users whose HR-managed designation is Accounts Manager are
+    supported as well, matching the existing can_mark_paid permission rule.
+    """
+    tenant = current_tenant_id()
+    active = {'is_deleted': {'$ne': True}, 'is_active': {'$ne': False},
+              'status': {'$nin': ['inactive', 'disabled', 'suspended']}}
+    query = {'tenant_id': tenant, **active,
+             '$or': [{'role': {'$in': sorted(PAYMENT_ROLES)}},
+                     {'roles': {'$in': sorted(PAYMENT_ROLES)}}]}
+    result = {str(u['_id']) for u in db.users.find(query) if u.get('_id')}
+    # Compatibility: a Finance employee with designation "Accounts Manager"
+    # is permitted to mark payments in the existing HRMS workflow.
+    candidates = db.employees.find({'tenant_id': tenant, 'is_deleted': {'$ne': True},
+        'designation': {'$regex': r'^(accounts manager|manager accounts|finance manager|manager finance|manager of accounts)$',
+                        '$options': 'i'}})
+    for candidate in candidates:
+        uid = candidate.get('user_id')
+        if not uid:
+            continue
+        user = db.users.find_one({'_id': _oid(uid), 'tenant_id': tenant, **active})
+        if not user:
+            continue
+        raw_roles = user.get('roles') or []
+        if isinstance(raw_roles, str):
+            raw_roles = [raw_roles]
+        roles = {str(role).lower().strip().replace('-', '_').replace(' ', '_')
+                 for role in [user.get('role'), *raw_roles] if role}
+        if can_mark_paid(roles, candidate):
+            result.add(str(user['_id']))
+    result.discard(str(claimant_user_id))
+    return sorted(result)
 
 
 def _owner_user(db, bill):
@@ -362,8 +401,8 @@ def bill_action(reference):
     state = bill.get('status')
     owner = _owner(bill, employee)
     manager = is_approver(bill, employee, roles)
-    accounts = bool(roles & ACCOUNT_ROLES)
-    payer = can_mark_paid(roles, employee)
+    accounts = can_verify_accounts(bill, employee, roles, current_user_id())
+    payer = can_confirm_payment(bill, employee, roles, current_user_id())
     changes = {'updated_at': datetime.utcnow()}
     if action == 'submit':
         if not owner:
@@ -373,14 +412,34 @@ def bill_action(reference):
         try:
             approver = resolve_approver(db, current_tenant_id(), employee)
         except ValueError as exc:
-            return _error(str(exc), 409, 'LC_APPROVER_MAPPING_REQUIRED')
-        changes.update({'status': 'pending_manager', 'approval': approver,
-            'manager_validation': None, 'accounts_verification': None,
-            'submitted_at': changes['updated_at'], 'paid': False,
-            'rejected_by': None, 'rejection_reason': '', 'rejected_stage': None})
-        stage = 'submitted'
-        notify = ([approver.get('user_id')], 'LC bill awaiting your validation',
-                  f'{bill["employee_name"]} submitted {reference} for validation.')
+            if not senior_direct_accounts_eligible(employee):
+                return _error(str(exc), 409, 'LC_APPROVER_MAPPING_REQUIRED')
+            # Direct routing is restricted to Finance/Accounts Manager users in
+            # this tenant. The submitting user cannot review their own claim.
+            finance_ids = _direct_manager_user_ids(db, current_user_id())
+            if not finance_ids:
+                return _error('No separate active Finance/Accounts Manager is configured for this company. Ask HR/Admin to assign one.',
+                              409, 'LC_FINANCE_MANAGER_REQUIRED')
+            approver = {'type': 'direct_accounts_manager',
+                        'name': 'Finance / Accounts Manager', 'user_id': ''}
+            changes.update({'status': 'pending_accounts', 'approval': approver,
+                'manager_validation': {'skipped': True,
+                    'reason': 'Senior employee without an assigned TL/RO',
+                    'at': changes['updated_at'], 'by': 'system'},
+                'accounts_verification': None,
+                'submitted_at': changes['updated_at'], 'paid': False,
+                'rejected_by': None, 'rejection_reason': '', 'rejected_stage': None})
+            stage = 'submitted'
+            notify = (finance_ids, 'Senior LC bill awaiting Accounts Manager verification',
+                      f'{bill["employee_name"]} submitted {reference} directly for verification.')
+        else:
+            changes.update({'status': 'pending_manager', 'approval': approver,
+                'manager_validation': None, 'accounts_verification': None,
+                'submitted_at': changes['updated_at'], 'paid': False,
+                'rejected_by': None, 'rejection_reason': '', 'rejected_stage': None})
+            stage = 'submitted'
+            notify = ([approver.get('user_id')], 'LC bill awaiting your validation',
+                      f'{bill["employee_name"]} submitted {reference} for validation.')
     elif action == 'manager_validate':
         if not manager:
             return _error('This claim is not assigned to you as Team Leader or Reporting Officer', 403)
@@ -395,9 +454,9 @@ def bill_action(reference):
                   f'{reference} has been validated and is pending Accounts verification.')
     elif action == 'accounts_verify':
         if not accounts:
-            return _error('Accounts role required', 403)
+            return _error('Accounts Manager required for direct senior claims, or Accounts role for standard claims', 403)
         if state != 'pending_accounts' or not bill.get('manager_validation'):
-            return _error('Manager validation is required before Accounts verification', 409)
+            return _error('Manager validation or authorised senior-routing bypass is required before Accounts verification', 409)
         record = {'by': current_user_id(), 'at': changes['updated_at'], 'remarks': remarks,
                   'roles': sorted(roles)}
         changes.update({'status': 'verified', 'accounts_verification': record})
@@ -420,7 +479,7 @@ def bill_action(reference):
         if state == 'pending_manager' and not manager:
             return _error('Only the assigned manager can reject at this stage', 403)
         if state == 'pending_accounts' and not accounts:
-            return _error('Only Accounts can reject at this stage', 403)
+            return _error('Only authorised Accounts reviewers can reject at this stage', 403)
         if state not in {'pending_manager', 'pending_accounts'}:
             return _error('This claim is not awaiting your review', 409)
         if not remarks:

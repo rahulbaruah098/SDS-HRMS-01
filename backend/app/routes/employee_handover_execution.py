@@ -1,6 +1,6 @@
 """Explicit HR-authorized handover of a narrow, canonical project assignment.
 
-Never rewrites historical work, approvals, sprint ownership, or private employee data.
+Never rewrites historical work, approvals, or private employee data.
 """
 from datetime import datetime, timezone
 from bson import ObjectId

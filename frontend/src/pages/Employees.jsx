@@ -4188,7 +4188,6 @@ export default function Employees({ user = {}, setPage } = {}) {
                       ['work', 'Change requests', 'change_requests', [['Activity','title'], ['Change type','change_type'], ['Reason','reason'], ['Status','status']]],
                       ['documents', 'Employee document metadata', 'documents', [['File name','original_filename'], ['Type','document_type'], ['Status','status'], ['Uploaded','uploaded_at']]],
                       ['documents', 'Recruitment document metadata', 'recruitment_documents', [['File name','original_filename'], ['Type','document_type'], ['Status','status'], ['Uploaded','uploaded_at']]],
-                      ['documents', 'Sprint attachments', 'attachments', [['File name','original_filename'], ['Plan type','plan_type'], ['Uploaded','uploaded_at']]],
                     ].filter(([tab]) => tab === alumniDetailTab).map(([, title, key, columns]) => {
                       const rows = alumniHistory.records?.[key] || [];
                       const total = alumniHistory.totals?.[key] ?? rows.length;

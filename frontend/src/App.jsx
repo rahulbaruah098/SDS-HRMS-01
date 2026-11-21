@@ -56,7 +56,6 @@ import ApplyLeave from './pages/ApplyLeave';
 import LeaveBalances from './pages/LeaveBalances.jsx';
 import CompOffCredits from './pages/CompOffCredits.jsx';
 import Projects from './pages/Projects';
-import SprintPlanning from './pages/SprintPlanning.jsx';
 import Policies from './pages/Policies.jsx';
 import Notifications from './pages/Notifications';
 import ApplicationStatus from './pages/ApplicationStatus';
@@ -1052,7 +1051,7 @@ function shouldUseEmployeeDashboard(userRoles = []) {
   return hasAnyRole(userRoles, EMPLOYEE_CAPABILITY_ROLES);
 }
 
-function DashboardRouter({ user, setPage, sprintEnabled = false }) {
+function DashboardRouter({ user, setPage }) {
   const userRoles = normalizeRoles(user);
 
   if (userRoles.includes('super_admin')) {
@@ -1066,7 +1065,7 @@ function DashboardRouter({ user, setPage, sprintEnabled = false }) {
     employee + reporting_officer, it must still open EmployeeDashboard.
   */
   if (shouldUseEmployeeDashboard(userRoles)) {
-    return <EmployeeDashboard setPage={setPage} sprintEnabled={sprintEnabled} />;
+    return <EmployeeDashboard setPage={setPage} />;
   }
 
   return (
@@ -1076,7 +1075,7 @@ function DashboardRouter({ user, setPage, sprintEnabled = false }) {
         roles: userRoles,
       }}
       setPage={setPage}
-      sprintEnabled={sprintEnabled}
+
     />
   );
 }
@@ -1099,12 +1098,12 @@ function UnauthorizedPage({ setPage }) {
   );
 }
 
-function PageRouter({ page, user, setPage, sprintEnabled = false }) {
+function PageRouter({ page, user, setPage }) {
   const safeUser = mergeUserWithEmployeeProfile(user || {});
   const normalizedPage = normalizePageKey(page);
 
   if (normalizedPage === 'dashboard') {
-    return <DashboardRouter user={safeUser} setPage={setPage} sprintEnabled={sprintEnabled} />;
+    return <DashboardRouter user={safeUser} setPage={setPage} />;
   }
 
   if (normalizedPage === 'face_attendance') return <FaceManagement setPage={setPage} />;
@@ -1127,7 +1126,7 @@ function PageRouter({ page, user, setPage, sprintEnabled = false }) {
   if (normalizedPage === 'billing') {
     // SDS has lifetime access and must never see subscription/payment screens.
     if (isSdsLifetimeTenant(safeUser)) {
-      return <DashboardRouter user={safeUser} setPage={setPage} sprintEnabled={sprintEnabled} />;
+      return <DashboardRouter user={safeUser} setPage={setPage} />;
     }
 
     // Client Billing contains company-level subscription, quotation, payment,
@@ -1141,7 +1140,7 @@ function PageRouter({ page, user, setPage, sprintEnabled = false }) {
 
   if (normalizedPage === 'subscription_expired') {
     if (!isExpiredOrSuspendedTenant(safeUser)) {
-      return <DashboardRouter user={safeUser} setPage={setPage} sprintEnabled={sprintEnabled} />;
+      return <DashboardRouter user={safeUser} setPage={setPage} />;
     }
 
     return <SubscriptionExpired setPage={setPage} user={safeUser} />;
@@ -1319,26 +1318,6 @@ if (normalizedPage === 'companies') {
   }
 
 
-  // YourComate Sprint Planning
-  // Access is checked by the existing canAccessModule guard.
-  if (normalizedPage === 'sprint_planning') {
-    const sprintRoles = normalizeRoles(safeUser);
-    if (sprintRoles.some(role =>
-      ['super_admin'].includes(role)
-    )) {
-      return <UnauthorizedPage setPage={setPage} />;
-    }
-    if (!sprintEnabled || !canAccessModule(safeUser, 'sprint_planning')) {
-      return <UnauthorizedPage setPage={setPage} />;
-    }
-    return (
-      <SprintPlanning
-        setPage={setPage}
-        user={safeUser}
-      />
-    );
-  }
-
   if (normalizedPage === 'projects') {
     return <Projects setPage={setPage} user={safeUser} />;
   }
@@ -1512,50 +1491,6 @@ export default function App() {
   }, [user]);
 
   const normalizedPage = useMemo(() => normalizePageKey(page), [page]);
-
-  // Server-owned, tenant-specific Sprint activation. Fail closed until loaded.
-  const [sprintAvailability, setSprintAvailability] = useState({
-    context: '', enabled: false,
-  });
-  const [sprintRefreshVersion, setSprintRefreshVersion] = useState(0);
-  const sprintContext = normalizedUser
-    ? [
-        String(normalizedUser.tenant_id || normalizedUser.tenant?.id || normalizedUser.tenant?._id || ''),
-        String(normalizedUser._id || normalizedUser.id || normalizedUser.email || ''),
-      ].join(':')
-    : '';
-  const sprintEnabled = Boolean(
-    sprintContext &&
-    sprintAvailability.context === sprintContext &&
-    sprintAvailability.enabled === true
-  );
-
-  useEffect(() => {
-    const refresh = () => setSprintRefreshVersion(version => version + 1);
-    window.addEventListener('yourcomate:sprint-setting-changed', refresh);
-    return () => window.removeEventListener('yourcomate:sprint-setting-changed', refresh);
-  }, []);
-
-  useEffect(() => {
-    let active = true;
-    setSprintAvailability({ context: sprintContext, enabled: false });
-    if (!normalizedUser || !sprintContext.split(':')[0]) {
-      return () => { active = false; };
-    }
-
-    api('/sprint-planning/availability')
-      .then(data => {
-        if (active) setSprintAvailability({
-          context: sprintContext,
-          enabled: data?.enabled === true,
-        });
-      })
-      .catch(() => {
-        if (active) setSprintAvailability({ context: sprintContext, enabled: false });
-      });
-
-    return () => { active = false; };
-  }, [sprintContext, sprintRefreshVersion]);
 
   const effectivePage = useMemo(() => {
     if (!normalizedUser || !isExpiredOrSuspendedTenant(normalizedUser)) {
@@ -1791,10 +1726,6 @@ export default function App() {
     const normalizedNextPage = normalizePageKey(nextPage);
     const shouldSyncUrl = options?.syncUrl !== false;
     const shouldReplace = options?.replace === true;
-
-    if (normalizedNextPage === 'sprint_planning' && !sprintEnabled) {
-      return;
-    }
 
     setPage(normalizedNextPage);
 
@@ -2112,13 +2043,13 @@ return (
       setUser={handleSessionUserUpdate}
       page={effectivePage}
       setPage={handleSetPage}
-      sprintEnabled={sprintEnabled}
+
     >
       <PageRouter
         page={effectivePage}
         user={normalizedUser}
         setPage={handleSetPage}
-        sprintEnabled={sprintEnabled}
+
       />
     </AppLayout>
 

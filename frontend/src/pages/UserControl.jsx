@@ -720,21 +720,11 @@ export default function UserControl() {
     role: '',
   });
   const [successionSaving, setSuccessionSaving] = useState(false);
-  const [approvalPreview, setApprovalPreview] = useState(null);
-  const [approvalSelection, setApprovalSelection] = useState([]);
-  const [approvalBusy, setApprovalBusy] = useState(false);
-  const [approvalFeedback, setApprovalFeedback] = useState('');
-
   const [tenants, setTenants] = useState([]);
   const [form, setForm] = useState({ ...USER_CREATE_TEMPLATE });
   const [q, setQ] = useState('');
   const [tenant, setTenant] = useState('');
 
-  useEffect(() => {
-    setApprovalPreview(null);
-    setApprovalSelection([]);
-    setApprovalFeedback('');
-  }, [succession.predecessor_user_id, succession.successor_user_id, tenant]);
   const [designationFilter, setDesignationFilter] = useState('');
   const [edit, setEdit] = useState(null);
   const [employeeOptions, setEmployeeOptions] = useState([]);
@@ -1350,102 +1340,6 @@ export default function UserControl() {
       );
     } finally {
       setSuccessionSaving(false);
-    }
-  }
-
-  async function previewPendingApprovals() {
-    const { predecessor_user_id, successor_user_id } = succession;
-
-    if (!predecessor_user_id || !successor_user_id) return;
-
-    setApprovalBusy(true);
-    setApprovalPreview(null);
-    setApprovalSelection([]);
-    setApprovalFeedback('');
-
-    try {
-      const result = await api('/superadmin/users/pending-approval-handover', {
-        method: 'POST',
-        body: JSON.stringify({
-          predecessor_user_id,
-          successor_user_id,
-          dry_run: true,
-        }),
-      });
-
-      setApprovalPreview(result);
-      setApprovalFeedback(
-        `${result.eligible_count || 0} eligible pending approvals found. ` +
-        `${result.blocked_count || 0} require separate review.`
-      );
-    } catch (error) {
-      setApprovalFeedback(
-        error?.message || 'Could not preview pending approvals.'
-      );
-    } finally {
-      setApprovalBusy(false);
-    }
-  }
-
-  async function confirmPendingApprovalHandover() {
-    if (!approvalPreview || !approvalSelection.length || approvalBusy) return;
-
-    const selected = (approvalPreview.eligible || []).filter(
-      (item) => approvalSelection.includes(item.plan_id)
-    );
-
-    if (selected.length !== approvalSelection.length) {
-      setApprovalFeedback('Selection changed. Preview again.');
-      return;
-    }
-
-    const outgoing = successionCandidates.find(
-      (item) => item._id === succession.predecessor_user_id
-    );
-    const incoming = successionCandidates.find(
-      (item) => item._id === succession.successor_user_id
-    );
-
-    const confirmed = await showConfirm(
-      `Reassign ${selected.length} pending Sprint approval(s) from ` +
-      `${outgoing?.name || 'the former employee'} to ` +
-      `${incoming?.name || 'the replacement'}? ` +
-      'Existing approval decisions and employee records will remain unchanged.',
-      'Confirm Pending Approval Handover',
-      { danger: false, confirmLabel: 'Reassign Selected' }
-    );
-
-    if (!confirmed) return;
-
-    setApprovalBusy(true);
-    setApprovalFeedback('');
-
-    try {
-      const result = await api('/superadmin/users/pending-approval-handover', {
-        method: 'POST',
-        body: JSON.stringify({
-          predecessor_user_id: succession.predecessor_user_id,
-          successor_user_id: succession.successor_user_id,
-          dry_run: false,
-          plan_ids: selected.map((item) => item.plan_id),
-        }),
-      });
-
-      const completed = Number(result.transferred_count || 0);
-
-      setApprovalFeedback(
-        `${completed} of ${selected.length} selected approvals reassigned.`
-      );
-      setApprovalPreview(null);
-      setApprovalSelection([]);
-    } catch (error) {
-      setApprovalFeedback(
-        error?.message || 'Approval handover failed. No success assumed.'
-      );
-      setApprovalPreview(null);
-      setApprovalSelection([]);
-    } finally {
-      setApprovalBusy(false);
     }
   }
 
@@ -4209,104 +4103,6 @@ export default function UserControl() {
             />
           </div>
         </form>
-        <div style={{
-          borderTop: '1px solid rgba(120,130,160,.22)',
-          paddingTop: 20,
-          marginTop: 22,
-        }}>
-          <h3>Pending Sprint Approval Handover</h3>
-          <p>
-            Preview and select unfinished approvals assigned to the former
-            employee. Completed approvals and historical decisions are retained.
-          </p>
-
-          <button
-            type="button"
-            className="secondary"
-            onClick={previewPendingApprovals}
-            disabled={
-              approvalBusy ||
-              !succession.predecessor_user_id ||
-              !succession.successor_user_id
-            }
-          >
-            {approvalBusy ? 'Processing...' : 'Preview Pending Approvals'}
-          </button>
-
-          {approvalFeedback && (
-            <p role="status" style={{ marginTop: 12 }}>
-              {approvalFeedback}
-            </p>
-          )}
-
-          {approvalPreview && (
-            <div style={{ marginTop: 16 }}>
-              <h4>
-                Eligible Pending Approvals
-                {' '}({approvalPreview.eligible_count || 0})
-              </h4>
-
-              {(approvalPreview.eligible || []).length === 0 ? (
-                <p>No eligible pending approvals to reassign.</p>
-              ) : (
-                <div style={{ display: 'grid', gap: 10 }}>
-                  {(approvalPreview.eligible || []).map((item) => (
-                    <label
-                      key={`${item.collection}:${item.plan_id}`}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 12,
-                      }}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={approvalSelection.includes(item.plan_id)}
-                        onChange={(event) => {
-                          setApprovalSelection((previous) =>
-                            event.target.checked
-                              ? [...previous, item.plan_id]
-                              : previous.filter((id) => id !== item.plan_id)
-                          );
-                        }}
-                      />
-                      <span>
-                        {item.collection.replaceAll('_', ' ')}
-                        {' ? '}
-                        {String(item.approval_kind || '').toUpperCase()}
-                        {' ? '}
-                        {item.plan_id}
-                      </span>
-                    </label>
-                  ))}
-                </div>
-              )}
-
-              {(approvalPreview.blocked || []).length > 0 && (
-                <div style={{ marginTop: 16 }}>
-                  <h4>Requires Separate Review</h4>
-                  {(approvalPreview.blocked || []).map((item) => (
-                    <p key={`${item.collection}:${item.plan_id}`}>
-                      {item.collection.replaceAll('_', ' ')}
-                      {' ? '}
-                      {item.reason}
-                    </p>
-                  ))}
-                </div>
-              )}
-
-              <button
-                type="button"
-                className="primary"
-                style={{ marginTop: 16 }}
-                onClick={confirmPendingApprovalHandover}
-                disabled={approvalBusy || approvalSelection.length === 0}
-              >
-                Reassign Selected ({approvalSelection.length})
-              </button>
-            </div>
-          )}
-        </div>
       </section>
 
       {edit && (

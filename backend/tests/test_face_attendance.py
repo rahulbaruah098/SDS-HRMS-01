@@ -668,7 +668,7 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(r.json["attendance"]["field_photo"], "field-only")
         self.notify.assert_called_once()
 
-    def test_holiday_and_sprint_preconditions(self):
+    def test_holiday_and_normal_checkout_preconditions(self):
         token = self.proof("check-in")
         self.clock.return_value = DAY.replace(day=15)
         self.assertEqual(self.mark("check-in", {"face_proof": token}).status_code, 403)
@@ -677,36 +677,12 @@ class ApiTests(unittest.TestCase):
             self.mark("check-in", {"face_proof": token, "mode": "wfh"}).status_code, 200
         )
         checkout = self.proof("check-out")
-        self.db.system_settings.insert_one(
-            {
-                "_id": "sprint-planning:sds",
-                "tenant_id": "sds",
-                "setting_group": "sprint_planning",
-                "setting_key": "module_enabled",
-                "enabled": True,
-            }
-        )
-        self.db.sprint_weekly_plans.insert_one(
-            {
-                **self.sub,
-                "status": "approved",
-                "week_start": "2026-11-16",
-                "week_end": "2026-11-22",
-                "activities": [
-                    {
-                        "planned_date": "2026-11-17",
-                        "activity_id": "a",
-                        "status": "planned",
-                    }
-                ],
-            }
-        )
         r = self.mark(
             "check-out",
             {"face_proof": checkout, "early_checkout_reason_code": "official_duty"},
         )
-        self.assertEqual(r.json["code"], "DAILY_WORK_REPORT_REQUIRED")
-        self.assertTrue(self.db.face_profiles.find_one(self.sub)["proofs"]["check-out"])
+        self.assertEqual(r.status_code, 200, r.json)
+        self.assertNotIn("check-out", self.db.face_profiles.find_one(self.sub).get("proofs", {}))
 
     def test_approved_holiday_and_duplicate_checkout(self):
         self.clock.return_value = DAY.replace(day=15)

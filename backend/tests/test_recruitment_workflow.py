@@ -334,10 +334,13 @@ class RecruitmentWorkflowTests(unittest.TestCase):
         return service
 
     def _create_approved_job(self, *, open_job=False):
+        self.hr.update_settings({"career_company_about": "Company profile for recruitment tests."})
         request = self.hr.create_hiring_request({
             "job_title": "Accounts Manager",
             "department": "Finance",
             "business_reason": "Approved team expansion",
+            "expected_joining_date": (date.today() + timedelta(days=60)).isoformat(),
+            "resume_submission_deadline": (date.today() + timedelta(days=45)).isoformat(),
             "vacancies": 1,
             "salary_min": 500000,
             "salary_max": 700000,
@@ -658,10 +661,13 @@ class RecruitmentWorkflowTests(unittest.TestCase):
         self.assertEqual(context.exception.code, "recruitment_hr_permission_required")
 
     def test_hiring_request_requires_approval_before_job_creation(self):
+        self.hr.update_settings({"career_company_about": "Company profile for recruitment tests."})
         request = self.hr.create_hiring_request({
             "job_title": "Developer",
             "department": "IT",
             "business_reason": "New client project",
+            "expected_joining_date": (date.today() + timedelta(days=60)).isoformat(),
+            "resume_submission_deadline": (date.today() + timedelta(days=45)).isoformat(),
             "approver_user_ids": [str(self.admin_id)],
         })
         with self.assertRaises(RecruitmentServiceError) as context:
@@ -685,6 +691,55 @@ class RecruitmentWorkflowTests(unittest.TestCase):
         })
         self.assertEqual(job["status"], "draft")
         self.assertEqual(job["tenant_id"], self.TENANT_A)
+
+    def test_draft_edit_updates_required_by_and_keeps_ownership(self):
+        self.hr.update_settings({"career_company_about": "Complete company profile."})
+        request = self.hr.create_hiring_request({
+            "job_title": "Designer", "department": "IT", "business_reason": "Growth",
+            "expected_joining_date": (date.today() + timedelta(days=30)).isoformat(),
+            "resume_submission_deadline": (date.today() + timedelta(days=45)).isoformat(),
+        })
+        target = (date.today() + timedelta(days=36)).isoformat()
+        edited = self.hr.update_hiring_request(request["_id"], {
+            "job_title": "Senior Designer", "department": "IT", "business_reason": "Growth",
+            "expected_joining_date": target,
+        })
+        self.assertEqual(edited["expected_joining_date"], target)
+        self.assertEqual(edited["job_title"], "Senior Designer")
+        self.assertEqual(edited["requested_by"], request["requested_by"])
+        self.assertEqual(edited["reference_no"], request["reference_no"])
+        self.assertEqual(edited["status"], "draft")
+
+    def test_draft_edit_rejects_other_tenant_and_after_submission(self):
+        self.hr.update_settings({"career_company_about": "Complete company profile."})
+        request = self.hr.create_hiring_request({
+            "job_title": "Developer", "department": "IT", "business_reason": "Growth",
+            "expected_joining_date": (date.today() + timedelta(days=30)).isoformat(),
+            "resume_submission_deadline": (date.today() + timedelta(days=45)).isoformat(),
+            "approver_user_ids": [str(self.admin_id)],
+        })
+        with self.assertRaises(RecruitmentServiceError) as cross:
+            self.other_hr.update_hiring_request(request["_id"], {"job_title": "Hijacked"})
+        self.assertEqual(cross.exception.status_code, 404)
+        with self.assertRaises(RecruitmentServiceError) as unauthorized:
+            self.employee.update_hiring_request(request["_id"], {"job_title": "Hijacked"})
+        self.assertEqual(unauthorized.exception.status_code, 403)
+        self.hr.submit_hiring_request(request["_id"])
+        with self.assertRaises(RecruitmentServiceError) as submitted:
+            self.hr.update_hiring_request(request["_id"], {"job_title": "Changed"})
+        self.assertEqual(submitted.exception.status_code, 409)
+
+    def test_new_request_requires_about_company_and_required_by(self):
+        with self.assertRaises(RecruitmentServiceError) as company:
+            self.hr.create_hiring_request({"job_title": "Designer", "department": "IT"})
+        self.assertEqual(company.exception.code, "career_company_about_required")
+        self.hr.update_settings({"career_company_about": "Complete company profile."})
+        with self.assertRaises(RecruitmentServiceError) as required_date:
+            self.hr.create_hiring_request({
+                "job_title": "Designer", "department": "IT", "business_reason": "Growth",
+                "resume_submission_deadline": (date.today() + timedelta(days=45)).isoformat(),
+            })
+        self.assertEqual(required_date.exception.code, "expected_joining_date_required")
 
     def test_tenant_isolation_blocks_cross_company_candidate_access(self):
         candidate = self.hr.create_candidate({

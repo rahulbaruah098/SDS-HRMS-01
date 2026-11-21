@@ -17,6 +17,7 @@ import {
   createRecruitmentApplication,
   createRecruitmentCandidate,
   createRecruitmentHiringRequest,
+  updateRecruitmentHiringRequest,
   createRecruitmentJobOpening,
   createRecruitmentOffer,
   currentEmployee,
@@ -2911,9 +2912,11 @@ export default function Recruitment() {
         const status = keyOf(request.status);
         const ownRequest = [request.requested_by, request.created_by].map(String).includes(actorId);
         const canSubmit = status === 'draft' && (canManage || (isTeamLeader && ownRequest));
+        const canEditDraft = status === 'draft' && (canManage || (isTeamLeader && ownRequest));
         const canDecide = status === 'submitted' && canFinalApprove && !ownRequest;
         const finalStatus = keyOf(request.final_approval_status) || (request.final_approval_completed ? 'approved' : 'pending');
-        return <tr key={idOf(request)}><td><b className="recruitment-table-primary">{request.job_title || 'Untitled role'}</b><small className="recruitment-table-secondary">{request.reference_no || '—'}</small></td><td>{request.department || '—'}{request.department_locked ? <small className="recruitment-table-secondary">Department locked</small> : null}</td><td>{request.vacancies || 1}</td><td>{formatDate(request.expected_joining_date)}</td><td>{request.salary_min || request.salary_max ? `${money(request.salary_min || 0, request.currency)} – ${money(request.salary_max || 0, request.currency)}` : 'Not specified'}</td><td><Status value={status} /></td><td><Status value={finalStatus} /></td><td>{request.requested_by_name || '—'}</td><td><div className="recruitment-table-actions">
+        return <tr key={idOf(request)}><td><b className="recruitment-table-primary">{request.job_title || 'Untitled role'}</b><small className="recruitment-table-secondary">{request.reference_no || '—'}</small></td><td>{request.department || '—'}{request.department_locked ? <small className="recruitment-table-secondary">Department locked</small> : null}</td><td>{request.vacancies || 1}</td><td>{request.expected_joining_date ? formatDate(request.expected_joining_date) : <span className="recruitment-muted">Not set — edit draft</span>}</td><td>{request.salary_min || request.salary_max ? `${money(request.salary_min || 0, request.currency)} – ${money(request.salary_max || 0, request.currency)}` : 'Not specified'}</td><td><Status value={status} /></td><td><Status value={finalStatus} /></td><td>{request.requested_by_name || '—'}</td><td><div className="recruitment-table-actions">
+          {canEditDraft ? <button className="recruitment-btn recruitment-btn-neutral recruitment-btn-sm" type="button" onClick={() => setModal({ type: 'request', request })}><FileText size={13} />Edit draft</button> : null}
           {canSubmit ? <button className="recruitment-btn recruitment-btn-secondary recruitment-btn-sm" type="button" onClick={() => act(`submit:${idOf(request)}`, () => submitRecruitmentHiringRequest(idOf(request)), 'Hiring request sent for final approval.', 'requests')}><Send size={13} />Submit</button> : null}
           {canDecide ? <><button className="recruitment-btn recruitment-btn-success recruitment-btn-sm" type="button" onClick={() => setConfirm({ title: 'Give final hiring approval', message: `Approve the requirement for ${request.job_title}? HR will then be able to create and publish the vacancy.`, label: 'Final approve', tone: 'success', action: () => act(`approve:${idOf(request)}`, () => decideRecruitmentHiringRequest(idOf(request), { decision: 'approved' }), 'Final hiring approval completed. HR has been notified.', 'requests') })}><Check size={13} />Final approve</button><button className="recruitment-btn recruitment-btn-danger recruitment-btn-sm" type="button" onClick={() => setConfirm({ title: 'Reject hiring requirement', message: 'Enter a clear business reason.', label: 'Reject', tone: 'danger', reason: true, action: (text) => act(`reject:${idOf(request)}`, () => decideRecruitmentHiringRequest(idOf(request), { decision: 'rejected', reason: text }), 'Hiring requirement rejected.', 'requests') })}><X size={13} />Reject</button></> : null}
           {canHrPublish && status === 'approved' && finalStatus === 'approved' ? <button className="recruitment-btn recruitment-btn-primary recruitment-btn-sm" type="button" onClick={() => setModal({ type: 'job', request })}><BriefcaseBusiness size={13} />Create job</button> : null}
@@ -3349,7 +3352,7 @@ export default function Recruitment() {
     <nav className="recruitment-tabs-shell" aria-label="Recruitment sections"><div className="recruitment-tabs" role="tablist">{visibleTabs.map(([key, label, Icon]) => <button type="button" role="tab" aria-selected={tab === key} className={`recruitment-tab${tab === key ? ' active' : ''}`} key={key} onClick={() => changeTab(key)} disabled={transitioning}><Icon size={15} />{label}{Number(counts[key]) > 0 ? <span className="recruitment-tab-count">{counts[key]}</span> : null}</button>)}</div></nav>
     <div className={`recruitment-route-stage${transitioning ? ' is-leaving' : ''}`} key={tab}>{content()}</div>
 
-    {modal?.type === 'request' ? <RequestModal settings={settings} employees={employees} departments={departments} busy={busy === 'create-request'} isTeamLeader={isTeamLeader} departmentScope={departmentScope} actorId={actorId} actorName={userName} onClose={() => setModal(null)} onSave={(payload) => act('create-request', () => createRecruitmentHiringRequest(payload), 'Hiring request created as a draft.', 'requests')} /> : null}
+    {modal?.type === 'request' ? <RequestModal key={modal.request ? idOf(modal.request) : 'new-request'} initial={modal.request} settings={settings} employees={employees} departments={departments} busy={busy === 'save-request'} isTeamLeader={isTeamLeader} departmentScope={departmentScope} actorId={actorId} actorName={userName} onClose={() => setModal(null)} onSave={(payload) => act('save-request', () => modal.request ? updateRecruitmentHiringRequest(idOf(modal.request), payload) : createRecruitmentHiringRequest(payload), modal.request ? 'Hiring request draft updated.' : 'Hiring request created as a draft.', 'requests')} /> : null}
     {modal?.type === 'job' ? <JobModal requests={approvedRequests} initial={modal.request} employees={employees} busy={busy === 'create-job'} onClose={() => setModal(null)} onSave={(payload) => act('create-job', () => createRecruitmentJobOpening(payload), 'Job opening created as a draft.', 'jobs')} /> : null}
     {modal?.type === 'candidate' ? <CandidateModal jobs={jobs.filter((job) => ['open', 'draft'].includes(keyOf(job.status)))} busy={busy === 'create-candidate'} onClose={() => setModal(null)} onSave={async ({ candidatePayload, resumeFile, jobOpeningId, source }) => { setBusy('create-candidate'); try { const result = await createRecruitmentCandidate(candidatePayload, resumeFile); const candidate = itemOf(result); if (jobOpeningId) await createRecruitmentApplication({ candidate_id: idOf(candidate), job_opening_id: jobOpeningId, source }); flash('success', jobOpeningId ? 'Candidate and application created.' : 'Candidate saved.'); setModal(null); await load('candidates', true); } catch (error) { flash('danger', messageOf(error)); } finally { setBusy(''); } }} /> : null}
     {modal?.type === 'screen' ? <ScreenModal application={modal.application} busy={busy === `screen:${idOf(modal.application)}`} onClose={() => setModal(null)} onSave={(payload) => act(`screen:${idOf(modal.application)}`, () => updateRecruitmentScreening(idOf(modal.application), payload), 'Candidate screening saved.', 'candidates')} /> : null}
@@ -3401,12 +3404,23 @@ function ReportStats({ title, rows }) {
   return <section className="recruitment-report-card"><h4>{title}</h4><p>Summary for the selected period.</p><div className="recruitment-stat-list">{rows.length ? rows.slice(0, 10).map((item, index) => <div className="recruitment-stat-row" key={`${item.label}-${index}`}><span>{item.label}</span><strong>{item.value}</strong></div>) : <p className="recruitment-muted">No data available.</p>}</div></section>;
 }
 
-function RequestModal({ settings, employees, departments, busy, isTeamLeader, departmentScope, actorId, actorName, onClose, onSave }) {
+function RequestModal({ initial, settings, employees, departments, busy, isTeamLeader, departmentScope, actorId, actorName, onClose, onSave }) {
+  const editing = Boolean(initial);
   const [form, setForm] = useState(() => ({
     ...EMPTY_REQUEST,
-    department: isTeamLeader ? departmentScope.department : '',
-    department_id: isTeamLeader ? departmentScope.department_id : '',
-    hiring_manager_user_id: isTeamLeader ? actorId : '',
+    ...(initial ? {
+      ...initial,
+      required_skills: (initial.required_skills || []).join(', '),
+      key_responsibilities: (initial.key_responsibilities || []).join('\n'),
+      expected_joining_date: initial.expected_joining_date || '',
+      resume_submission_deadline: initial.resume_submission_deadline || '',
+      salary_min: initial.salary_min ?? '',
+      salary_max: initial.salary_max ?? '',
+      approver_user_id: (initial.approver_user_ids || [])[0] || '',
+    } : {}),
+    department: isTeamLeader ? departmentScope.department : (initial?.department || ''),
+    department_id: isTeamLeader ? departmentScope.department_id : (initial?.department_id || ''),
+    hiring_manager_user_id: isTeamLeader ? actorId : (initial?.hiring_manager_user_id || ''),
     leadership_approval_required: true,
   }));
   const update = (key, value) => setForm((state) => ({ ...state, [key]: value }));
@@ -3430,7 +3444,7 @@ function RequestModal({ settings, employees, departments, busy, isTeamLeader, de
   };
   const departmentMissing = isTeamLeader && !departmentScope.department;
   const careerCompanyMissing = !String(settings?.career_company_about || '').trim();
-  return <Modal title="Create hiring request" subtitle={isTeamLeader ? 'Raise a manpower need for your assigned department. Final approval goes to Admin or the Managing Director.' : 'Record the business need before HR opens a vacancy.'} onClose={onClose} large footer={<><button type="button" className="recruitment-btn recruitment-btn-neutral" onClick={onClose}>Cancel</button><button type="submit" form="request-form" className="recruitment-btn recruitment-btn-primary" disabled={busy || departmentMissing || careerCompanyMissing}>{busy ? <Loader2 size={15} /> : <Check size={15} />}Save draft</button></>}>
+  return <Modal title={editing ? "Edit hiring request draft" : "Create hiring request"} subtitle={isTeamLeader ? 'Raise a manpower need for your assigned department. Final approval goes to Admin or the Managing Director.' : 'Record the business need before HR opens a vacancy.'} onClose={onClose} large footer={<><button type="button" className="recruitment-btn recruitment-btn-neutral" onClick={onClose}>Cancel</button><button type="submit" form="request-form" className="recruitment-btn recruitment-btn-primary" disabled={busy || departmentMissing || (!editing && careerCompanyMissing)}>{busy ? <Loader2 size={15} /> : <Check size={15} />}{editing ? "Save changes" : "Save draft"}</button></>}>
     {careerCompanyMissing ? <div className="yc-company-profile-required" role="alert"><AlertCircle size={18}/><strong>Please fill up the About the Company details in System Settings. Ask HR/Admin to complete it before creating a hiring request.</strong></div> : null}
       <form id="request-form" className="recruitment-form" onSubmit={submit}>
       {isTeamLeader ? <div className={`recruitment-alert ${departmentMissing ? 'recruitment-alert-danger' : 'recruitment-alert-success'}`}>{departmentMissing ? <AlertCircle size={17} /> : <ShieldCheck size={17} />}<span>{departmentMissing ? 'Your employee profile has no assigned department. Ask HR or Admin to update it before creating a request.' : `Department is locked to ${departmentScope.department}. You cannot create a request for another department or approve your own request.`}</span></div> : null}
@@ -3440,7 +3454,7 @@ function RequestModal({ settings, employees, departments, busy, isTeamLeader, de
         <Field label="Vacancies" required><input required type="number" min="1" value={form.vacancies} onChange={(event) => update('vacancies', event.target.value)} /></Field>
         <Field label="Employment type"><select value={form.employment_type} onChange={(event) => update('employment_type', event.target.value)}>{['permanent', 'contract', 'temporary', 'trainee', 'consultant', 'intern'].map((value) => <option key={value} value={value}>{labelOf(value)}</option>)}</select></Field>
         <Field label="Work location"><input value={form.work_location} onChange={(event) => update('work_location', event.target.value)} /></Field>
-        <Field label="Expected joining date"><input type="date" value={form.expected_joining_date} onChange={(event) => update('expected_joining_date', event.target.value)} /></Field>
+        <Field label="Required by (expected joining date)" required hint="Date by which the employee is needed. Shown under Required by in Hiring Requests."><input required type="date" value={form.expected_joining_date} onChange={(event) => update('expected_joining_date', event.target.value)} /></Field>
       </div></div>
       <div className="recruitment-form-section"><h3 className="recruitment-form-section-title">Business justification</h3><div className="recruitment-form-grid">
         <Field label="Business reason" required full><textarea required value={form.business_reason} onChange={(event) => update('business_reason', event.target.value)} placeholder="Replacement, growth, new project or another approved need" /></Field>

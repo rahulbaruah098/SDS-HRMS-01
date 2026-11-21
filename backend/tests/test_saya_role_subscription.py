@@ -302,10 +302,10 @@ class CapabilityPermissionTests(SayaTestCase):
 class ProgressiveDisclosureTests(SayaTestCase):
     """Regression coverage for Saya's concise, ask-only-what-is-needed behavior."""
 
-    def test_capability_service_uses_progressive_disclosure_version(self):
+    def test_capability_service_uses_current_tenant_safe_version(self):
         self.assertEqual(
             SAYA_CAPABILITY_SERVICE_VERSION,
-            "2026-09-03-PROGRESSIVE-DISCLOSURE-R1",
+            "2026-09-04-TENANT-SAFE-LIVE-CONTEXT-R2",
         )
 
     def test_leave_application_does_not_fetch_balance_automatically(self):

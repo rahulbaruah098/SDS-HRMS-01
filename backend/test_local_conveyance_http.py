@@ -169,7 +169,7 @@ class LocalConveyanceHttp(unittest.TestCase):
         self.assertEqual(status(result),409)
         self.assertEqual(payload(result)['code'],'VISIT_STATE_CHANGED')
 
-    def test_checkout_active_visit_blocks_before_sprint_or_write(self):
+    def test_checkout_active_visit_blocks_before_write(self):
         self.ctx('/api/v1/attendance/check-out','POST',{'mode':'field'})
         db=MagicMock()
         db.attendance_logs.find_one.return_value={'_id':ObjectId(),'tenant_id':'sds',

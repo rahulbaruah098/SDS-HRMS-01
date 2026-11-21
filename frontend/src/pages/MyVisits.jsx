@@ -41,6 +41,7 @@ import {
   updateFieldVisit,
   uploadFieldVisitPicture,
 } from '../api/client';
+import { deviceTimeContext, formatServerUtcForDevice } from '../utils/employeeDeviceTime';
 
 const TRAVEL_MODES = [
   ['own_two_wheeler', 'Own Vehicle — Two Wheeler'],
@@ -183,18 +184,7 @@ function formatDate(value) {
 }
 
 function formatDateTime(value) {
-  if (!value) return '—';
-
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return String(value);
-
-  return parsed.toLocaleString('en-IN', {
-    day: '2-digit',
-    month: 'short',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+  return formatServerUtcForDevice(value);
 }
 
 function getVisitId(visit) {
@@ -565,6 +555,7 @@ export default function MyVisits({ user = {}, setPage: navigatePage }) {
     getSavedMyVisitVehicles().then(data => setSavedVehicles(data?.items || {})).catch(() => {});
   }, []);
   const [endKm, setEndKm] = useState('');
+  const [endFare, setEndFare] = useState('');
   const [lcRates, setLcRates] = useState({ two_wheeler_rate: 4, four_wheeler_rate: 14 });
   useEffect(() => {
     getLocalConveyanceSettings().then(setLcRates).catch(() => {});
@@ -874,6 +865,7 @@ export default function MyVisits({ user = {}, setPage: navigatePage }) {
     setSelectedVisit(visit);
     setTravelForm({ ...EMPTY_TRAVEL_FORM });
     setEndKm('');
+    setEndFare(visit.travel?.fare == null ? '' : String(visit.travel.fare));
     setVisitNotes(visit.visit_notes || '');
     setRescheduleDate(visit.scheduled_date || '');
     setPicturePreview('');
@@ -886,6 +878,7 @@ export default function MyVisits({ user = {}, setPage: navigatePage }) {
       const item = response?.item || visit;
       setSelectedVisit(item);
       setVisitNotes(item.visit_notes || '');
+      setEndFare(item.travel?.fare == null ? '' : String(item.travel.fare));
       setRescheduleDate(item.scheduled_date || '');
     } catch (detailError) {
       showFeedback(
@@ -1068,15 +1061,20 @@ export default function MyVisits({ user = {}, setPage: navigatePage }) {
 
       if (action === 'start') {
         if (!travelForm.travel_mode) throw new Error('Select the mode of travel before starting your visit.');
-        response = await startFieldVisit(visitId, { ...location, ...travelForm });
+        response = await startFieldVisit(visitId, { ...location, ...travelForm, ...deviceTimeContext() });
         if (['own_two_wheeler', 'own_four_wheeler'].includes(travelForm.travel_mode)) {
           setSavedVehicles(old => ({ ...old, [travelForm.travel_mode]: response?.item?.travel?.vehicle_number || travelForm.vehicle_number }));
         }
-      } else if (action === 'reached') response = await markFieldVisitReached(visitId, location);
+      } else if (action === 'reached') response = await markFieldVisitReached(visitId, { ...location, ...deviceTimeContext() });
       else response = await endFieldVisit(visitId, {
-        ...location, ...(selectedVisit.travel?.mode === 'own_two_wheeler' || selectedVisit.travel?.mode === 'own_four_wheeler' ? { end_km: endKm } : {}),
+        ...location, ...deviceTimeContext(),
+        ...(selectedVisit.travel?.mode === 'own_two_wheeler' || selectedVisit.travel?.mode === 'own_four_wheeler' ? { end_km: endKm } : {}),
+        ...(selectedVisit.travel?.mode === 'public_transport' ? { fare: endFare } : {}),
       });
 
+      if (response?.item?.travel?.mode === 'public_transport') {
+        setEndFare(response.item.travel.fare == null ? '' : String(response.item.travel.fare));
+      }
       setSelectedVisit(response?.item || selectedVisit);
       showFeedback(
         'progress',
@@ -3297,7 +3295,8 @@ export default function MyVisits({ user = {}, setPage: navigatePage }) {
                             <option value="rented_car_taxi">Rented Car / Taxi</option><option value="other">Other</option>
                           </LcField>
                           {travelForm.transport_type === 'other' ? <LcField label="Specify Transport" value={travelForm.transport_other} onChange={e => updateTravelField('transport_other', e.target.value)} required /> : null}
-                          <LcField label="Fare Paid (₹)" type="number" value={travelForm.fare} onChange={e => updateTravelField('fare', e.target.value)} required />
+                          <LcField label="Fare Paid (₹) — optional at Start Visit" type="number" value={travelForm.fare} onChange={e => updateTravelField('fare', e.target.value)} />
+                          <p style={{fontSize:12,margin:0,color:'#475569'}}>You can enter the final fare when ending the visit. Fare is mandatory before completion.</p>
                         </> : null}
                         {travelForm.travel_mode && travelForm.travel_mode !== 'official_vehicle' ? <>
                           <LcField label="From Location" value={travelForm.from_location} onChange={e => updateTravelField('from_location', e.target.value)} required />
@@ -3321,8 +3320,14 @@ export default function MyVisits({ user = {}, setPage: navigatePage }) {
                         {' · '}<strong>To:</strong> {selectedVisit.travel.to_location || 'N/A'}</p>
                       <p><strong>Purpose:</strong> {selectedVisit.travel.purpose || 'N/A'}
                         {' · '}<strong>Project:</strong> {selectedVisit.travel.project || 'N/A'}</p>
-                      {selectedVisit.travel.mode === 'public_transport' ? <p><strong>Fare saved:</strong> ₹{Number(selectedVisit.travel.fare || 0).toFixed(2)}
-                        {' · '}<strong>Transport:</strong> {selectedVisit.travel.transport_type === 'other' ? selectedVisit.travel.transport_other : selectedVisit.travel.transport_type}</p> : null}
+                      {selectedVisit.travel.mode === 'public_transport' ? <>
+                        <p><strong>Fare:</strong> {selectedVisit.travel.fare == null ? 'To be entered at End Visit' : `₹${Number(selectedVisit.travel.fare).toFixed(2)}`}
+                        {' · '}<strong>Transport:</strong> {selectedVisit.travel.transport_type === 'other' ? selectedVisit.travel.transport_other : selectedVisit.travel.transport_type}</p>
+                        {selectedStatus === 'reached' && isOwnScope ? <div style={TRAVEL_GRID}>
+                          <LcField label="Final public transport fare (₹)" type="number" value={endFare} onChange={e => setEndFare(e.target.value)} required />
+                          <p style={{fontSize:12,margin:0,color:'#475569'}}>Enter your actual fare before End Visit. You may adjust the amount entered at Start Visit.</p>
+                        </div> : null}
+                      </> : null}
                       {['own_two_wheeler', 'own_four_wheeler'].includes(selectedVisit.travel.mode) ? <>
                         <p><strong>Vehicle:</strong> {selectedVisit.travel.vehicle_number || 'Not provided'}
                           {' · '}<strong>Start KM:</strong> {selectedVisit.travel.start_km}
@@ -3430,7 +3435,7 @@ export default function MyVisits({ user = {}, setPage: navigatePage }) {
                         ) : null}
 
                         {selectedStatus === 'reached' ? (
-                          <button type="button" className="mv-button mv-button--success mv-button--full" onClick={() => runLocationAction('end')} disabled={Boolean(actionLoading) || (['own_two_wheeler', 'own_four_wheeler'].includes(selectedVisit.travel?.mode) && (endKm === '' || Number(endKm) < Number(selectedVisit.travel?.start_km)))}>
+                          <button type="button" className="mv-button mv-button--success mv-button--full" onClick={() => runLocationAction('end')} disabled={Boolean(actionLoading) || (['own_two_wheeler', 'own_four_wheeler'].includes(selectedVisit.travel?.mode) && (endKm === '' || Number(endKm) < Number(selectedVisit.travel?.start_km))) || (selectedVisit.travel?.mode === 'public_transport' && (endFare.trim() === '' || !Number.isFinite(Number(endFare)) || Number(endFare) < 0))}>
                             {actionLoading === 'end' ? <Loader2 className="mv-spin" size={19} /> : <Square size={18} />}
                             {actionLoading === 'end' ? 'Ending Visit...' : 'End Visit'}
                           </button>

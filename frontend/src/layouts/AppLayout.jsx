@@ -261,7 +261,7 @@ function roleLabel(role = '') {
 const SIDEBAR_SECTIONS = [
   {
     name: 'Work & Planning',
-    keys: ['sprint_planning', 'projects'],
+    keys: ['projects'],
   },
   {
     name: 'Attendance & Leave',
@@ -968,7 +968,7 @@ function notificationIsUnread(notification = {}) {
   return notification.read !== true && notification.status !== 'read';
 }
 
-export default function AppLayout({ user, setUser, page, setPage, children, sprintEnabled = false }) {
+export default function AppLayout({ user, setUser, page, setPage, children }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [notificationOpen, setNotificationOpen] = useState(false);
   const [notifications, setNotifications] = useState([]);
@@ -1080,8 +1080,7 @@ export default function AppLayout({ user, setUser, page, setPage, children, spri
   applyProfilePhotoAliases(safeUser, getUserPhoto(safeUser));
 
   const modules = moduleList(safeUser).filter(
-    (module) => module[0] !== 'dashboard' &&
-      (module[0] !== 'sprint_planning' || sprintEnabled),
+    (module) => module[0] !== 'dashboard',
   );
 
   const groupedModules = useMemo(() => {

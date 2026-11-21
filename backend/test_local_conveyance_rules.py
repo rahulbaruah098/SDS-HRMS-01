@@ -113,8 +113,12 @@ class LocalConveyanceRules(unittest.TestCase):
         self.assertEqual(v['transport_other'],'shared van')
     def test_negative_fare_rejected(self):
         with self.assertRaises(ValueError): self.start(travel_mode=lc.MODE_PUBLIC,transport_type='auto',fare=-1)
-    def test_public_missing_fare_rejected(self):
-        with self.assertRaisesRegex(ValueError,'Fare'): self.start(travel_mode=lc.MODE_PUBLIC,transport_type='auto',fare='')
+    def test_public_fare_may_be_added_at_end(self):
+        visit=self.start(travel_mode=lc.MODE_PUBLIC,transport_type='auto',fare='')
+        with self.assertRaisesRegex(ValueError,'[Ff]are'): lc.finish_travel(visit,{})
+        ended=lc.finish_travel(visit,{'fare':190})
+        self.assertEqual(ended['amount'],190)
+        self.assertEqual(ended['fare'],190)
     def test_public_no_odometer_at_end(self):
         v=self.start(travel_mode=lc.MODE_PUBLIC,transport_type='bus',fare=85)
         self.assertNotIn('end_km',lc.finish_travel(v,{}))

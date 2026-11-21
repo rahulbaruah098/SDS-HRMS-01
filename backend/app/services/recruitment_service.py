@@ -1321,6 +1321,7 @@ class RecruitmentService:
             "expected_joining_date": parse_date(
                 data.get("expected_joining_date"),
                 "expected_joining_date",
+                required=True,
             ),
             "required_experience": safe_str(
                 data.get("required_experience")
@@ -1384,6 +1385,126 @@ class RecruitmentService:
             },
         )
         return doc
+    def update_hiring_request(self, request_id, payload):
+        """Edit an existing draft, preserving tenant ownership, approvals and audit history."""
+        self._require_hiring_request_creator()
+        doc = self._get(HIRING_REQUESTS, request_id, "Hiring request")
+        if normalize_key(doc.get("status")) != "draft":
+            raise RecruitmentServiceError(
+                "Only draft hiring requests can be edited.",
+                code="hiring_request_not_draft", status_code=409,
+            )
+        if not self._has(HR_ROLES) and safe_str(doc.get("requested_by")) != self.actor_id:
+            raise RecruitmentServiceError(
+                "You can edit only hiring requests you created.",
+                code="hiring_request_edit_denied", status_code=403,
+            )
+        data = dict(payload or {})
+        allowed = {
+            "job_title", "department", "department_id", "vacancies",
+            "work_location", "employment_type", "business_reason", "expected_joining_date",
+            "resume_submission_deadline", "required_experience", "required_skills",
+            "key_responsibilities", "qualification", "salary_min", "salary_max", "currency",
+            "budget_notes", "hiring_manager_user_id", "hiring_manager_name",
+            "approver_user_ids", "approver_user_id", "finance_approval_required",
+        }
+        if not data or not (allowed & data.keys()):
+            raise RecruitmentServiceError("No editable fields were supplied.", code="empty_hiring_request_update")
+        title = safe_str(data.get("job_title", doc.get("job_title")))
+        reason = safe_str(data.get("business_reason", doc.get("business_reason")))
+        if not title:
+            raise RecruitmentServiceError("Job title is required.", code="job_title_required")
+        if not reason:
+            raise RecruitmentServiceError("Business reason is required.", code="business_reason_required")
+        deadline = parse_date(
+            data.get("resume_submission_deadline", doc.get("resume_submission_deadline")),
+            "resume_submission_deadline", required=True,
+        )
+        if deadline < _recruitment_today():
+            raise RecruitmentServiceError(
+                "Last date to submit resume cannot be in the past.",
+                code="invalid_resume_submission_deadline",
+            )
+        required_by = parse_date(
+            data.get("expected_joining_date", doc.get("expected_joining_date")),
+            "expected_joining_date", required=True,
+        )
+        department = safe_str(data.get("department", doc.get("department")))
+        department_id = safe_str(data.get("department_id", doc.get("department_id")))
+        if self._is_department_team_leader():
+            scope = self._actor_department_scope(required=True)
+            if (
+                safe_str(doc.get("requested_by")) != self.actor_id
+                or normalize_key(doc.get("department")) != normalize_key(scope["department"])
+                or normalize_key(department) != normalize_key(scope["department"])
+                or (department_id and scope["department_id"] and department_id != scope["department_id"])
+            ):
+                raise RecruitmentServiceError(
+                    "Team Leaders can edit only their own assigned-department drafts.",
+                    code="team_leader_department_scope_denied", status_code=403,
+                )
+            department, department_id = scope["department"], scope["department_id"]
+        if not department:
+            raise RecruitmentServiceError("Department is required.", code="department_required")
+        try:
+            vacancies = int(data.get("vacancies", doc.get("vacancies", 1)))
+        except (TypeError, ValueError, OverflowError):
+            raise RecruitmentServiceError("Vacancies must be a positive whole number.", code="invalid_vacancies")
+        if vacancies < 1:
+            raise RecruitmentServiceError("Vacancies must be at least one.", code="invalid_vacancies")
+        salary_min = as_float(data.get("salary_min", doc.get("salary_min")), "salary_min", 0)
+        salary_max = as_float(data.get("salary_max", doc.get("salary_max")), "salary_max", 0)
+        if salary_min is not None and salary_max is not None and salary_max < salary_min:
+            raise RecruitmentServiceError("Maximum salary cannot be lower than minimum salary.", code="invalid_salary_range")
+        approvers = doc.get("approver_user_ids") or []
+        if "approver_user_ids" in data or "approver_user_id" in data:
+            approvers = unique_strings(data.get("approver_user_ids") or (
+                [data.get("approver_user_id")] if data.get("approver_user_id") else []
+            ))
+            approvers = self._hiring_request_approvers(approvers)
+        manager_id = safe_str(data.get("hiring_manager_user_id", doc.get("hiring_manager_user_id")))
+        manager_name = safe_str(data.get("hiring_manager_name", doc.get("hiring_manager_name")))
+        if self._is_department_team_leader():
+            manager_id, manager_name = self.actor_id, self.actor_name
+        skills = data.get("required_skills", doc.get("required_skills") or [])
+        if isinstance(skills, str):
+            skills = re.split(r"[,\n]", skills)
+        responsibilities = data.get("key_responsibilities", doc.get("key_responsibilities") or [])
+        if isinstance(responsibilities, str):
+            responsibilities = re.split(r"\r?\n", responsibilities)
+        updates = {
+            "job_title": title, "department": department, "department_id": department_id,
+            "vacancies": vacancies, "work_location": safe_str(data.get("work_location", doc.get("work_location"))),
+            "employment_type": normalize_key(data.get("employment_type", doc.get("employment_type") or "permanent")),
+            "business_reason": reason, "expected_joining_date": required_by,
+            "resume_submission_deadline": deadline,
+            "required_experience": safe_str(data.get("required_experience", doc.get("required_experience"))),
+            "required_skills": unique_strings(skills), "key_responsibilities": unique_strings(responsibilities),
+            "qualification": safe_str(data.get("qualification", doc.get("qualification"))),
+            "salary_min": salary_min, "salary_max": salary_max,
+            "currency": safe_str(data.get("currency", doc.get("currency") or "INR")).upper(),
+            "budget_notes": safe_str(data.get("budget_notes", doc.get("budget_notes"))),
+            "hiring_manager_user_id": manager_id, "hiring_manager_name": manager_name,
+            "approver_user_ids": approvers,
+            "finance_approval_required": bool(data.get("finance_approval_required", doc.get("finance_approval_required"))),
+            "updated_at": utcnow(), "updated_by": self.actor_id, "updated_by_name": self.actor_name,
+        }
+        result = self._c(HIRING_REQUESTS).update_one(
+            self._q({"_id": doc["_id"], "status": "draft"}), {"$set": updates},
+        )
+        if result.matched_count != 1:
+            raise RecruitmentServiceError(
+                "This draft was changed or submitted by another user. Refresh before editing.",
+                code="hiring_request_edit_conflict", status_code=409,
+            )
+        changed = sorted(key for key in updates if key not in {"updated_at", "updated_by", "updated_by_name"} and doc.get(key) != updates[key])
+        self._activity(
+            "updated", "hiring_request", doc["_id"],
+            message=f"Hiring request {doc.get('reference_no')} draft updated.",
+            details={"changed_fields": changed},
+        )
+        return self._get(HIRING_REQUESTS, doc["_id"], "Hiring request")
+
     def get_hiring_request(self, request_id):
         self._require_reader()
         doc = self._get(HIRING_REQUESTS, request_id, "Hiring request")
@@ -1431,6 +1552,11 @@ class RecruitmentService:
                 code="career_company_about_required", status_code=409,
             )
         doc = self._get(HIRING_REQUESTS, request_id, "Hiring request")
+        if not parse_date(doc.get("expected_joining_date"), "expected_joining_date"):
+            raise RecruitmentServiceError(
+                "Set the Required by date before submitting this hiring request.",
+                code="hiring_request_required_by_missing", status_code=409,
+            )
         team_leader_submission = self._is_department_team_leader()
 
         if team_leader_submission:

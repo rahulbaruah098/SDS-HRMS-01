@@ -4601,29 +4601,6 @@ def get_alumni_history(employee_id):
             list(collection.find(query).sort("_id", -1).limit(200))
         )
 
-    # Preserve work history under the original employee identity.
-    # These are read-only metadata queries; attachments are not downloaded.
-    sprint_collections = {
-        "monthly_plans": "sprint_monthly_plans",
-        "weekly_plans": "sprint_weekly_plans",
-        "change_requests": "sprint_change_requests",
-        "attachments": "sprint_attachments",
-    }
-
-    for section, collection_name in sprint_collections.items():
-        collection = db[collection_name]
-        query = {
-            "tenant_id": tenant_id,
-            "is_deleted": {"$ne": True},
-            "employee_id": {"$in": identity_values},
-        }
-
-        totals[section] = collection.count_documents(query)
-
-        projection = {"storage_id": 0} if section == "attachments" else None
-        cursor = collection.find(query, projection).sort("_id", -1).limit(200)
-        records[section] = serialize_list(list(cursor))
-
     # Optional historical document records, restricted to the
     # canonical employee identity. Never return storage identifiers
     # or file-download URLs from the Alumni summary endpoint.

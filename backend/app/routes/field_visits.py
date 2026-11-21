@@ -95,6 +95,50 @@ def now_utc():
     return datetime.utcnow()
 
 
+def device_report_context(payload):
+    """Non-authoritative device time metadata for debugging and local display.
+
+    The server-owned UTC timestamp remains the only source of truth. Never
+    substitute a client-provided timestamp for attendance or audit records.
+    """
+    timezone_name = normalize_text((payload or {}).get("device_timezone"))
+    if timezone_name and not re.fullmatch(r"[A-Za-z0-9_+./-]{1,64}", timezone_name):
+        timezone_name = ""
+
+    reported = normalize_text((payload or {}).get("device_reported_at"))
+    if reported:
+        try:
+            # Accept only ISO 8601 instants with a UTC offset or Z.
+            parsed = datetime.fromisoformat(reported.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                reported = ""
+            else:
+                reported = parsed.isoformat()
+        except (ValueError, TypeError):
+            reported = ""
+
+    offset = (payload or {}).get("device_utc_offset_minutes")
+    if isinstance(offset, bool):
+        offset = None
+    try:
+        offset = int(offset) if offset is not None else None
+    except (ValueError, TypeError, OverflowError):
+        offset = None
+    if offset is not None and not -720 <= offset <= 840:
+        offset = None
+
+    result = {}
+    if timezone_name:
+        result["timezone"] = timezone_name
+    if reported:
+        result["reported_at"] = reported
+    if offset is not None:
+        result["utc_offset_minutes"] = offset
+    return result
+
+
+
+
 def current_tenant_id():
     user = getattr(g, "current_user", {}) or {}
     return normalize_text(getattr(g, "tenant_id", None) or user.get("tenant_id"))
@@ -682,6 +726,9 @@ def transition_visit(visit_id, expected_status, next_status, location_field, tim
         timestamp_field: now,
         "updated_at": now,
     }
+    device_context = device_report_context(payload)
+    if device_context:
+        updates[f"{timestamp_field}_device"] = device_context
     try:
         if next_status == "started":
             # Existing mobile API callers without a mode remain functional, but

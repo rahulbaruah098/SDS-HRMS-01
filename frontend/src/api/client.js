@@ -2179,6 +2179,10 @@ export function createRecruitmentHiringRequest(payload = {}) {
   return recruitmentJson('/hiring-requests', 'POST', payload);
 }
 
+export function updateRecruitmentHiringRequest(requestId, payload = {}) {
+  return recruitmentJson(`/hiring-requests/${recruitmentId(requestId, 'Hiring request ID')}`, 'PATCH', payload);
+}
+
 export function getRecruitmentHiringRequest(requestId) {
   return recruitmentJson(
     `/hiring-requests/${recruitmentId(requestId, 'Hiring request ID')}`,

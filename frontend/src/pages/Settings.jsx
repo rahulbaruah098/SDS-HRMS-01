@@ -26,9 +26,7 @@ import {
 
 import { api, normalizeProfilePhotoUrl, getRecruitmentSettings, updateRecruitmentSettings } from '../api/client';
 import '../career-company-settings-v2.css';
-import SprintTemplateBuilder from '../components/SprintTemplateBuilder';
 import FaceAttendanceSettings from '../components/FaceAttendanceSettings';
-import { getSprintPlanningSettings, updateSprintPlanningSettings } from '../api/sprintPlanning';
 import { normalizeRoleList } from '../data/modules';
 
 const SETTINGS_POPUP_AUTO_HIDE_MS = 3600;
@@ -742,14 +740,6 @@ export default function Settings({ user, setPage }) {
   const [payrollBrandingMessage, setPayrollBrandingMessage] = useState('');
   const [payrollBrandingError, setPayrollBrandingError] = useState('');
 
-  // STEP 44B.52G - SPRINT PLANNING SETTINGS
-  const [sprintEnabled, setSprintEnabled] = useState(false);
-  const [sprintLoading, setSprintLoading] = useState(true);
-  const [sprintSaving, setSprintSaving] = useState(false);
-  const [sprintError, setSprintError] = useState('');
-  const [sprintMessage, setSprintMessage] = useState('');
-  const [sprintCanManage, setSprintCanManage] = useState(false);
-
   const [confirmPopup, setConfirmPopup] = useState(null);
   const confirmResolverRef = useRef(null);
 
@@ -824,45 +814,9 @@ export default function Settings({ user, setPage }) {
   const attendanceScheduleBusy =
     attendanceScheduleLoading || attendanceScheduleSaving;
 
-  const hasSprintSettingsManagerRole =
+  const hasAttendanceSettingsManagerRole =
     isPlatformSuperadmin ||
     userRoles.some((role) => ATTENDANCE_REASON_MANAGER_ROLES.has(role));
-
-  useEffect(() => {
-    if (!hasSprintSettingsManagerRole) {
-      setSprintLoading(false);
-      setSprintCanManage(false);
-      return;
-    }
-
-    let active = true;
-
-    async function loadSprintSettings() {
-      try {
-        setSprintLoading(true);
-        setSprintError('');
-        const data = await getSprintPlanningSettings();
-
-        if (!active) return;
-
-        setSprintEnabled(data?.enabled === true);
-        setSprintCanManage(data?.can_manage === true);
-      } catch (error) {
-        if (!active) return;
-        setSprintError(
-          error?.message || 'Unable to load Sprint Planning settings.',
-        );
-      } finally {
-        if (active) setSprintLoading(false);
-      }
-    }
-
-    loadSprintSettings();
-
-    return () => {
-      active = false;
-    };
-  }, [hasSprintSettingsManagerRole]);
 
   const hasPayrollBrandingManagerRole =
     isPlatformSuperadmin ||
@@ -931,53 +885,6 @@ export default function Settings({ user, setPage }) {
         busy: false,
       });
     });
-  }
-
-  async function handleSprintSettingChange() {
-    if (
-      !hasSprintSettingsManagerRole ||
-      !sprintCanManage ||
-      sprintLoading ||
-      sprintSaving
-    ) {
-      return;
-    }
-
-    const nextEnabled = !sprintEnabled;
-
-    const confirmed = await showConfirm(
-      nextEnabled
-        ? 'Enable Sprint Planning for this organisation? Employees with approved weekly activities must complete their daily work reports before checking out.'
-        : 'Disable Sprint Planning for this organisation? Existing plans and approvals will remain stored, but Sprint checkout reporting restrictions will stop.',
-      nextEnabled ? 'Enable Sprint Planning' : 'Disable Sprint Planning',
-      {
-        danger: false,
-        confirmLabel: nextEnabled ? 'Enable Sprint Planning' : 'Disable Sprint Planning',
-      },
-    );
-
-    if (!confirmed) return;
-
-    try {
-      setSprintSaving(true);
-      setSprintError('');
-      setSprintMessage('');
-
-      const data = await updateSprintPlanningSettings(nextEnabled);
-
-      setSprintEnabled(data?.enabled === true);
-      // Update the sidebar and dashboards without requiring a new login.
-      window.dispatchEvent(new Event('yourcomate:sprint-setting-changed'));
-      setSprintMessage(
-        data?.message || 'Sprint Planning setting updated successfully.',
-      );
-    } catch (error) {
-      setSprintError(
-        error?.message || 'Unable to update Sprint Planning settings.',
-      );
-    } finally {
-      setSprintSaving(false);
-    }
   }
 
   function clearLocalPreview() {
@@ -4227,174 +4134,12 @@ export default function Settings({ user, setPage }) {
 
       )}
 
-      {hasSprintSettingsManagerRole && (
-        <section
-          className="payroll-branding-panel"
-          aria-label="Sprint Planning Settings"
-          style={{ marginBottom: 24 }}
-        >
-          <div className="payroll-branding-heading">
-            <div>
-              <span className="payroll-branding-kicker">
-                <ShieldCheck size={15} /> Sprint Planning Settings
-              </span>
-              <h1>Sprint Planning Module</h1>
-              <p>
-                Enable or disable Sprint Planning for this organisation.
-                When disabled, normal attendance and checkout continue
-                without Sprint reporting restrictions.
-              </p>
-            </div>
-          </div>
-
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              gap: 20,
-              flexWrap: 'wrap',
-              padding: '20px 0',
-            }}
-          >
-            <div>
-              <strong style={{ fontSize: 17 }}>
-                {sprintLoading
-                  ? 'Loading Sprint Planning status...'
-                  : sprintEnabled
-                    ? 'Sprint Planning is ON'
-                    : 'Sprint Planning is OFF'}
-              </strong>
-              <p style={{ marginTop: 6 }}>
-                {sprintEnabled
-                  ? 'Daily work reporting is required before checkout when approved weekly activities are scheduled.'
-                  : 'Existing HRMS attendance and checkout behaviour remains unchanged.'}
-              </p>
-              <small>
-                Settings are saved separately for each organisation.
-                Existing approved plans and histories are preserved.
-              </small>
-            </div>
-
-            {/* Visual-only jelly switch. Save/confirmation logic is unchanged. */}
-            <style>{`
-              .sprint-jelly-toggle {
-                position: relative;
-                display: inline-flex;
-                align-items: center;
-                justify-content: space-between;
-                flex: 0 0 auto;
-                width: 102px;
-                height: 54px;
-                box-sizing: border-box;
-                padding: 0 13px;
-                border: 1px solid var(--border, #dbe3ec);
-                border-radius: 999px;
-                background: #64748b;
-                color: #fff;
-                cursor: pointer;
-                isolation: isolate;
-                box-shadow: inset 0 2px 5px rgba(0, 0, 0, .15);
-                transition: background-color .32s ease, box-shadow .32s ease;
-                -webkit-tap-highlight-color: transparent;
-              }
-              .sprint-jelly-toggle.is-on {
-                background: #0f766e;
-                box-shadow: inset 0 2px 5px rgba(0, 0, 0, .12);
-              }
-              .sprint-jelly-toggle:focus-visible {
-                outline: 3px solid var(--primary, #5142ce);
-                outline-offset: 4px;
-              }
-              .sprint-jelly-toggle:disabled {
-                cursor: not-allowed;
-                opacity: .60;
-              }
-              .sprint-jelly-toggle.is-saving {
-                cursor: progress;
-              }
-              .sprint-jelly-label {
-                position: absolute;
-                z-index: 1;
-                font-size: 11px;
-                font-weight: 800;
-                letter-spacing: .04em;
-                user-select: none;
-                pointer-events: none;
-              }
-              .sprint-jelly-label.is-on-label { left: 15px; }
-              .sprint-jelly-label.is-off-label { right: 13px; }
-              .sprint-jelly-thumb {
-                position: absolute;
-                top: 5px;
-                left: 5px;
-                width: 42px;
-                height: 42px;
-                border-radius: 50%;
-                background: #fff;
-                box-shadow: 0 3px 9px rgba(15, 23, 42, .24);
-                transform: translateX(0);
-                transition: transform .46s cubic-bezier(.28, 1.55, .48, 1),
-                            border-radius .32s ease;
-                pointer-events: none;
-              }
-              .sprint-jelly-toggle.is-on .sprint-jelly-thumb {
-                transform: translateX(48px);
-              }
-              .sprint-jelly-toggle:not(:disabled):active .sprint-jelly-thumb {
-                border-radius: 46% 54% 54% 46%;
-                scale: 1.09 .88;
-              }
-              @media (prefers-reduced-motion: reduce) {
-                .sprint-jelly-toggle, .sprint-jelly-thumb {
-                  transition: none;
-                }
-              }
-            `}</style>
-            <button
-              type="button"
-              role="switch"
-              className={`sprint-jelly-toggle ${sprintEnabled ? 'is-on' : ''} ${sprintSaving ? 'is-saving' : ''}`}
-              aria-checked={sprintEnabled}
-              aria-label="Enable Sprint Planning"
-              aria-busy={sprintSaving}
-              onClick={handleSprintSettingChange}
-              disabled={
-                sprintLoading ||
-                sprintSaving ||
-                !sprintCanManage
-              }
-            >
-              <span className={`sprint-jelly-label ${sprintEnabled ? 'is-on-label' : 'is-off-label'}`} aria-hidden="true">
-                {sprintSaving ? '...' : sprintEnabled ? 'ON' : 'OFF'}
-              </span>
-              <span className="sprint-jelly-thumb" aria-hidden="true" />
-            </button>
-          </div>
-
-          {sprintError && (
-            <div role="alert" style={{ color: '#b91c1c', marginTop: 8 }}>
-              {sprintError}
-            </div>
-          )}
-
-          {sprintMessage && (
-            <div role="status" style={{ color: '#047857', marginTop: 8 }}>
-              {sprintMessage}
-            </div>
-          )}
-        </section>
-      )}
-
-      {hasSprintSettingsManagerRole && (
+      {hasAttendanceSettingsManagerRole && (
         <FaceAttendanceSettings
           confirmChange={showConfirm}
           onOpenEnrollment={() => setPage('face_attendance')}
         />
       )}
-
-      {/* STEP 44B.53B.1 - Dynamic department planning templates */}
-      {hasSprintSettingsManagerRole && <SprintTemplateBuilder />}
 
       <section className="payroll-branding-panel">
         <div className="payroll-branding-heading">

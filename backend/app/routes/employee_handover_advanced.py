@@ -1,7 +1,6 @@
 """Tenant-scoped operational manager handovers and explicit review tracking.
 
-Never changes historic sprint ownership/approvals. Role changes use existing HR
-mapping validators and compare-and-set guards. Reviews are NOT reassignment.
+Role changes use existing HR mapping validators and compare-and-set guards.
 """
 from datetime import datetime, timezone
 from bson import ObjectId
@@ -83,35 +82,6 @@ def _discover(ctx):
             add('project_role',kind,project['_id'],project.get('name') or project.get('project_name') or project.get('title') or 'Project',
                 'eligible' if is_ok else 'manual_review',
                 'Active role can be handed over with HR approval' if is_ok else 'Closed/unknown project or replacement role not eligible')
-    # Sprint records are reviewed in their original workflow. Moving authorship or approver_id
-    # silently would break the native reviewer authorization rules.
-    for label,collection in (('monthly',db.sprint_monthly_plans),('weekly',db.sprint_weekly_plans)):
-        query={'tenant_id':tenant,'is_deleted':{'$ne':True},'$or':[
-            {'employee_id':source},{'owner_id':source},{'approver_employee_id':source},{'approver_id':source}]}
-        plans=list(collection.find(query,{'_id':1,'status':1,'employee_id':1,'owner_id':1,'approver_employee_id':1,'approver_id':1}).limit(501))
-        if len(plans)>500:limits.append('sprint_'+label)
-        for plan in plans[:500]:
-            state=str(plan.get('status') or '').lower()
-            if state in {'approved','completed','rejected','cancelled','canceled'}:continue
-            add('sprint', 'sprint_'+label,plan['_id'],label.capitalize()+' Sprint', 'manual_review',
-                'Review in Sprint Planning: create new work under the replacement or use its native approval workflow; do not rewrite past ownership')
-    # Only the pinned *pending* reviewer can be reassigned. This is not a transfer
-    # of the plan owner, submission, or any historical approval decision.
-    for label, collection in (('monthly', db.sprint_monthly_plans), ('weekly', db.sprint_weekly_plans)):
-        query = {'tenant_id':tenant, 'is_deleted':{'$ne':True},
-                 'status':'pending_approval', 'approver_employee_id':source}
-        pending = list(collection.find(query, {'_id':1, 'employee_id':1, 'approver_employee_id':1,
-                                               'approval_kind':1, 'status':1}).limit(501))
-        if len(pending) > 500:limits.append('pending_'+label+'_approvals')
-        for plan in pending[:500]:
-            role = str(plan.get('approval_kind') or '').lower().strip()
-            owner = str(plan.get('employee_id') or '')
-            allowed = role in ('tl','ro') and owner and owner != target and bool(eligible['team_leader_id' if role=='tl' else 'reporting_officer_id'])
-            add('pending_approval', 'pending_'+label+'_approval', plan['_id'],
-                label.capitalize()+' approval — '+str(plan['_id'])[-6:],
-                'eligible' if allowed else 'manual_review',
-                'Pending pinned approver can be changed; original sprint owner and past decisions stay unchanged' if allowed
-                else 'Approval role is unknown, replacement lacks authority, or replacement is the sprint owner')
     items.sort(key=lambda row:(row['category'],row['title'],row['kind'],row['record_id']))
     return {'items':items,'summary':{c:sum(i['classification']==c for i in items) for c in ('eligible','manual_review','excluded')},
             'is_partial':bool(limits),'capped_collections':limits}
@@ -187,93 +157,3 @@ def advanced_execute():
             break
     transferred=sum(r['status']=='transferred' for r in results)
     return jsonify({'status':'completed' if transferred==len(keys) else 'partial','transferred':transferred,'requested':len(keys),'results':results}), (200 if transferred==len(keys) else 207)
-
-
-@advanced_handover_bp.route('/advanced/review',methods=['POST'])
-@_read_only_authenticated
-def review_sprint_item():
-    """Explicit tracking of an HR review, NOT a sprint reassignment or approval."""
-    ctx,error=_input()
-    if error:return error
-    data=request.get_json(silent=True)
-    kind,rec_id=data.get('kind'),data.get('record_id')
-    if kind not in ('sprint_monthly','sprint_weekly') or not isinstance(rec_id,str) or not ObjectId.is_valid(rec_id):
-        return err('Invalid sprint item',400)
-    if data.get('confirmation')!='REVIEWED':return err('Explicit REVIEWED confirmation required',400)
-    note=data.get('note')
-    if not isinstance(note,str) or not 5<=len(note.strip())<=500:
-        return err('Provide a 5–500 character review note',400)
-    db,tenant,source,target,_,_,_=ctx
-    coll=db.sprint_monthly_plans if kind=='sprint_monthly' else db.sprint_weekly_plans
-    record=coll.find_one({'_id':ObjectId(rec_id),'tenant_id':tenant,'is_deleted':{'$ne':True},'$or':[
-        {'employee_id':source},{'owner_id':source},{'approver_employee_id':source},{'approver_id':source}]}, {'_id':1,'status':1})
-    if not record:return err('Sprint responsibility no longer eligible for review',409)
-    result=db.employee_handover_review_tasks.insert_one({'tenant_id':tenant,'kind':kind,'record_id':rec_id,
-        'departing_employee_id':source,'replacement_employee_id':target,'reviewed_by':str(g.current_user['_id']),
-        'note':note.strip(),'status':'review_recorded_not_reassigned','created_at':datetime.now(timezone.utc)})
-    return jsonify({'id':str(result.inserted_id),'status':'review_recorded_not_reassigned',
-                    'message':'HR review recorded. Complete any real reassignment in Sprint Planning.'}),201
-
-
-@advanced_handover_bp.route('/advanced/approval-reassign', methods=['POST'])
-@_read_only_authenticated
-def reassign_pending_sprint_approvals():
-    """Move current pinned pending approval *authority*, never historical work.
-
-    This endpoint is intentionally narrower than an entire sprint ownership
-    transfer. The original employee_id, approvals and content are untouched.
-    """
-    ctx, error = _input()
-    if error:return error
-    data = request.get_json(silent=True) or {}
-    selected = data.get('items')
-    if data.get('confirmation') != 'TRANSFER' or not isinstance(selected,list) or not 1 <= len(selected) <= 50:
-        return err('Select 1–50 pending approvals and confirm TRANSFER',400)
-    seen=set()
-    for item in selected:
-        if not isinstance(item,dict) or item.get('kind') not in ('pending_monthly_approval','pending_weekly_approval') or not isinstance(item.get('record_id'),str) or not ObjectId.is_valid(item['record_id']):
-            return err('Unsupported pending approval selection',400)
-        key=(item['kind'],item['record_id'])
-        if key in seen:return err('Duplicate pending approval selection',400)
-        seen.add(key)
-    db,tenant,source,target,_,_,eligible=ctx
-    results=[]
-    for item in selected:
-        kind,rec_id=item['kind'],item['record_id']
-        coll=db.sprint_monthly_plans if kind=='pending_monthly_approval' else db.sprint_weekly_plans
-        filt={'_id':ObjectId(rec_id),'tenant_id':tenant,'is_deleted':{'$ne':True},
-              'status':'pending_approval','approver_employee_id':source}
-        try:
-            doc=coll.find_one(filt,{'_id':1,'employee_id':1,'approval_kind':1,'approver_employee_id':1,'status':1})
-            if not doc:
-                results.append({'kind':kind,'record_id':rec_id,'status':'skipped','reason':'Pending approval has changed or is unavailable'});continue
-            role=str(doc.get('approval_kind') or '').lower().strip()
-            if role not in ('tl','ro') or not eligible['team_leader_id' if role=='tl' else 'reporting_officer_id'] or not doc.get('employee_id') or str(doc['employee_id'])==target:
-                results.append({'kind':kind,'record_id':rec_id,'status':'skipped','reason':'Approval role or replacement eligibility invalid'});continue
-            # Ensure the owner is still a member of this same tenant.
-            owner_id=str(doc.get('employee_id'))
-            if not ObjectId.is_valid(owner_id) or not db.employees.find_one({'_id':ObjectId(owner_id),'tenant_id':tenant,'is_deleted':{'$ne':True}},{'_id':1}):
-                results.append({'kind':kind,'record_id':rec_id,'status':'skipped','reason':'Plan owner could not be validated in this tenant'});continue
-            op_id=ObjectId()
-            filt['approval_kind']=doc['approval_kind']
-            filt['employee_id']=doc['employee_id']
-            now=datetime.now(timezone.utc)
-            # Compare-and-set prevents silently overwriting another approver change.
-            updated=coll.update_one(filt,{'$set':{'approver_employee_id':target,'updated_at':now,
-                'handover_approval_operation_id':str(op_id)}})
-            if updated.modified_count != 1:
-                results.append({'kind':kind,'record_id':rec_id,'status':'skipped','reason':'Concurrent update; refresh preview'});continue
-            db.employee_handover_history.insert_one({'_id':op_id,'tenant_id':tenant,'kind':kind,
-                'project_id':None,'subject_employee_id':owner_id,'record_id':rec_id,
-                'departing_employee_id':source,'replacement_employee_id':target,
-                'authorized_by':str(g.current_user['_id']),'before':{'approver_employee_id':source},
-                'after':{'approver_employee_id':target},'created_at':now})
-            results.append({'kind':kind,'record_id':rec_id,'status':'transferred'})
-        except Exception:
-            current_app.logger.exception('Pending sprint approval handover failed; reconciliation required')
-            results.append({'kind':kind,'record_id':rec_id,'status':'needs_reconciliation','reason':'Update/audit state uncertain; inspect record before retry'});
-            break
-    count=sum(x['status']=='transferred' for x in results)
-    return jsonify({'status':'completed' if count==len(selected) else 'partial','transferred':count,
-                    'requested':len(selected),'results':results,
-                    'historical_ownership_preserved':True}), (200 if count==len(selected) else 207)

@@ -12,6 +12,17 @@ MANAGER_ROLES = {'team_leader', 'reporting_officer', 'ro', 'manager'}
 ACCOUNT_ROLES = {'finance', 'accounts_finance', 'accounts', 'accountant',
                  'accounts_manager', 'finance_manager'}
 PAYMENT_ROLES = {'accounts_manager', 'finance_manager'}
+
+# SENIOR_DIRECT_ACCOUNTS_ROUTING_V1: allowed only for HR-managed designation values.
+# No TL/RO assignment at all is required: broken/ambiguous assignments fail closed.
+SENIOR_DESIGNATIONS = {
+    'managing director', 'executive director', 'director',
+    'chief executive officer', 'ceo', 'chief operating officer', 'coo',
+    'chief financial officer', 'cfo', 'chairperson', 'chairman', 'president',
+    'general manager', 'department head', 'head of department',
+    'it head', 'head of it', 'hr head', 'head of hr',
+    'operations head', 'head of operations', 'finance head', 'head of finance',
+}
 OVERSIGHT_ROLES = {'admin', 'hr', 'hr_admin', 'hr_manager'}
 
 
@@ -50,6 +61,10 @@ def resolve_approver(db, tenant, employee):
     Fail closed on missing/ambiguous mappings. Never route a claim to arbitrary
     managers or all users having the TL role.
     """
+    # SENIOR_PLACEHOLDER_MANAGER_V2: HR role-name placeholders aren't real manager
+    # references, but only a verified senior with NO actual mapping may bypass TL/RO.
+    if senior_direct_accounts_eligible(employee) and _has_manager_placeholder(employee):
+        raise ValueError('No assigned TL/RO: eligible senior LC claim requires Accounts Manager verification.')
     for level in ('team_leader', 'reporting_officer'):
         field, value = _manager_key(employee, level)
         if not value:
@@ -70,6 +85,98 @@ def resolve_approver(db, tenant, employee):
                 'name': manager.get('name') or manager.get('full_name') or manager.get('employee_name') or '',
                 'user_id': str(manager.get('user_id') or '')}
     raise ValueError('No Team Leader or Reporting Officer is mapped. Ask HR to update your reporting hierarchy before submission.')
+
+
+# Reporting fields must be checked as a WHOLE, not only _manager_key's first
+# nonempty value. A later actual manager id must always block direct routing.
+_LC_MANAGER_FIELDS = (
+    'team_leader_id', 'team_leader', 'team_leader_name',
+    'reporting_officer_id', 'reporting_manager_id', 'reporting_officer',
+    'reporting_manager', 'reporting_officer_name', 'manager_id', 'manager',
+)
+
+
+def _manager_field_value(raw):
+    if isinstance(raw, dict):
+        if not raw:
+            return ''
+        # SENIOR_NESTED_EMPLOYEE_PLACEHOLDER_V3: HR UI sometimes stores a
+        # display-only avatar object instead of an actual manager reference.
+        # Reject ANY ID key, even blank: malformed mappings must fail closed.
+        id_keys = {'_id', 'id', 'employee_id', 'employee_code', 'user_id',
+                   'emp_code', 'username', 'manager_id', 'ref_id'}
+        if id_keys.intersection(raw):
+            return '__UNKNOWN_MANAGER_MAPPING__'
+        allowed = {'name', 'title', 'display_name', 'employee_name',
+                   'initials', 'photo_url', 'cover_url'}
+        if not set(raw).issubset(allowed):
+            return '__UNKNOWN_MANAGER_MAPPING__'
+        labels = [raw.get(k) for k in ('name', 'title', 'display_name', 'employee_name')]
+        # At least one explicit label is required. ALL nonblank labels must
+        # be precisely the placeholder 'Employee', not a real manager's name.
+        if not any(isinstance(v, str) and v.strip() for v in labels):
+            return '__UNKNOWN_MANAGER_MAPPING__'
+        if any(v is not None and (
+                not isinstance(v, str) or
+                (v.strip() and v.strip().casefold() != 'employee')) for v in labels):
+            return '__UNKNOWN_MANAGER_MAPPING__'
+        initials = raw.get('initials')
+        if initials is not None and (
+                not isinstance(initials, str) or
+                initials.strip().casefold() not in ('', 'em')):
+            return '__UNKNOWN_MANAGER_MAPPING__'
+        for media in ('photo_url', 'cover_url'):
+            if raw.get(media) not in (None, ''):
+                return '__UNKNOWN_MANAGER_MAPPING__'
+        return 'Employee'
+    return str(raw or '').strip()
+
+
+def _has_manager_placeholder(employee):
+    return any(_manager_field_value(employee.get(field)).casefold() == 'employee'
+               for field in _LC_MANAGER_FIELDS)
+
+
+def senior_direct_accounts_eligible(employee):
+    """Allow verified senior claims direct to Accounts only with no actual manager.
+
+    Only the exact HR placeholder 'Employee' is treated as unassigned; genuine,
+    conflicting or ambiguous manager mappings continue to block the bypass.
+    Ordinary employees cannot bypass management even with placeholder values.
+    """
+    if not employee:
+        return False
+    designation = employee.get('designation') or ''
+    if isinstance(designation, dict):
+        designation = designation.get('name') or designation.get('title') or ''
+    designation = ' '.join(str(designation).lower().replace('-', ' ').replace('_', ' ').split())
+    senior = designation in SENIOR_DESIGNATIONS or employee.get('lc_direct_accounts_approval') is True
+    if not senior:
+        return False
+    return all(_manager_field_value(employee.get(field)).casefold() in ('', 'employee')
+               for field in _LC_MANAGER_FIELDS)
+
+
+def is_direct_accounts_bill(bill):
+    return (bill.get('approval') or {}).get('type') == 'direct_accounts_manager'
+
+
+def direct_claimant(bill, employee, user_id=None):
+    """Prevent the claimant from verifying/paying their own direct LC claim."""
+    if employee and str(bill.get('employee_ref_id')) in ids(employee):
+        return True
+    return bool(user_id and str(bill.get('created_by') or '') == str(user_id))
+
+
+def can_verify_accounts(bill, employee, roles, user_id=None):
+    if not is_direct_accounts_bill(bill):
+        return bool(roles & ACCOUNT_ROLES)
+    return can_mark_paid(roles, employee) and not direct_claimant(bill, employee, user_id)
+
+
+def can_confirm_payment(bill, employee, roles, user_id=None):
+    return can_mark_paid(roles, employee) and (
+        not is_direct_accounts_bill(bill) or not direct_claimant(bill, employee, user_id))
 
 
 def is_approver(bill, employee, roles):

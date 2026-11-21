@@ -41,20 +41,23 @@ const enabledFlag = (value) => value === true || value === 1 || ['true', 'yes', 
 const errorText = (error) => error?.message || 'Unable to complete the Local Conveyance request.';
 const tone = (status) => ({ paid: 'paid', verified: 'approved', rejected: 'rejected',
   pending_accounts: 'pending', pending_manager: 'pending', draft: 'draft' })[status] || 'draft';
-function StatusPill({ status }) {
-  return <span className={`lc-status lc-status--${tone(status)}`}>{statusName[status] || status}</span>;
+function StatusPill({ status, direct = false }) {
+  const label = direct && status === 'pending_accounts' ? 'Accounts Manager Verification Pending' : (statusName[status] || status);
+  return <span className={`lc-status lc-status--${tone(status)}`}>{label}</span>;
 }
 function Steps({ bill }) {
+  const direct = bill.approval?.type === 'direct_accounts_manager';
   const history = bill.verification_history || [];
   const submitted = history.some((item) => item.stage === 'submitted') ||
     ['pending_manager', 'pending_accounts', 'verified', 'paid'].includes(bill.status);
   const phases = [
     { label: 'Employee Submission', completed: submitted, detail: 'Monthly bill submitted for approval' },
-    { label: bill.approval?.type === 'team_leader' ? 'Team Leader Validation' :
+    { label: direct ? 'TL / RO Review — Not Required' : bill.approval?.type === 'team_leader' ? 'Team Leader Validation' :
       bill.approval?.type === 'reporting_officer' ? 'Reporting Officer Validation' : 'TL / RO Validation',
-    completed: Boolean(bill.manager_validation), detail: 'Assigned reviewer checks the claim' },
-    { label: 'Accounts Verification', completed: Boolean(bill.accounts_verification),
-      detail: 'Accounts checks the approved claim' },
+    completed: Boolean(bill.manager_validation), skipped: direct,
+    detail: direct ? 'Skipped for an eligible senior employee without a reporting line' : 'Assigned reviewer checks the claim' },
+    { label: direct ? 'Accounts Manager Verification' : 'Accounts Verification', completed: Boolean(bill.accounts_verification),
+      detail: direct ? 'Finance / Accounts Manager reviews the claim' : 'Accounts checks the approved claim' },
     { label: 'Payment Confirmation', completed: bill.status === 'paid',
       detail: 'Accounts Manager confirms actual payment' },
   ];
@@ -64,7 +67,7 @@ function Steps({ bill }) {
         {phase.completed ? <CheckCircle2 size={19}/> : <span>{index + 1}</span>}
       </span>
       <div className="lc-step__copy"><strong>{phase.label}</strong>
-        <small>{phase.completed ? 'Completed' : phase.detail}</small></div>
+        <small>{phase.skipped ? phase.detail : phase.completed ? 'Completed' : phase.detail}</small></div>
     </div>)}
     {bill.status === 'rejected' ? <div className="lc-alert lc-alert--error" role="alert">
       <AlertCircle size={19}/><div><strong>Rejected by {bill.rejected_stage === 'pending_manager'
@@ -205,7 +208,9 @@ export default function LocalConveyance({ user = {}, manage = false, setPage: na
       setMessage(action === 'mark_paid' ? 'Payment confirmation recorded. The claim now shows Paid.' :
         action === 'accounts_verify' ? 'Claim verified by Accounts. Payment confirmation is still required.' :
         action === 'manager_validate' ? 'Validated and forwarded to Accounts.' :
-        action === 'submit' ? 'Submitted to your mapped Team Leader / Reporting Officer.' : 'Claim status updated.');
+        action === 'submit' ? (data.item?.approval?.type === 'direct_accounts_manager'
+          ? 'Submitted directly to Finance / Accounts Manager for verification.'
+          : 'Submitted to your mapped Team Leader / Reporting Officer.') : 'Claim status updated.');
       await reload();
     } catch (err) { setError(errorText(err)); }
     finally { setBusy(''); }
@@ -216,7 +221,7 @@ export default function LocalConveyance({ user = {}, manage = false, setPage: na
     try {
       const data = await correctLocalConveyanceBill(selected.reference, draftLines);
       setSelected(data.item); setDraftLines((data.item?.lines || []).map((line) => ({ ...line })));
-      setEditing(false); setMessage('Corrections saved. Submit the claim again for manager validation.');
+      setEditing(false); setMessage('Corrections saved. Submit the claim again for validation.');
       await reload();
     } catch (err) { setError(errorText(err)); }
     finally { setBusy(''); }
@@ -392,7 +397,7 @@ export default function LocalConveyance({ user = {}, manage = false, setPage: na
             <td>{modeName[bill.bill_type] || bill.bill_type}</td>
             {manage?<td>{bill.employee_name}<div className="lc-muted">{bill.employee_code}</div></td>:null}
             <td><strong>{money(bill.total)}</strong></td>
-            <td><StatusPill status={bill.status}/>{bill.status==='rejected'?<p className="lc-muted">{bill.rejection_reason}</p>:null}</td>
+            <td><StatusPill status={bill.status} direct={bill.approval?.type === 'direct_accounts_manager'}/>{bill.status==='rejected'?<p className="lc-muted">{bill.rejection_reason}</p>:null}</td>
             <td>{quickActions(bill)}</td>
           </tr>)}</tbody></table></div>
         <div className="lc-mobile-list">{bills.map((bill)=><article className="lc-claim-card" key={bill.reference}>
@@ -400,7 +405,7 @@ export default function LocalConveyance({ user = {}, manage = false, setPage: na
             <div className="lc-muted">{String(bill.month).padStart(2,'0')}/{bill.year} · {modeName[bill.bill_type] || bill.bill_type}</div></div>
             <strong>{money(bill.total)}</strong></div>
           {manage ? <div className="lc-muted"><Users size={13} style={{verticalAlign:'middle'}}/> {bill.employee_name} · {bill.employee_code}</div> : null}
-          <StatusPill status={bill.status}/>
+          <StatusPill status={bill.status} direct={bill.approval?.type === 'direct_accounts_manager'}/>
           {bill.status==='rejected'?<p className="lc-muted" style={{color:'#a2344d',margin:0}}>{bill.rejection_reason}</p>:null}
           {quickActions(bill)}
         </article>)}</div>
@@ -439,7 +444,7 @@ export default function LocalConveyance({ user = {}, manage = false, setPage: na
         <div>Employee<strong>{selected.employee_name} ({selected.employee_code})</strong></div>
         <div>Designation<strong>{selected.designation || '—'}</strong></div>
         <div>Total Claim<strong>{money(selected.total)}</strong></div>
-        <div>Status<strong><StatusPill status={selected.status}/></strong></div>
+        <div>Status<strong><StatusPill status={selected.status} direct={selected.approval?.type === 'direct_accounts_manager'}/></strong></div>
       </div>
       {selected.status === 'verified' ? (
         manage ? (selected.capabilities?.can_mark_paid ?
@@ -506,7 +511,9 @@ export default function LocalConveyance({ user = {}, manage = false, setPage: na
           <button type="button" className="lc-btn lc-btn--danger" disabled={Boolean(busy)||!remarks.trim()} onClick={()=>act('reject')}><XCircle size={16}/> Reject With Comment</button>
         </div></div> : null}
       {manage && selected.capabilities?.can_accounts_verify ? <div><hr className="lc-divider"/><h3>Accounts Verification</h3>
-        <p className="lc-muted">Confirm that the monthly expenses and manager validation are correct. This verification does not mean payment.</p>
+        <p className="lc-muted">{selected.approval?.type === 'direct_accounts_manager'
+          ? 'Direct senior-management claim: TL/RO review was not required. Finance / Accounts Manager verifies the expenses; payment is recorded separately.'
+          : 'Confirm that the monthly expenses and manager validation are correct. This verification does not mean payment.'}</p>
         <label>Verification remarks / rejection reason<textarea style={inputStyle} rows={3} value={remarks} onChange={(event)=>setRemarks(event.target.value)}/></label>
         <div className="lc-actions" style={{marginTop:12}}>
           <button type="button" className="lc-btn" disabled={Boolean(busy)} onClick={()=>act('accounts_verify')}><BadgeCheck size={16}/> Verify Claim</button>

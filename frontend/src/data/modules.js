@@ -601,13 +601,6 @@ export const coreModules = [
   ],
 
 [
-  'sprint_planning',
-  'Sprint Planning',
-  ClipboardList,
-  'Monthly, weekly and day-wise planning, work evidence, approvals and performance monitoring.',
-  ALL_COMMON_ROLES.filter(role => role !== 'super_admin'),
-],
-[
   'projects',
   'Projects',
   Briefcase,

@@ -633,6 +633,14 @@ def get_hiring_request(request_id: str):
     return _json_response({"ok": True, "item": _service().get_hiring_request(request_id)})
 
 
+@recruitment_bp.patch("/hiring-requests/<request_id>")
+@tenant_module_required("recruitment")
+def edit_hiring_request(request_id: str):
+    item = _service().update_hiring_request(request_id, _request_payload())
+    audit("update_hiring_request", "recruitment_hiring_requests", request_id)
+    return _json_response({"ok": True, "message": "Hiring request draft updated.", "item": item})
+
+
 @recruitment_bp.post("/hiring-requests/<request_id>/submit")
 @tenant_module_required("recruitment")
 def submit_hiring_request(request_id: str):

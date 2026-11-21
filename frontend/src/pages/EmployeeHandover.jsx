@@ -11,7 +11,6 @@ const keyFor = item => `${item.record_id}:${item.kind}`;
 const REVIEW_GUIDANCE = {
   team_leader: 'Review reporting teams under Employee Management before assigning a new Team Leader.',
   reporting_officer: 'Update Reporting Officer relationships through the authorized employee workflow.',
-  sprint: 'Keep existing sprint ownership and approvals. Assign new work in Sprint Planning.',
   approval: 'Pending approvals must be reassigned in their original approval workflow.',
 };
 const CATEGORY_LABEL = { eligible: 'Eligible', manual_review: 'Manual review', excluded: 'Excluded' };
@@ -36,15 +35,9 @@ export default function EmployeeHandover({ setPage }) {
   const [historyFilter, setHistoryFilter] = useState('all');
   const [advanced, setAdvanced] = useState(null);
   const [advancedSelected, setAdvancedSelected] = useState([]);
-  const [approvalSelected, setApprovalSelected] = useState([]);
-  const [advancedBusy, setAdvancedBusy] = useState(false);
-  const [advancedError, setAdvancedError] = useState('');
-  const [advancedResult, setAdvancedResult] = useState(null);
-  const [reviewNotes, setReviewNotes] = useState({});
-  const [reviewedKeys, setReviewedKeys] = useState([]);
   const advancedKey = item => `${item.kind}:${item.record_id}`;
   const loadAdvanced = async (source, target) => {
-    setAdvancedBusy(true); setAdvancedError(''); setAdvanced(null); setAdvancedSelected([]); setApprovalSelected([]);
+    setAdvancedBusy(true); setAdvancedError(''); setAdvanced(null); setAdvancedSelected([]);
     try {
       const result = await api('/employee-handover/advanced/preview', {
         method:'POST', body:JSON.stringify({departing_employee_id: source, replacement_employee_id:target})
@@ -67,35 +60,6 @@ export default function EmployeeHandover({ setPage }) {
       await loadAdvanced(departingId,replacementId); await loadHistory(historyFilter);
     } catch(e) {setAdvancedError(errorText(e));} finally {setAdvancedBusy(false);}
   };
-  const transferApprovals = async () => {
-    if (advanced?.is_partial || !approvalSelected.length || advancedBusy) return;
-    if (!window.confirm(`Reassign ${approvalSelected.length} pending approval(s) to the replacement? Original sprint ownership and past decisions are preserved.`)) return;
-    setAdvancedBusy(true); setAdvancedError('');
-    try {
-      const data = await api('/employee-handover/advanced/approval-reassign', {method:'POST', body:JSON.stringify({
-        departing_employee_id:departingId, replacement_employee_id:replacementId,
-        confirmation:'TRANSFER', items:(advanced?.items || []).filter(i=>approvalSelected.includes(advancedKey(i)))
-          .map(i=>({kind:i.kind,record_id:i.record_id}))
-      })});
-      setAdvancedResult(data); setApprovalSelected([]);
-      await loadAdvanced(departingId,replacementId); await loadHistory(historyFilter);
-    } catch(e) {setAdvancedError(errorText(e));} finally {setAdvancedBusy(false);}
-  };
-  const recordReview = async item => {
-    const key=advancedKey(item);
-    const note=String(reviewNotes[key] || '').trim();
-    if (note.length<5) {setAdvancedError('Enter a review note of at least five characters.');return;}
-    if (!window.confirm('Record that you reviewed this sprint item? This does NOT reassign or approve the sprint.'))return;
-    setAdvancedBusy(true);setAdvancedError('');
-    try {
-      await api('/employee-handover/advanced/review',{method:'POST',body:JSON.stringify({
-        departing_employee_id:departingId,replacement_employee_id:replacementId,
-        kind:item.kind,record_id:item.record_id,note,confirmation:'REVIEWED'
-      })});
-      setReviewedKeys(old=>[...old,key]);
-    } catch(e){setAdvancedError(errorText(e));}finally{setAdvancedBusy(false);}
-  };
-
   useEffect(() => {
     let mounted = true;
     Promise.all([getActiveEmployees({ limit: 500 }), getAlumniEmployees({ limit: 500 })])
@@ -196,10 +160,10 @@ export default function EmployeeHandover({ setPage }) {
       {preview.is_partial && <div role="alert" className="yc-handover-message yc-handover-warning"><AlertTriangle size={19} /><span>Some collections exceeded preview limits. These are partial results; do not treat this as a complete handover.</span></div>}
 
       <section className="yc-handover-panel" aria-labelledby="yc-review-title">
-        <div className="yc-handover-panel-title"><span className="yc-handover-section-icon"><ClipboardCheck size={19} /></span><div><h2 id="yc-review-title">Review responsibilities</h2><p>Only eligible project assignments can be selected. Team Leader, Reporting Officer, Sprint Planning and pending approval responsibilities stay in their original modules for authorized review.</p></div></div>
+        <div className="yc-handover-panel-title"><span className="yc-handover-section-icon"><ClipboardCheck size={19} /></span><div><h2 id="yc-review-title">Review responsibilities</h2><p>Only eligible project assignments can be selected. Team Leader and Reporting Officer responsibilities require authorized review.</p></div></div>
         {noItems ? <div className="yc-handover-empty"><div className="yc-handover-empty-icon"><CheckCircle2 size={27} aria-hidden="true" /></div><h3>No pending responsibilities found</h3><p>There are no currently identified project or workflow responsibilities to transfer for <strong>{departingName}</strong>.</p><p>If you already reassigned projects to <strong>{replacementName}</strong>, this is expected. The preview shows current outstanding work, not past transfers.</p><div className="yc-handover-empty-note"><History size={17} aria-hidden="true" /><span>Scroll to Transfer history below to see handovers recorded here. Older Project Management reassignments may be stored separately.</span></div></div> : <>
           {!!candidates.length && <div className="yc-handover-item-toolbar"><span>{selected.length} of {candidates.length} eligible items selected</span><button type="button" className="yc-handover-text-button" disabled={pending || preview.is_partial} onClick={selected.length === candidates.length ? () => setSelected([]) : selectAll}>{selected.length === candidates.length ? 'Clear selection' : 'Select all eligible'}</button></div>}
-          <div className="yc-handover-items">{allItems.map((item, index) => { const eligible = candidates.includes(item); return <label key={`${keyFor(item)}:${index}`} className={`yc-handover-item ${eligible ? 'yc-handover-item-eligible' : ''}`}><input type="checkbox" aria-label={`Select ${item.title || item.kind || 'responsibility'}`} disabled={!eligible || pending || preview.is_partial} checked={selected.includes(keyFor(item))} onChange={() => toggle(item)} /><div className="yc-handover-item-content"><div className="yc-handover-item-heading"><strong>{item.title || `${item.category || 'Responsibility'} · ${item.record_id || ''}`}</strong><span className={`yc-handover-pill yc-${item.classification}`}>{CATEGORY_LABEL[item.classification] || String(item.classification || 'Review').replaceAll('_', ' ')}</span></div><p>{String(item.kind || '').replaceAll('_', ' ')}{item.reason ? ` · ${item.reason}` : ''}</p>{item.classification === 'manual_review' && <p className="yc-handover-review-hint">{/team_leader|team leader/i.test(item.kind || '') ? REVIEW_GUIDANCE.team_leader : /reporting_officer|reporting officer/i.test(item.kind || '') ? REVIEW_GUIDANCE.reporting_officer : /sprint|weekly|monthly/i.test(`${item.kind || ''} ${item.category || ''}`) ? REVIEW_GUIDANCE.sprint : /approval|approver/i.test(`${item.kind || ''} ${item.category || ''}`) ? REVIEW_GUIDANCE.approval : 'Open the original module to review this responsibility. Historical records will not be rewritten.'}</p>}</div></label>; })}</div>
+          <div className="yc-handover-items">{allItems.map((item, index) => { const eligible = candidates.includes(item); return <label key={`${keyFor(item)}:${index}`} className={`yc-handover-item ${eligible ? 'yc-handover-item-eligible' : ''}`}><input type="checkbox" aria-label={`Select ${item.title || item.kind || 'responsibility'}`} disabled={!eligible || pending || preview.is_partial} checked={selected.includes(keyFor(item))} onChange={() => toggle(item)} /><div className="yc-handover-item-content"><div className="yc-handover-item-heading"><strong>{item.title || `${item.category || 'Responsibility'} · ${item.record_id || ''}`}</strong><span className={`yc-handover-pill yc-${item.classification}`}>{CATEGORY_LABEL[item.classification] || String(item.classification || 'Review').replaceAll('_', ' ')}</span></div><p>{String(item.kind || '').replaceAll('_', ' ')}{item.reason ? ` · ${item.reason}` : ''}</p>{item.classification === 'manual_review' && <p className="yc-handover-review-hint">{/team_leader|team leader/i.test(item.kind || '') ? REVIEW_GUIDANCE.team_leader : /reporting_officer|reporting officer/i.test(item.kind || '') ? REVIEW_GUIDANCE.reporting_officer : /approval|approver/i.test(`${item.kind || ''} ${item.category || ''}`) ? REVIEW_GUIDANCE.approval : 'Open the original module to review this responsibility. Historical records will not be rewritten.'}</p>}</div></label>; })}</div>
         </>}
       </section>
       {candidates.length > 0 && !preview.is_partial && <section className="yc-handover-panel yc-handover-confirm" aria-labelledby="yc-confirm-title"><div className="yc-handover-panel-title"><span className="yc-handover-section-icon"><ShieldCheck size={19} /></span><div><h2 id="yc-confirm-title">Confirm selected transfer</h2><p>{selected.length} item(s) selected. Each assignment will be rechecked before execution; changes cannot be undone automatically.</p></div></div><div className="yc-handover-confirm-grid"><label className="yc-handover-field"><span>Type TRANSFER to confirm</span><input type="text" value={confirm} disabled={pending || selected.length === 0} onChange={e => setConfirm(e.target.value)} autoComplete="off" placeholder="TRANSFER" /></label><button type="button" className="yc-handover-button yc-handover-danger" disabled={pending || confirm !== 'TRANSFER' || selected.length === 0} onClick={transfer}>{pending ? <Loader2 size={17} className="yc-handover-spin" /> : <ArrowRight size={17} />} Confirm selected handover</button></div><p className="yc-handover-guard"><Info size={15} /> Only approved project responsibilities will be changed. Personal and historical data are not transferred.</p></section>}
@@ -209,39 +173,24 @@ export default function EmployeeHandover({ setPage }) {
     {advancedBusy && <p className="yc-handover-history-muted" role="status">Checking additional handover responsibilities…</p>}
     {advanced && <section className="yc-handover-panel" aria-labelledby="yc-advanced-title">
       <div className="yc-handover-panel-title"><span className="yc-handover-section-icon"><ShieldCheck size={19}/></span><div>
-        <h2 id="yc-advanced-title">Leadership and sprint handover</h2>
-        <p>Review active Team Leader, Reporting Officer and Sprint Planning responsibilities. Verified leadership assignments and pinned pending approvals can be reassigned here. Sprint ownership and completed decisions remain unchanged.</p>
+        <h2 id="yc-advanced-title">Leadership handover</h2>
+        <p>Review active Team Leader and Reporting Officer responsibilities. Verified leadership assignments can be reassigned here.</p>
       </div></div>
       {advanced.is_partial && <p role="alert" className="yc-handover-message yc-handover-warning">Results are incomplete because the company has too many records. Transfers here are disabled until fully reviewed.</p>}
       {advancedResult && <p className="yc-handover-message yc-handover-success">Processed {advancedResult.transferred || 0} of {advancedResult.requested || 0} leadership changes. Review transfer history for completed changes.</p>}
-      {!advanced.items?.length ? <p className="yc-handover-history-muted">No additional active reporting or sprint responsibilities found.</p> : <>
+      {!advanced.items?.length ? <p className="yc-handover-history-muted">No additional active reporting responsibilities found.</p> : <>
         <div className="yc-handover-advanced-list">{advanced.items.map(item => {
           const key=advancedKey(item), eligible=item.classification==='eligible';
-          const sprint=item.category==='sprint';
-          const approval=item.category==='pending_approval';
           return <article className="yc-handover-advanced-item" key={key}>
             <div className="yc-handover-advanced-heading"><strong>{item.title || 'Responsibility'}</strong>
-              <span className={`yc-handover-pill yc-${item.classification}`}>{eligible?'Can transfer':sprint?'Sprint review':approval?'Approval review':'Manual review'}</span>
+              <span className={`yc-handover-pill yc-${item.classification}`}>{eligible?'Can transfer':'Manual review'}</span>
             </div>
             <p className="yc-handover-advanced-kind">{String(item.kind).replaceAll('_',' ')} · {item.reason}</p>
-            {eligible && !approval && <label className="yc-handover-advanced-check"><input type="checkbox" disabled={advancedBusy || advanced.is_partial}
+            {eligible && <label className="yc-handover-advanced-check"><input type="checkbox" disabled={advancedBusy || advanced.is_partial}
               checked={advancedSelected.includes(key)} onChange={e=>setAdvancedSelected(old=>e.target.checked?[...old,key]:old.filter(x=>x!==key))}/>
               Include in confirmed leadership transfer</label>}
-            {approval && eligible && <label className="yc-handover-advanced-check"><input type="checkbox" disabled={advancedBusy || advanced.is_partial}
-              checked={approvalSelected.includes(key)} onChange={e=>setApprovalSelected(old=>e.target.checked?[...old,key]:old.filter(x=>x!==key))}/>
-              Reassign this pending approval only (not sprint ownership)</label>}
-            {sprint && <div className="yc-handover-review-control"><label className="yc-handover-field"><span>Review notes (required)</span>
-              <textarea value={reviewNotes[key] || ''} onChange={e=>setReviewNotes(old=>({...old,[key]:e.target.value}))}
-                maxLength={500} rows={2} placeholder="What did HR review, and what remains to be done in Sprint Planning?"/></label>
-              <button type="button" className="yc-handover-button yc-handover-outline" disabled={advancedBusy || reviewedKeys.includes(key)} onClick={()=>recordReview(item)}>
-                {reviewedKeys.includes(key)?'Review recorded':'Record review only'}</button>
-              <small>A review note does not change the sprint owner, author or approver. Complete the actual action in Sprint Planning.</small></div>}
           </article>;
         })}</div>
-        {approvalSelected.length>0 && !advanced.is_partial && <div className="yc-handover-advanced-footer">
-          <span>{approvalSelected.length} pending approval(s) selected — original plans stay with their owners</span>
-          <button type="button" className="yc-handover-button yc-handover-danger" disabled={advancedBusy} onClick={transferApprovals}>Confirm pending approval reassignment</button>
-        </div>}
         {advancedSelected.length>0 && !advanced.is_partial && <div className="yc-handover-advanced-footer">
           <span>{advancedSelected.length} verified leadership relationship(s) selected</span>
           <button type="button" className="yc-handover-button yc-handover-danger" disabled={advancedBusy} onClick={executeAdvanced}>

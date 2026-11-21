@@ -25,7 +25,6 @@ import {
   normalizeLeaveApprovalList,
 } from '../api/client';
 import AttendanceWidget from '../components/AttendanceWidget';
-import SprintDashboardSummary from '../components/SprintDashboardSummary';
 import Stat from '../components/Stat';
 import Table from '../components/Table';
 
@@ -1374,7 +1373,7 @@ function AutoFitEmployeeName({ name }) {
   );
 }
 
-export default function EmployeeDashboard({ setPage, sprintEnabled = false }) {
+export default function EmployeeDashboard({ setPage }) {
   const [data, setData] = useState(null);
   const [attendanceStatus, setAttendanceStatus] = useState(null);
   const [modeRequests, setModeRequests] = useState([]);
@@ -6064,16 +6063,6 @@ const reportingProjectAverage = projectSummary.reporting_average_progress || ave
           </section>
         )}
       </section>
-
-      {/* Sprint summary is available only when this tenant has Sprint ON. */}
-      {sprintEnabled && (
-        <section
-          className="employee-dashboard-single-panel"
-          aria-label="My Sprint Planning Progress"
-        >
-          <SprintDashboardSummary setPage={setPage} />
-        </section>
-      )}
 
       <section className="employee-dashboard-single-panel">
         <div className="panel employee-dashboard-feature-panel">

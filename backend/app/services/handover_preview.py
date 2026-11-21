@@ -104,22 +104,6 @@ def preview(db, tenant, departing, replacement):
             if _matches(person.get(field), source_id):
                 add('reporting_relationship', field, 'manual_review', person['_id'], 'HR must validate replacement authority and reporting structure')
 
-    for name, collection in (('monthly',db.sprint_monthly_plans),('weekly',db.sprint_weekly_plans)):
-        # Ownership and existing approvals are never auto-reassigned.
-        query = {'tenant_id':tenant, 'is_deleted':{'$ne':True}, '$or':[
-            {'employee_id':source_id}, {'owner_id':source_id},
-            {'approver_employee_id':source_id}, {'approver_id':source_id}]}
-        projection = {'_id':1,'employee_id':1,'owner_id':1,'approver_employee_id':1,'approver_id':1,'status':1}
-        plans = list(collection.find(query,projection).limit(1001))
-        if len(plans) > 1000:
-            capped_collections.append('sprint_'+name)
-        for plan in plans[:1000]:
-            state = str(plan.get('status') or '').strip().lower()
-            if state in {'approved','completed','rejected','cancelled','canceled'}:
-                add('sprint',name,'excluded',plan['_id'],'Historical sprint and approval attribution preserved')
-            else:
-                add('sprint',name,'manual_review',plan['_id'],'Employee-owned planning or pending review requires workflow-specific approval')
-
     items.sort(key=lambda x:(x['category'],x['record_id'],x['kind']))
     summary = {kind:sum(x['classification']==kind for x in items) for kind in ('eligible','manual_review','excluded')}
     return {'status':'preview', 'departing_employee':{'employee_id':source_id},
