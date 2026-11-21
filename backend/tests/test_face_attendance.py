@@ -264,7 +264,7 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(reply.status_code, 200, reply.json)
         state = reply.json
         token = state["challenge"]
-        for step in range(3):
+        for step in range(2):
             self.db.face_challenges.update_one(
                 {"_id": svc.digest(token)},
                 {"$set": {"next_at": svc.now() - timedelta(seconds=1)}},
@@ -272,9 +272,7 @@ class ApiTests(unittest.TestCase):
             with patch.object(
                 engine(str(MODEL_DIR)),
                 "observe",
-                return_value=sample(
-                    {"center": 0, "left": 0.3, "right": -0.3}[state["prompt"]]
-                ),
+                return_value=sample(yaw=0, fingerprint=(1 if step == 0 else 255)),
             ):
                 reply = self.call(
                     "frame", {"step": step, "challenge": token, "frame": "unit fixture"}
@@ -482,9 +480,65 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(r.status_code, 200, r.json)
         token = self.call("challenge", {"action": "check-in"}).json["challenge"]
         first = self.call("frame", {"challenge": token, "step": 0, "frame": photos[0]})
-        self.assertIn(first.json["prompt"], ("left", "right"))
+        self.assertEqual(first.json["prompt"], "center")
         self.assertNotIn("proof", first.json)
         self.assertEqual(self.call("cancel", {"challenge": token}).status_code, 204)
+
+    def test_front_only_two_frames_reject_identical_capture(self):
+        self.register()
+        result = self.call("challenge", {"action": "check-in"})
+        self.assertEqual(result.status_code, 200, result.json)
+        self.assertEqual(result.json["prompt"], "center")
+        self.assertEqual(result.json["steps"], 2)
+        token = result.json["challenge"]
+        with patch.object(engine(str(MODEL_DIR)), "observe", return_value=sample(fingerprint=1)):
+            first = self.call("frame", {"challenge": token, "step": 0, "frame": "a"})
+        self.assertEqual(first.status_code, 200, first.json)
+        self.assertEqual(first.json["prompt"], "center")
+        self.db.face_challenges.update_one(
+            {"_id": svc.digest(token)},
+            {"$set": {"next_at": svc.now() - timedelta(seconds=1)}},
+        )
+        with patch.object(engine(str(MODEL_DIR)), "observe", return_value=sample(fingerprint=1)):
+            replay = self.call("frame", {"challenge": token, "step": 1, "frame": "a"})
+        self.assertEqual(replay.json["code"], "FACE_QUALITY")
+        self.assertFalse(self.db.face_profiles.find_one(self.sub).get("proofs"))
+
+    def test_face_verified_directory_requires_hr_and_tenant_scope(self):
+        self.register()
+        endpoint = "verified-employees?ids=" + str(self.employee["_id"])
+        self.assertEqual(self.call(endpoint).status_code, 403)
+        permitted = self.call(endpoint, login=self.hrlogin)
+        self.assertEqual(permitted.status_code, 200, permitted.json)
+        self.assertEqual(permitted.json["verified_employee_ids"], [str(self.employee["_id"])])
+        other = self.call(
+            "verified-employees?ids=" + str(self.foreign["_id"]),
+            login=self.hrlogin,
+        )
+        self.assertEqual(other.status_code, 200)
+        self.assertEqual(other.json["verified_employee_ids"], [])
+
+    def test_four_view_self_enrollment_approval_notifies_employee(self):
+        self.accept()
+        fingerprints = [1, 255, 65535, 4294967295]
+        poses = [0, 0, 0.3, -0.3, 0] + [0] * 4
+        samples = [sample(yaw=yaw, fingerprint=fingerprints[i - 5] if i >= 5 else (fingerprints[i - 1] if i > 0 else 0))
+                   for i, yaw in enumerate(poses)]
+        with patch.object(engine(str(MODEL_DIR)), "observe", side_effect=samples):
+            result = self.call("self-enroll", {
+                "revision": 1,
+                "reference": "reference",
+                "frames": ["front", "left", "right", "final front"],
+            })
+        self.assertEqual(result.status_code, 200, result.json)
+        self.assertEqual(result.json["mine"]["approval_status"], "pending")
+        with patch("app.routes.face_attendance.notify_face_users") as notify:
+            review = self.admin("review", {"revision": 2, "decision": "approve"})
+            self.assertEqual(review.status_code, 200, review.json)
+            notify.assert_called_once()
+            self.assertIn(str(self.employee["user_id"]), notify.call_args.args[1])
+            self.assertEqual(notify.call_args.kwargs["tenant_id"], "sds")
+        self.assertTrue(self.call("access").json["mine"]["approved"])
 
     def test_wrong_action(self):
         token = self.proof("check-out")

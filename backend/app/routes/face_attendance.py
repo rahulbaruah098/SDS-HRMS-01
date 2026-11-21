@@ -22,6 +22,7 @@ from app.routes.attendance import (
 from app.routes.it_support import current_user_roles, is_it_head, truthy
 from app.services import face_attendance as service
 from app.services.face_vision import FaceError, check_pose, enroll
+from app.utils.notification_service import notify_users as notify_face_users
 from app.utils.auth import employee_login_is_alumni
 
 face_bp = Blueprint("face_attendance", __name__)
@@ -405,6 +406,68 @@ def pending_details(eid):
                    submitted_at=pending["created_at"].isoformat() + "Z")
 
 
+def notify_face_review(db, subject, decision, reason=""):
+    """Notify the employee linked to the reviewed face profile; no biometric data in the message."""
+    tenant_id = subject["tenant_id"]
+    employee_id = subject["employee_id"]
+    employee_oid = ObjectId(employee_id) if ObjectId.is_valid(employee_id) else employee_id
+    employee = db.employees.find_one({"_id": employee_oid, "tenant_id": tenant_id})
+    if not employee:
+        return
+    user_id = str(employee.get("user_id") or "").strip()
+    if user_id:
+        # Verify account membership before sending a private review outcome.
+        user_key = ObjectId(user_id) if ObjectId.is_valid(user_id) else user_id
+        account = db.users.find_one({
+            "_id": user_key, "tenant_id": tenant_id,
+            "is_deleted": {"$ne": True}, "is_active": {"$ne": False},
+        }, {"_id": 1})
+        if not account:
+            user_id = ""
+    if not user_id:
+        # Only an explicit account-to-employee link can receive this private notice.
+        refs = [employee_id]
+        if ObjectId.is_valid(employee_id):
+            refs.append(ObjectId(employee_id))
+        candidates = list(db.users.find({
+            "tenant_id": tenant_id,
+            "is_deleted": {"$ne": True},
+            "$or": [
+                {"employee_ref_id": {"$in": refs}},
+                {"employee_id": {"$in": refs}},
+            ],
+        }, {"_id": 1}).limit(2))
+        if len(candidates) == 1:
+            user_id = str(candidates[0]["_id"])
+    if not user_id:
+        current_app.logger.warning("Face review saved, but employee login is not linked for notification")
+        return
+    approved = decision == "approve"
+    message = (
+        "Your face registration has been approved. You can use facial attendance when enabled."
+        if approved else
+        "Your face registration was rejected. Reason: " + reason + ". Please register again."
+    )
+    try:
+        notify_face_users(
+            db, [user_id],
+            "Face registration approved" if approved else "Face registration rejected",
+            message,
+            meta={
+                "module": "face_attendance", "notification_type": "face_enrollment",
+                "page": "profile", "status": "approved" if approved else "rejected",
+                "source_id": employee_id, "mobile_route": "/profile",
+            },
+            tenant_id=tenant_id,
+            event="face_enrollment_" + ("approved" if approved else "rejected"),
+            event_key=f"face-review:{tenant_id}:{employee_id}:{subject.get('revision', '')}:{decision}",
+            push=True,
+        )
+    except Exception:
+        # A temporary FCM/notification outage must not invalidate an already-reviewed template.
+        current_app.logger.exception("Face review notification could not be delivered")
+
+
 @face_bp.post("/employees/<eid>/review")
 @access_required
 def review_enrollment(eid):
@@ -424,7 +487,7 @@ def review_enrollment(eid):
         reason = str(data.get("reason") or "").strip()
         if not 5 <= len(reason) <= 250:
             raise FaceError("Provide a rejection reason (5–250 characters).", "FACE_REASON", 400)
-        row = service.change(db, row, "self_enrollment_rejected", {}, ("pending_id", "pending_expires"), reason=reason)
+        row = service.change(db, row, "self_enrollment_rejected", {"rejection_reason": reason}, ("pending_id", "pending_expires"), reason=reason)
     elif decision == "approve":
         template = service.unseal(pending["template"], service.binding(subject, pending["_id"], "pending-template"))
         # Only a verified reviewer may activate the employee template.
@@ -433,6 +496,8 @@ def review_enrollment(eid):
     else:
         raise FaceError("Choose approve or reject.", "FACE_DECISION", 400)
     db.face_pending.delete_one({**subject, "_id": pending["_id"]})
+    notify_face_review(db, {**subject, "revision": row["revision"]}, decision,
+                       reason if decision == "reject" else "")
     return jsonify(record=service.summary(row))
 
 
@@ -508,6 +573,29 @@ def employees():
         ],
         next_after=str(batch[24]["_id"]) if len(batch) > 25 else None,
     )
+
+
+@face_bp.get("/verified-employees")
+@access_required
+def verified_employees():
+    """Tenant-scoped approved badge lookup for HR/Admin employee directory; no biometrics."""
+    db = get_db()
+    require_manager(db)
+    raw = request.args.get("ids", "")
+    ids = [value.strip() for value in raw.split(",") if value.strip()]
+    if not 1 <= len(ids) <= 100 or not all(ObjectId.is_valid(i) for i in ids):
+        raise FaceError("Choose up to 100 valid employee IDs.", "FACE_SEARCH", 400)
+    members = list(db.employees.find({
+        **active_employee_base_query(g.tenant_id),
+        "_id": {"$in": [ObjectId(i) for i in ids]},
+    }, {"_id": 1}))
+    valid = [str(e["_id"]) for e in members]
+    rows = db.face_profiles.find({
+        "tenant_id": g.tenant_id,
+        "employee_id": {"$in": valid},
+    }, {"proofs": 0})
+    verified = [row["employee_id"] for row in rows if service.summary(row)["approved"]]
+    return jsonify(verified_employee_ids=verified)
 
 
 @face_bp.post("/employees/<eid>/enroll")
@@ -657,13 +745,14 @@ def challenge():
             "template_id": row["template_id"],
             "step": 0,
             "prompt": "center",
+            "scan_version": "frontal_v1",
             "tries": 0,
             "busy": False,
             "next_at": instant,
             "expires": instant + timedelta(seconds=90),
         }
     )
-    return jsonify(challenge=token, step=0, prompt="center")
+    return jsonify(challenge=token, step=0, prompt="center", steps=2)
 
 
 @face_bp.post("/frame")
@@ -672,7 +761,7 @@ def frame():
     db, subject, row = challenge_subject()
     data = body(2_800_000)
     step, instant = data.get("step"), service.now()
-    if type(step) is not int or not 0 <= step <= 2:
+    if type(step) is not int or not 0 <= step <= 1:
         raise FaceError("Start a new scan.", "FACE_CHALLENGE", 409)
     key = key_for(subject, data.get("challenge"))
     claim = {
@@ -713,7 +802,14 @@ def frame():
             if session.get("base")
             else None
         )
-        check_pose(observed, session["prompt"], base)
+        # Both frames must be frontal; do not ask employees to turn their heads.
+        check_pose(observed, "center", base)
+        if step == 1:
+            prior = service.unseal(session["fingerprint"], service.binding(subject, key["_id"], "frontal-fingerprint"))
+            # Catch identical/replayed frames. This is not certified passive liveness/PAD.
+            difference = (int.from_bytes(prior, "big") ^ int.from_bytes(observed.fingerprint, "big")).bit_count()
+            if difference < 3:
+                raise FaceError("Keep looking at the camera while we capture another live frame.", "FACE_QUALITY")
     except FaceError:
         db.face_challenges.update_one(
             key,
@@ -726,31 +822,20 @@ def frame():
         )
         raise
     alive = {**key, "expires": {"$gt": service.now()}}
-    if step < 2:
-        prompt = (
-            secrets.choice(("left", "right"))
-            if step == 0
-            else secrets.choice(
-                ("center", "right" if session["prompt"] == "left" else "left")
-            )
-        )
-        update = {
-            "prompt": prompt,
-            "step": step + 1,
-            "busy": False,
-            "next_at": service.now() + timedelta(milliseconds=650),
+    if step == 0:
+        base_frame = {
+            "x": observed.center[0], "y": observed.center[1],
+            "size": observed.size, "yaw": observed.yaw,
         }
-        if step == 0:
-            value = {
-                "x": observed.center[0],
-                "y": observed.center[1],
-                "size": observed.size,
-                "yaw": observed.yaw,
-            }
-            update["base"] = service.seal(json.dumps(value).encode(), aad)
+        update = {
+            "prompt": "center", "step": 1, "busy": False,
+            "next_at": service.now() + timedelta(milliseconds=550),
+            "base": service.seal(json.dumps(base_frame).encode(), aad),
+            "fingerprint": service.seal(observed.fingerprint, service.binding(subject, key["_id"], "frontal-fingerprint")),
+        }
         if not db.face_challenges.update_one(alive, {"$set": update}).matched_count:
             raise FaceError("Start a new scan.", "FACE_CHALLENGE", 409)
-        return jsonify(step=step + 1, prompt=prompt)
+        return jsonify(step=1, prompt="center", steps=2)
     if not db.face_challenges.delete_one(alive).deleted_count:
         raise FaceError("The scan expired.", "FACE_CHALLENGE", 409)
     proof = secrets.token_urlsafe(32)

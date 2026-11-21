@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Camera, CheckCircle2, RefreshCcw, ScanFace, ShieldCheck, X } from 'lucide-react';
+import { Camera, CheckCircle2, RefreshCcw, ScanFace, ShieldCheck, X, CircleCheck, ClipboardCheck, BellRing, LockKeyhole } from 'lucide-react';
 import { faceRequest } from '../api/faceAttendance';
 import '../styles/face-self-enrollment.css';
 
@@ -38,7 +38,17 @@ export default function FaceSelfEnrollment() {
   useEffect(() => {
     alive.current = true;
     load();
-    return () => { alive.current = false; clearCamera(); };
+    const visible = () => { if (document.visibilityState === 'visible') load(); };
+    const timer = window.setInterval(() => { if (document.visibilityState === 'visible') load(); }, 45000);
+    window.addEventListener('focus', load);
+    document.addEventListener('visibilitychange', visible);
+    window.addEventListener('face-enrollment-updated', load);
+    return () => {
+      alive.current = false; clearCamera(); window.clearInterval(timer);
+      window.removeEventListener('focus', load);
+      document.removeEventListener('visibilitychange', visible);
+      window.removeEventListener('face-enrollment-updated', load);
+    };
   }, [clearCamera, load]);
   const stop = () => {
     clearCamera(); setCamera(false); setReady(false); setScanning(false); setStep(-1);
@@ -78,7 +88,10 @@ export default function FaceSelfEnrollment() {
     return canvas.toDataURL('image/jpeg', 0.76).split(',')[1];
   }
   function beginScan() {
-    if (!reference || !ready || busy || scanning) return;
+    if (!ready || busy || scanning) return;
+    let ref = reference;
+    try { if (!ref) { ref = snap(); setReference(ref); } }
+    catch (e) { setError(e.message); return; }
     resetScan();
     const run = session.current;
     const collected = [];
@@ -89,7 +102,7 @@ export default function FaceSelfEnrollment() {
       try {
         const frame = snap();
         const result = await faceRequest('self-enroll/check-view', {
-          reference, frame, index, ...(index ? {baseline: collected[0]} : {}),
+          reference: ref, frame, index, ...(index ? {baseline: collected[0]} : {}),
         });
         if (!alive.current || run !== session.current || !stream.current) return;
         if (!result?.valid || result.index !== index) throw Error('This view could not be verified.');
@@ -130,28 +143,46 @@ export default function FaceSelfEnrollment() {
   return <section className="yc-face-self" aria-label="My facial enrollment">
     <header className="yc-face-self-heading"><ScanFace size={22}/><div><strong>Face verification</strong><p>Register with your camera. HR, Admin or IT Head will review your request.</p></div></header>
     {access.mine.approved ? <p className="yc-face-self-ok"><ShieldCheck size={18}/> Face verified and approved.</p>
-      : access.mine.approval_status === 'pending' ? <p>Registration submitted. Waiting for HR / Admin / IT Head approval.</p>
+      : access.mine.approval_status === 'pending' ?
+        <div className="yc-face-self-review" role="status">
+          <div className="yc-face-review-orbit"><ShieldCheck size={36}/></div>
+          <strong>Registration sent for approval</strong>
+          <p>Your four facial views have been securely submitted to HR, Admin or IT Head for review.</p>
+          <ol><li className="done"><CircleCheck size={18}/> Face captured</li><li className="active"><ClipboardCheck size={18}/> Awaiting HR review</li><li><BellRing size={18}/> You will be notified of the decision</li></ol>
+        </div>
       : <>
-        <p className="yc-face-self-description">Take one frontal verification photo, then follow the live camera guidance. Each movement is verified before the next begins; an incorrect position only repeats that view.</p>
+        {access.mine.rejection_reason && <p className="yc-face-self-error" role="alert">Registration rejected: {access.mine.rejection_reason}. You may register again.</p>}
+        <p className="yc-face-self-description">Registration requires four automatically captured views: Front, Left, Right, and Final Front. If a pose is incorrect, only that view is retried.</p>
         {!access.mine.consented ? <div className="yc-face-self-consent"><p>By continuing, you consent to facial data being processed for attendance. Encrypted face templates are retained for up to {access.retention_days} days. Pending verification images are removed after review or expiry. You can withdraw via Attendance privacy. Ask HR for an alternative if needed.</p><button type="button" onClick={consent} disabled={busy}>I agree and enable face registration</button></div> : <>
-          {!camera ? <button type="button" onClick={startCamera} disabled={busy}><Camera size={16}/> Open camera to register</button> : <div className="yc-face-self-workspace">
+          {!camera ? <div className="yc-face-self-intro">
+            <div className="yc-face-self-intro-icon"><ScanFace size={38}/><span><ShieldCheck size={19}/></span></div>
+            <strong>Register your face</strong>
+            <p>Four quick guided views help YourComate recognize your face. Your registration stays inactive until reviewed.</p>
+            <div className="yc-face-self-benefits"><span><LockKeyhole size={17}/> Encrypted templates</span><span><ScanFace size={17}/> Fast daily attendance</span><span><ClipboardCheck size={17}/> HR approval required</span></div>
+            <button type="button" onClick={startCamera} disabled={busy}><Camera size={16}/> Start registration</button>
+          </div> : <div className="yc-face-self-workspace">
             <div className="yc-face-self-camera">
               <div className="yc-face-self-viewport">
                 <video ref={video} muted playsInline autoPlay onLoadedData={() => setReady(true)} aria-label="Live face registration camera" />
                 <div className="yc-face-self-oval" aria-hidden="true" />
+                <div className="yc-face-self-corners" aria-hidden="true"><i/><i/><i/><i/></div>
                 <span className="yc-face-self-live"><span/> Live camera</span>
                 <span className="yc-face-self-step-label">{scanning && step >= 0 ? `View ${step + 1} of ${guidance.length}` : completed ? 'Scan complete' : 'Face enrollment'}</span>
               </div>
               <div className="yc-face-self-panel">
-                <strong role="status" aria-live="polite">{scanning && step >= 0 ? guidance[step].title : completed ? 'All four views verified' : !ready ? 'Starting camera…' : !reference ? 'Look straight and capture your photo' : 'Ready for guided face scan'}</strong>
-                <p>{scanning && step >= 0 ? guidance[step].note : completed ? 'Your scan is ready. Send it to HR, Admin or IT Head for approval.' : !reference ? 'Position your face inside the guide, with good lighting.' : 'Follow each instruction. Incorrect angles are retried without restarting.'}</p>
+                <strong role="status" aria-live="polite">{scanning && step >= 0 ? guidance[step].title : completed ? 'All four views verified' : !ready ? 'Starting camera…' : !reference ? 'Look straight and begin guided capture' : 'Ready for guided face scan'}</strong>
+                <p>{scanning && step >= 0 ? guidance[step].note : completed ? 'Your scan is ready. Send it to HR, Admin or IT Head for approval.' : !reference ? 'Four guided views will be captured automatically; no manual shutter is needed.' : 'Follow each instruction. Incorrect angles are retried without restarting.'}</p>
                 {hint && <p className="yc-face-self-hint" role="status">{hint}</p>}
-                <div className="yc-face-self-progress" aria-label={`${frames.length} of ${guidance.length} views verified`}>
-                  {guidance.map((item, index) => <span key={item.title} className={index < frames.length ? 'done' : scanning && index === step ? 'active' : ''} title={item.title}>{index < frames.length ? <CheckCircle2 size={14}/> : index + 1}</span>)}
+                <div className="yc-face-self-progress yc-face-self-stepper" aria-label={`${frames.length} of ${guidance.length} views verified`}>
+                  {guidance.map((item, index) =>
+                    <div key={item.title} className="yc-face-self-step">
+                      <span className={index < frames.length ? 'done' : scanning && index === step ? 'active' : ''} title={item.title}>{index < frames.length ? <CheckCircle2 size={14}/> : index + 1}</span>
+                      <small>{['Front', 'Left', 'Right', 'Final front'][index]}</small>
+                    </div>
+                  )}
                 </div>
                 <div className="yc-face-self-actions">
-                  {!reference && <button type="button" disabled={!ready || busy} onClick={() => {try {setReference(snap());setError('');}catch(e){setError(e.message);}}}>Capture verification photo</button>}
-                  {reference && !scanning && !completed && <button type="button" disabled={!ready || busy} onClick={beginScan}><ScanFace size={16}/> {frames.length ? 'Retry guided scan' : 'Start guided face scan'}</button>}
+                  {!scanning && !completed && <button type="button" disabled={!ready || busy} onClick={beginScan}><ScanFace size={16}/> {frames.length ? 'Retry current registration' : 'Start automatic guided capture'}</button>}
                   {completed && <button type="button" disabled={busy} onClick={submit}>{busy ? 'Submitting…' : 'Submit for approval'}</button>}
                   {reference && !scanning && <button type="button" className="yc-face-self-light" disabled={busy} onClick={() => {resetScan();setReference('');}}>Retake photo</button>}
                   <button type="button" className="yc-face-self-light" onClick={() => {stop();setReference('');setFrames([]);setHint('');setError('');}} disabled={busy}><X size={15}/> Close camera</button>

@@ -5,8 +5,6 @@ import FaceDialog from './FaceDialog';
 
 const instructions = {
   center: 'Look straight ahead',
-  left: 'Turn slowly to your left',
-  right: 'Turn slowly to your right',
 };
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 function capture(video) {
@@ -111,8 +109,9 @@ export default function FaceCamera({ action, onFinish }) {
             message: instructions[stage.prompt],
             hint,
             step: stage.step,
+            steps: stage.steps || 2,
           });
-          await wait(1050);
+          await wait(820);
           if (!active) return;
           const frame = capture(player);
           if (!frame) continue;
@@ -128,10 +127,10 @@ export default function FaceCamera({ action, onFinish }) {
               stopCamera();
               setState({
                 phase: 'matched',
-                message: 'Face verified',
-                hint: 'Completing your attendance…',
+                message: 'Identity verified',
+                hint: 'Continuing to the attendance checks…',
               });
-              await wait(740);
+              await wait(460);
               if (active) finish.current(next.proof);
               return;
             }
@@ -187,6 +186,11 @@ export default function FaceCamera({ action, onFinish }) {
         />
         <div className="yf-guide">
           <i className="yf-sweep" />
+          <span className="yf-pulse-outline" aria-hidden="true" />
+          <span className="yf-corner yf-corner-tl" aria-hidden="true" />
+          <span className="yf-corner yf-corner-tr" aria-hidden="true" />
+          <span className="yf-corner yf-corner-bl" aria-hidden="true" />
+          <span className="yf-corner yf-corner-br" aria-hidden="true" />
         </div>
         <div className="yf-mark">
           {state.phase === 'matched' ? (
@@ -198,8 +202,12 @@ export default function FaceCamera({ action, onFinish }) {
           ) : null}
         </div>
         {state.phase === 'scanning' && (
-          <span className="yf-step">Step {state.step + 1} of 3</span>
+          <span className="yf-step">Checking face · {state.step + 1} of {state.steps || 2}</span>
         )}
+      </div>
+      <div className="yf-scan-state" aria-hidden="true">
+        <span className={state.phase === 'matched' ? 'yf-state-dot is-done' : 'yf-state-dot'} />
+        <span className={state.phase === 'matched' ? 'yf-state-line is-done' : 'yf-state-line'} />
       </div>
       <div className="yf-camera-copy" role="status" aria-live="polite">
         <strong>{state.message}</strong>

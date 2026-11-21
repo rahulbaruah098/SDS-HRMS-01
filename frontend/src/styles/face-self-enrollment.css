@@ -76,3 +76,35 @@
     padding: 9px;
   }
 }
+
+/* YourComate reference-inspired registration structure with website typography/tokens. */
+.yc-face-self { color:var(--ink,#0f172a); border-color:var(--line,#e2e8f0); background:var(--surface,#fff); font-family:inherit; }
+.yc-face-self button:not(.yc-face-self-light) { background:var(--primary,#4f46e5); border-color:var(--primary,#4f46e5); color:white; }
+.yc-face-self-intro, .yc-face-self-review { display:grid; justify-items:center; gap:13px; padding:clamp(20px,4vw,38px); text-align:center; border:1px solid var(--line,#e2e8f0); border-radius:18px; background:var(--surface2,#f1f5f9); margin-top:16px; }
+.yc-face-self-intro>strong,.yc-face-self-review>strong { font-size:clamp(18px,2vw,22px); color:var(--ink,#0f172a); }
+.yc-face-self-intro>p,.yc-face-self-review>p { margin:0; max-width:470px; color:var(--muted,#64748b); line-height:1.6; }
+.yc-face-self-intro-icon { position:relative; display:grid;place-items:center; height:95px;width:95px;border-radius:28px; background:var(--primarySoft,#eef2ff); color:var(--primary,#4f46e5); animation:yc-face-gentle-in .5s ease-out both; }
+.yc-face-self-intro-icon>span { position:absolute;right:-9px;bottom:-7px;display:grid;place-items:center;width:36px;height:36px;border-radius:50%;background:var(--success,#059669);color:#fff;border:3px solid var(--surface,#fff); }
+.yc-face-self-benefits { display:flex;gap:9px;justify-content:center;flex-wrap:wrap;margin:5px 0 9px; }
+.yc-face-self-benefits span { display:inline-flex;align-items:center;gap:6px;padding:8px 11px;border-radius:999px;background:var(--surface,#fff);border:1px solid var(--line,#e2e8f0);font-size:13px; }
+.yc-face-self-review .yc-face-review-orbit { display:grid;place-items:center;height:100px;width:100px;border-radius:50%;color:var(--success,#059669);background:var(--successSoft,#ecfdf5);border:2px solid var(--success,#059669);animation:yc-face-gentle-in .5s ease-out both; }
+.yc-face-self-review ol { list-style:none; padding:13px 18px; margin:0;display:grid;text-align:left;gap:15px;min-width:min(100%,320px);border-radius:14px;background:var(--surface,#fff); }
+.yc-face-self-review li { display:flex;align-items:center;gap:10px;color:var(--muted,#64748b);font-size:13px; }
+.yc-face-self-review li.done { color:var(--success,#059669); }
+.yc-face-self-review li.active { color:var(--primary,#4f46e5);font-weight:600; }
+.yc-face-self-stepper { justify-content:space-between;gap:4px; }
+.yc-face-self-step { display:grid;justify-items:center;flex:1;gap:6px;min-width:0; }
+.yc-face-self-step>small { font-size:11px;line-height:1.3;color:#cbd5e1; }
+.yc-face-self-step>span { flex:none; }
+.yc-face-self .yc-face-self-oval { border-color:var(--primaryRing,#c7d2fe); }
+.yc-face-self-corners { position:absolute;inset:14% 24%;pointer-events:none; }
+.yc-face-self-corners i { position:absolute;width:24px;height:24px;border-color:var(--primaryRing,#c7d2fe);border-style:solid;border-width:0; }
+.yc-face-self-corners i:nth-child(1){left:0;top:0;border-top-width:3px;border-left-width:3px;border-top-left-radius:8px}
+.yc-face-self-corners i:nth-child(2){right:0;top:0;border-top-width:3px;border-right-width:3px;border-top-right-radius:8px}
+.yc-face-self-corners i:nth-child(3){left:0;bottom:0;border-bottom-width:3px;border-left-width:3px;border-bottom-left-radius:8px}
+.yc-face-self-corners i:nth-child(4){right:0;bottom:0;border-bottom-width:3px;border-right-width:3px;border-bottom-right-radius:8px}
+.yc-face-self .yc-face-self-progress span.done { background:var(--success,#059669);border-color:var(--success,#059669); }
+.yc-face-self .yc-face-self-progress span.active { border-color:var(--primaryRing,#c7d2fe); }
+@keyframes yc-face-gentle-in {from{transform:scale(.92);opacity:.25}to{transform:scale(1);opacity:1}}
+@media(max-width:640px) { .yc-face-self-intro,.yc-face-self-review{padding:18px 12px}.yc-face-self-benefits{display:grid;width:100%}.yc-face-self-benefits span{justify-content:center}.yc-face-self-corners{inset:18% 16%} }
+@media(prefers-reduced-motion:reduce) { .yc-face-self .yc-face-self-intro-icon,.yc-face-self .yc-face-review-orbit{animation:none!important} }

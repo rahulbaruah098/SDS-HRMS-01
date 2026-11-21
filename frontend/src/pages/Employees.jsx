@@ -17,6 +17,7 @@ import {
   UserPlus,
   Users,
   XCircle,
+  BadgeCheck,
 } from 'lucide-react';
 
 import {
@@ -1117,7 +1118,7 @@ function handleTableMouseDragStart(event) {
   window.addEventListener('mouseup', handleMouseUp);
 }
 
-function EmployeeMasterTable({ rows, loading, onEdit, onResign, onManageNotice, noticeFeatureEnabled }) {
+function EmployeeMasterTable({ rows, loading, onEdit, onResign, onManageNotice, noticeFeatureEnabled, verifiedIds }) {
   if (loading) return <div className="hrms-empty-state">Loading employees...</div>;
   if (!rows.length) return <div className="hrms-empty-state">No active employees found.</div>;
 
@@ -1147,7 +1148,7 @@ function EmployeeMasterTable({ rows, loading, onEdit, onResign, onManageNotice, 
                   <div className="hrms-person-cell">
                     <EmployeeAvatar employee={employee} />
                     <div>
-                      <strong>{displayValue(employee.name || employee.employee_name)}</strong>
+                      <strong>{displayValue(employee.name || employee.employee_name)}{verifiedIds?.has(String(id)) && <BadgeCheck size={17} className="yc-face-directory-badge" aria-label="Face verified" title="Face enrollment approved" />}</strong>
                       <small>{displayValue(employee.email || employee.official_email)}</small>
                     </div>
                   </div>
@@ -1626,6 +1627,30 @@ export default function Employees({ user = {}, setPage } = {}) {
       alumniPageSize,
     ],
   );
+
+  const [verifiedIds, setVerifiedIds] = useState(() => new Set());
+  const visibleFaceIds = useMemo(
+    () => pagedEmployees.map(employeeRowId).map(String).filter(id => /^[a-f0-9]{24}$/i.test(id)).join(','),
+    [pagedEmployees],
+  );
+  useEffect(() => {
+    let live = true;
+    const refresh = () => {
+      if (!visibleFaceIds || activeTab !== 'master') return;
+      api(`/face-attendance/verified-employees?ids=${encodeURIComponent(visibleFaceIds)}`)
+        .then(data => { if (live) setVerifiedIds(new Set(data.verified_employee_ids || [])); })
+        .catch(() => { if (live) setVerifiedIds(new Set()); });
+    };
+    refresh();
+    const timer = window.setInterval(() => { if (document.visibilityState === 'visible') refresh(); }, 60000);
+    window.addEventListener('focus', refresh);
+    window.addEventListener('face-enrollment-updated', refresh);
+    return () => {
+      live = false; window.clearInterval(timer);
+      window.removeEventListener('focus', refresh);
+      window.removeEventListener('face-enrollment-updated', refresh);
+    };
+  }, [visibleFaceIds, activeTab]);
 
   const employeeStats = useMemo(() => ({
     active: employees.length,
@@ -6072,6 +6097,7 @@ export default function Employees({ user = {}, setPage } = {}) {
             onResign={openResignModal}
             onManageNotice={openNoticeModal}
             noticeFeatureEnabled={noticeFeatureEnabled}
+            verifiedIds={verifiedIds}
           />
         </section>
       ) : null}

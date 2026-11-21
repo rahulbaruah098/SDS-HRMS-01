@@ -212,8 +212,9 @@ def summary(record):
         "revision": record["revision"],
         "status": status,
         "approved": approved,
-        "approval_status": "approved" if approved else ("pending" if record.get("pending_id") and (record.get("pending_expires") or datetime.min) > now() else "none"),
+        "approval_status": "approved" if approved else ("pending" if record.get("pending_id") and (record.get("pending_expires") or datetime.min) > now() else ("rejected" if record.get("rejection_reason") else "none")),
         "consented": record.get("notice") == NOTICE,
+        "rejection_reason": str(record.get("rejection_reason") or "")[:250] if not approved else "",
         "valid_until": iso("valid_until"),
         "exception_until": iso("exception_until") if exceptional(record) else None,
     }
@@ -331,7 +332,7 @@ def store_template(db, subject, record, data, count):
             {"template_id": ident, "valid_until": expires, "model": MODEL_VERSION,
              "approved": True, "approved_by": str(g.current_user["_id"]),
              "approved_at": now()},
-            ("pending_id", "pending_expires"), photo_count=count,
+            ("pending_id", "pending_expires", "rejection_reason"), photo_count=count,
         )
     except FaceError:
         db.face_vectors.delete_one({**subject, "_id": ident})
