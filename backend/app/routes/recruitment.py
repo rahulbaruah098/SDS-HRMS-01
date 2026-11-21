@@ -27,6 +27,7 @@ from app.services.recruitment_service import (
     OFFERS,
     DEFAULT_RECRUITMENT_SETTINGS,
     RecruitmentService,
+    normalize_organization_websites,
     RecruitmentServiceError,
     deep_merge,
     normalize_email,
@@ -544,7 +545,8 @@ def _public_service_for_token(collection_name: str, field_name: str, raw_token: 
 def _company_public_payload(tenant: Mapping[str, Any], settings: Mapping[str, Any]) -> dict[str, Any]:
     branding = tenant.get("branding") if isinstance(tenant.get("branding"), dict) else {}
     company_name = safe_str(
-        tenant.get("company_name")
+        branding.get("company_name")
+        or tenant.get("company_name")
         or tenant.get("name")
         or tenant.get("tenant_name")
         or tenant.get("legal_name")
@@ -567,6 +569,7 @@ def _company_public_payload(tenant: Mapping[str, Any], settings: Mapping[str, An
         # YC_CAREERS_COMPANY_PROFILE_V1: public, tenant-scoped, non-sensitive fields only.
         "company_about": safe_str(settings.get("career_company_about"))[:1600],
         "company_website": safe_str(settings.get("career_company_website"))[:320],
+        "organization_websites": normalize_organization_websites(settings.get("career_organization_websites") or []),
     }
 
 
@@ -625,6 +628,14 @@ def create_hiring_request():
         {"ok": True, "message": "Hiring request created successfully.", "item": item},
         201,
     )
+
+
+# YC_RECRUITMENT_HARD_DELETE_V1
+@recruitment_bp.delete("/hiring-requests/<request_id>")
+@tenant_module_required("recruitment")
+def permanently_delete_hiring_request(request_id: str):
+    result = _service().delete_hiring_request_permanently(request_id)
+    return _json_response({"ok": True, "message": "Hiring request permanently deleted.", **result})
 
 
 @recruitment_bp.get("/hiring-requests/<request_id>")
@@ -698,6 +709,22 @@ def create_job_opening():
         {"ok": True, "message": "Job opening created successfully.", "item": item},
         201,
     )
+
+
+@recruitment_bp.delete("/job-openings/<job_id>")
+@tenant_module_required("recruitment")
+def permanently_delete_job_opening(job_id: str):
+    result = _service().delete_job_opening_permanently(job_id)
+    return _json_response({"ok": True, "message": "Job opening permanently deleted.", **result})
+
+
+# YC_RECRUITMENT_GROUP_WEBSITES_EDIT_V1
+@recruitment_bp.patch("/job-openings/<job_id>")
+@tenant_module_required("recruitment")
+def edit_job_opening(job_id: str):
+    item = _service().update_job_opening(job_id, _request_payload())
+    audit("update_job_opening", "recruitment_job_openings", job_id)
+    return _json_response({"ok": True, "message": "Job posting updated.", "item": item})
 
 
 @recruitment_bp.post("/job-openings/<job_id>/status")

@@ -178,3 +178,41 @@
 @media (prefers-reduced-motion: reduce) {
   .yc-career-page *, .yc-career-page *::before, .yc-career-page *::after { scroll-behavior: auto !important; }
 }
+
+/* YC_RECRUITMENT_GROUP_WEBSITES_EDIT_V1: group and job links */
+.yc-career-organization-websites {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+  align-items: center;
+  margin-top: 16px;
+  min-width: 0;
+}
+.yc-career-organization-websites > strong {
+  width: 100%;
+  color: #283967;
+  font-size: 12px;
+  font-weight: 700;
+}
+.yc-career-organization-websites a {
+  display: inline-flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 7px;
+  max-width: 100%;
+  min-height: 39px;
+  padding: 9px 12px;
+  border: 1px solid #dfe5ee;
+  border-radius: 9px;
+  background: #fff;
+  color: #24355f;
+  font-weight: 650;
+  font-size: 12px;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+.yc-career-organization-websites a:hover { background: #f1f5fb; border-color: #b8c8df; }
+@media (max-width: 640px) {
+  .yc-career-organization-websites { align-items: stretch; flex-direction: column; }
+  .yc-career-organization-websites a { width: 100%; }
+}

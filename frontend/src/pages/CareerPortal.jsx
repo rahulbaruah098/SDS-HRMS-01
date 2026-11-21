@@ -1849,6 +1849,15 @@ function CareerJobsView({ companyKey, jobSlug }) {
                     </div>
                   </section>
                 ) : null}
+                {/* YC_RECRUITMENT_GROUP_WEBSITES_EDIT_V1 */}
+                {job.organization_name ? <section className="yc-career-editorial-section"><div className="yc-career-editorial-section-index">05</div><div><h2>Hiring organization</h2><p>{job.organization_name}</p></div></section> : null}
+                {Array.isArray(job.organization_websites) && job.organization_websites.length ? (
+                  <section className="yc-career-editorial-section"><div className="yc-career-editorial-section-index">06</div><div><h2>Organization websites</h2><div className="yc-career-organization-websites">
+                    {job.organization_websites.map((entry, index) => validCareerCompanyUrl(entry.url) ? (
+                      <a key={`${entry.url}-${index}`} href={validCareerCompanyUrl(entry.url)} target="_blank" rel="noopener noreferrer"><Globe2 size={15}/>{entry.name}<ArrowRight size={14}/></a>
+                    ) : null)}
+                  </div></div></section>
+                ) : null}
               </article>
 
               <aside className="yc-career-editorial-apply-card">
@@ -1979,6 +1988,17 @@ function CareerJobsView({ companyKey, jobSlug }) {
               <a className="yc-career-company-website" href={validCareerCompanyUrl(company.company_website)} target="_blank" rel="noopener noreferrer">
                 Visit company website <ArrowRight size={16} />
               </a>
+            ) : null}
+            {/* YC_RECRUITMENT_GROUP_WEBSITES_EDIT_V1 */}
+            {Array.isArray(company.organization_websites) && company.organization_websites.length ? (
+              <div className="yc-career-organization-websites" aria-label="Group organization websites">
+                <strong>Group organizations</strong>
+                {company.organization_websites.map((entry, index) => validCareerCompanyUrl(entry.url) ? (
+                  <a key={`${entry.url}-${index}`} href={validCareerCompanyUrl(entry.url)} target="_blank" rel="noopener noreferrer">
+                    <Globe2 size={15} />{entry.name}<ArrowRight size={14} />
+                  </a>
+                ) : null)}
+              </div>
             ) : null}
           </section>
           <section className="yc-career-editorial-openings" id="open-positions">

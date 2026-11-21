@@ -156,6 +156,7 @@ DEFAULT_RECRUITMENT_SETTINGS = {
     "public_career_slug": "",
     "career_company_about": "",
     "career_company_website": "",
+    "career_organization_websites": [],
 }
 
 class RecruitmentServiceError(RuntimeError):
@@ -167,6 +168,37 @@ class RecruitmentServiceError(RuntimeError):
         data = {"ok": False, "message": self.message, "code": self.code}
         if self.details: data["details"] = self.details
         return data
+
+# YC_RECRUITMENT_GROUP_WEBSITES_EDIT_V1
+# Tenant-controlled organization links; never trust arbitrary links in public output.
+def normalize_organization_websites(value):
+    if value is None:
+        return []
+    if not isinstance(value, list) or len(value) > 12:
+        raise RecruitmentServiceError("Provide up to 12 organization websites.", code="organization_websites_invalid")
+    result = []
+    seen = set()
+    for entry in value:
+        if not isinstance(entry, dict):
+            raise RecruitmentServiceError("Each organization website needs a name and URL.", code="organization_websites_invalid")
+        name = safe_str(entry.get("name"))
+        website = safe_str(entry.get("url") or entry.get("website"))
+        if not name or not website or len(name) > 120 or len(website) > 320:
+            raise RecruitmentServiceError("Enter a name and valid URL for each organization (name up to 120 characters).", code="organization_websites_invalid")
+        try:
+            parsed = urlsplit(website)
+        except ValueError as exc:
+            raise RecruitmentServiceError("Invalid organization website URL.", code="organization_websites_invalid") from exc
+        if (parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname
+                or parsed.username or parsed.password or any(ch.isspace() for ch in website)
+                or parsed.hostname.lower() in {"localhost", "127.0.0.1", "::1"}):
+            raise RecruitmentServiceError("Organization websites must use valid public http:// or https:// addresses.", code="organization_websites_invalid")
+        key = website.rstrip("/").casefold()
+        if key in seen:
+            raise RecruitmentServiceError("An organization website URL was entered more than once.", code="organization_websites_duplicate")
+        seen.add(key)
+        result.append({"name": name, "url": website})
+    return result
 
 def utcnow(): return datetime.utcnow()
 # YC_RECRUITMENT_DEADLINE_V1 - calendar-day cutoff for India-based tenants (IST).
@@ -1023,7 +1055,8 @@ class RecruitmentService:
         except Exception as exc: return {"ok":False,"code":"recruitment_email_failed","message":safe_str(exc)}
     def _company_name(self):
         tenant=self.db.tenants.find_one({"tenant_id":self.tenant_id}) or {}
-        return safe_str(tenant.get("company_name") or tenant.get("name") or tenant.get("tenant_name") or self.tenant_id)
+        branding = tenant.get("branding") if isinstance(tenant.get("branding"), dict) else {}
+        return safe_str(branding.get("company_name") or tenant.get("company_name") or tenant.get("name") or tenant.get("tenant_name") or self.tenant_id)
     def _reply_to(self):
         tenant=self.db.tenants.find_one({"tenant_id":self.tenant_id}) or {}
         return normalize_email(tenant.get("recruitment_email") or tenant.get("hr_email") or tenant.get("email") or self.actor_email)
@@ -1090,6 +1123,8 @@ class RecruitmentService:
                 code="recruitment_settings_empty",
             )
 
+        if "career_organization_websites" in payload:
+            payload["career_organization_websites"] = normalize_organization_websites(payload["career_organization_websites"])
         if "career_company_about" in payload:
             payload["career_company_about"] = safe_str(payload["career_company_about"])[:1600]
         if "career_company_website" in payload:
@@ -1335,6 +1370,8 @@ class RecruitmentService:
                 else (data.get("key_responsibilities") or [])
             ),
             "qualification": safe_str(data.get("qualification")),
+            # YC_HIRING_REQUEST_ORGANIZATION_WEBSITES_V1: store links on each hiring request.
+            "organization_websites": normalize_organization_websites(data.get("organization_websites") or []),
             "salary_min": salary_min,
             "salary_max": salary_max,
             "currency": safe_str(
@@ -1385,6 +1422,98 @@ class RecruitmentService:
             },
         )
         return doc
+    # YC_RECRUITMENT_HARD_DELETE_V1 -- deliberately physical, not a soft delete.
+    def _assert_postings_have_no_recruitment_history(self, jobs):
+        """Block deletion of postings referenced by any applicant or recruitment workflow."""
+        if not jobs:
+            return
+        identifiers = []
+        for job in jobs:
+            identifiers.extend((job["_id"], str(job["_id"])))
+        query = {"tenant_id": self.tenant_id, "job_opening_id": {"$in": identifiers}}
+        # Include soft-deleted records as they can still be referenced in histories.
+        for collection in (APPLICATIONS, INTERVIEWS, OFFERS, DOCUMENTS, BACKGROUND_CHECKS, ONBOARDING_TASKS):
+            if self._c(collection).find_one(query, {"_id": 1}):
+                raise RecruitmentServiceError(
+                    "This job has recruitment records or candidate applications. "
+                    "It cannot be permanently deleted without a separate records review.",
+                    code="recruitment_deletion_has_dependents", status_code=409,
+                )
+
+    def delete_hiring_request_permanently(self, request_id):
+        """Hard-delete a hiring request and unreferenced linked job openings in this tenant."""
+        self._require_hiring_request_creator()
+        doc = self._get(HIRING_REQUESTS, request_id, "Hiring request")
+        is_hr = self._has(HR_ROLES)
+        owns_draft = (
+            normalize_key(doc.get("status")) == "draft"
+            and safe_str(doc.get("requested_by") or doc.get("created_by")) == self.actor_id
+        )
+        if not is_hr and not owns_draft:
+            raise RecruitmentServiceError(
+                "Only HR/Admin can permanently delete a submitted hiring request; "
+                "Team Leaders can delete only their own drafts.",
+                code="recruitment_delete_denied", status_code=403,
+            )
+        request_ref = str(doc["_id"])
+        jobs = list(self._c(JOB_OPENINGS).find({
+            "tenant_id": self.tenant_id,
+            "hiring_request_id": {"$in": [doc["_id"], request_ref]},
+        }))
+        # Team Leaders must never delete published or approved job records.
+        if jobs and not is_hr:
+            raise RecruitmentServiceError(
+                "A job opening is linked to this request. Ask HR/Admin to delete it.",
+                code="recruitment_delete_denied", status_code=403,
+            )
+        self._assert_postings_have_no_recruitment_history(jobs)
+        job_ids = [job["_id"] for job in jobs]
+        job_deletions = 0
+        if job_ids:
+            deleted = self._c(JOB_OPENINGS).delete_many({
+                "tenant_id": self.tenant_id, "_id": {"$in": job_ids},
+            })
+            job_deletions = deleted.deleted_count
+            if job_deletions != len(job_ids):
+                raise RecruitmentServiceError(
+                    "Linked jobs changed during deletion. Please refresh before retrying.",
+                    code="recruitment_delete_concurrent_update", status_code=409,
+                )
+        result = self._c(HIRING_REQUESTS).delete_one({
+            "tenant_id": self.tenant_id, "_id": doc["_id"],
+        })
+        if result.deleted_count != 1:
+            raise RecruitmentServiceError(
+                "Hiring request was not deleted; refresh and retry.",
+                code="recruitment_delete_concurrent_update", status_code=409,
+            )
+        self._activity(
+            "permanently_deleted", "hiring_request", doc["_id"],
+            message="Hiring request permanently removed.",
+            details={"reference_no": doc.get("reference_no"), "linked_job_count": job_deletions},
+        )
+        return {"deleted": True, "deleted_jobs": job_deletions, "reference_no": doc.get("reference_no")}
+
+    def delete_job_opening_permanently(self, job_id):
+        """Hard-delete an unreferenced job (even if it had been published)."""
+        self._require_hr()
+        doc = self._get(JOB_OPENINGS, job_id, "Job opening")
+        self._assert_postings_have_no_recruitment_history([doc])
+        result = self._c(JOB_OPENINGS).delete_one({
+            "tenant_id": self.tenant_id, "_id": doc["_id"],
+        })
+        if result.deleted_count != 1:
+            raise RecruitmentServiceError(
+                "Job opening was not deleted; refresh and retry.",
+                code="recruitment_delete_concurrent_update", status_code=409,
+            )
+        self._activity(
+            "permanently_deleted", "job_opening", doc["_id"],
+            message="Job opening permanently removed.",
+            details={"reference_no": doc.get("reference_no")},
+        )
+        return {"deleted": True, "reference_no": doc.get("reference_no")}
+
     def update_hiring_request(self, request_id, payload):
         """Edit an existing draft, preserving tenant ownership, approvals and audit history."""
         self._require_hiring_request_creator()
@@ -1405,7 +1534,7 @@ class RecruitmentService:
             "work_location", "employment_type", "business_reason", "expected_joining_date",
             "resume_submission_deadline", "required_experience", "required_skills",
             "key_responsibilities", "qualification", "salary_min", "salary_max", "currency",
-            "budget_notes", "hiring_manager_user_id", "hiring_manager_name",
+            "budget_notes", "organization_websites", "hiring_manager_user_id", "hiring_manager_name",
             "approver_user_ids", "approver_user_id", "finance_approval_required",
         }
         if not data or not (allowed & data.keys()):
@@ -1481,6 +1610,7 @@ class RecruitmentService:
             "required_experience": safe_str(data.get("required_experience", doc.get("required_experience"))),
             "required_skills": unique_strings(skills), "key_responsibilities": unique_strings(responsibilities),
             "qualification": safe_str(data.get("qualification", doc.get("qualification"))),
+            "organization_websites": normalize_organization_websites(data.get("organization_websites", doc.get("organization_websites") or [])),
             "salary_min": salary_min, "salary_max": salary_max,
             "currency": safe_str(data.get("currency", doc.get("currency") or "INR")).upper(),
             "budget_notes": safe_str(data.get("budget_notes", doc.get("budget_notes"))),
@@ -1798,10 +1928,10 @@ class RecruitmentService:
         closing=parse_date(data.get("closing_date") or req.get("resume_submission_deadline"),"closing_date")
         if closing and closing<_recruitment_today(): raise RecruitmentServiceError("Closing date cannot be in the past.",code="invalid_job_closing_date")
         ref=self._next("job_opening","JOB"); now=utcnow(); rounds=self._normalise_interview_rounds(clean_list(data.get("interview_rounds")) or deepcopy(self._settings().get("default_interview_rounds") or []), required=True)
-        doc={"tenant_id":self.tenant_id,"reference_no":ref,"hiring_request_id":str(req["_id"]),"hiring_request_reference":req.get("reference_no"),"job_title":safe_str(data.get("job_title") or req.get("job_title")),"department":safe_str(data.get("department") or req.get("department")),"department_id":safe_str(data.get("department_id") or req.get("department_id")),"vacancies":int(data.get("vacancies") or req.get("vacancies") or 1),"filled_vacancies":0,"description":description,"responsibilities":unique_strings(data.get("responsibilities") or req.get("key_responsibilities") or []),"qualification":safe_str(data.get("qualification") or req.get("qualification")),"required_skills":unique_strings(data.get("required_skills") or req.get("required_skills") or []),"required_experience":safe_str(data.get("required_experience") or req.get("required_experience")),"employment_type":normalize_key(data.get("employment_type") or req.get("employment_type") or "permanent"),"work_location":safe_str(data.get("work_location") or req.get("work_location")),"work_mode":normalize_key(data.get("work_mode") or "office"),"salary_visible":bool(data.get("salary_visible")),"salary_min":req.get("salary_min"),"salary_max":req.get("salary_max"),"currency":req.get("currency") or "INR","recruiter_user_id":safe_str(data.get("recruiter_user_id") or self.actor_id),"recruiter_name":safe_str(data.get("recruiter_name") or self.actor_name),"hiring_manager_user_id":safe_str(data.get("hiring_manager_user_id") or req.get("hiring_manager_user_id")),"hiring_manager_name":safe_str(data.get("hiring_manager_name") or req.get("hiring_manager_name")),"panel_user_ids":unique_strings(data.get("panel_user_ids") or []),"interview_rounds":rounds,"opening_date":"","closing_date":closing,"public_slug":self._unique_slug(slugify(f"{data.get('job_title') or req.get('job_title')}-{ref}")),"published_channels":[],"application_form_fields":clean_list(data.get("application_form_fields")),"status":"draft","status_history":[],"created_at":now,"updated_at":now,"created_by":self.actor_id,"created_by_name":self.actor_name,"updated_by":self.actor_id,"updated_by_name":self.actor_name,"is_deleted":False}
+        doc={"tenant_id":self.tenant_id,"reference_no":ref,"hiring_request_id":str(req["_id"]),"hiring_request_reference":req.get("reference_no"),"job_title":safe_str(data.get("job_title") or req.get("job_title")),"department":safe_str(data.get("department") or req.get("department")),"department_id":safe_str(data.get("department_id") or req.get("department_id")),"vacancies":int(data.get("vacancies") or req.get("vacancies") or 1),"filled_vacancies":0,"description":description,"responsibilities":unique_strings(data.get("responsibilities") or req.get("key_responsibilities") or []),"qualification":safe_str(data.get("qualification") or req.get("qualification")),"required_skills":unique_strings(data.get("required_skills") or req.get("required_skills") or []),"required_experience":safe_str(data.get("required_experience") or req.get("required_experience")),"employment_type":normalize_key(data.get("employment_type") or req.get("employment_type") or "permanent"),"work_location":safe_str(data.get("work_location") or req.get("work_location")),"work_mode":normalize_key(data.get("work_mode") or "office"),"salary_visible":bool(data.get("salary_visible")),"salary_min":req.get("salary_min"),"salary_max":req.get("salary_max"),"currency":req.get("currency") or "INR","recruiter_user_id":safe_str(data.get("recruiter_user_id") or self.actor_id),"recruiter_name":safe_str(data.get("recruiter_name") or self.actor_name),"hiring_manager_user_id":safe_str(data.get("hiring_manager_user_id") or req.get("hiring_manager_user_id")),"hiring_manager_name":safe_str(data.get("hiring_manager_name") or req.get("hiring_manager_name")),"panel_user_ids":unique_strings(data.get("panel_user_ids") or []),"interview_rounds":rounds,"opening_date":"","closing_date":closing,"public_slug":self._unique_slug(slugify(f"{data.get('job_title') or req.get('job_title')}-{ref}")),"published_channels":[],"application_form_fields":clean_list(data.get("application_form_fields")),"status":"draft","status_history":[],"created_at":now,"updated_at":now,"created_by":self.actor_id,"created_by_name":self.actor_name,"updated_by":self.actor_id,"updated_by_name":self.actor_name,"is_deleted":False,"organization_name":safe_str(data.get("organization_name"))[:300],"organization_websites":normalize_organization_websites(data.get("organization_websites") or req.get("organization_websites") or [])}
         result=self._c(JOB_OPENINGS).insert_one(doc); doc["_id"]=result.inserted_id; self._activity("created","job_opening",doc["_id"],message=f"Job opening {ref} was created.",new="draft",details={"hiring_request_id":str(req["_id"])}); return doc
     def _public_job(self,doc):
-        keys={"_id","reference_no","job_title","department","vacancies","description","responsibilities","qualification","required_skills","required_experience","employment_type","work_location","work_mode","salary_visible","currency","opening_date","closing_date","public_slug","application_form_fields","status"}; result={k:deepcopy(v) for k,v in doc.items() if k in keys}
+        keys={"_id","reference_no","job_title","department","vacancies","description","responsibilities","qualification","required_skills","required_experience","employment_type","work_location","work_mode","salary_visible","currency","opening_date","closing_date","public_slug","application_form_fields","status","organization_name","organization_websites"}; result={k:deepcopy(v) for k,v in doc.items() if k in keys}
         if doc.get("salary_visible"): result.update({"salary_min":doc.get("salary_min"),"salary_max":doc.get("salary_max")})
         return result
     def list_job_openings(self,status="",search="",page=1,page_size=25,public=False):
@@ -1825,6 +1955,63 @@ class RecruitmentService:
         if _recruitment_deadline_passed(doc.get("closing_date")):
             raise RecruitmentServiceError("This job opening is no longer accepting applications.", code="job_application_deadline_passed", status_code=404)
         return self._public_job(doc)
+    # YC_RECRUITMENT_GROUP_WEBSITES_EDIT_V1: editable draft/open/paused/closed vacancy.
+    def update_job_opening(self, job_id, payload):
+        self._require_hr_publisher()
+        job = self._get(JOB_OPENINGS, job_id, "Job opening")
+        data = dict(payload or {})
+        # Never allow editing IDs, source hiring approval, salary bounds, status,
+        # applicant links, publication slug or audit fields via this endpoint.
+        editable = {
+            "job_title", "department", "vacancies", "description", "responsibilities",
+            "qualification", "required_skills", "required_experience", "employment_type",
+            "work_location", "work_mode", "closing_date", "salary_visible",
+            "organization_name", "organization_websites",
+        }
+        updates = {key: value for key, value in data.items() if key in editable}
+        if not updates:
+            raise RecruitmentServiceError("No editable job details were supplied.", code="job_edit_empty")
+        for key in ("job_title", "description"):
+            if key in updates and not safe_str(updates[key]):
+                raise RecruitmentServiceError(f"{key.replace('_', ' ').title()} is required.", code="job_edit_required")
+        for key in ("job_title", "department", "description", "qualification", "required_experience", "work_location", "organization_name"):
+            if key in updates:
+                updates[key] = safe_str(updates[key])[:4000 if key == "description" else 300]
+        if "organization_websites" in updates:
+            updates["organization_websites"] = normalize_organization_websites(updates["organization_websites"])
+        for key in ("responsibilities", "required_skills"):
+            if key in updates:
+                if not isinstance(updates[key], list):
+                    raise RecruitmentServiceError(f"{key} must be a list.", code="job_edit_invalid")
+                updates[key] = unique_strings(updates[key])
+        for key in ("work_mode", "employment_type"):
+            if key in updates:
+                updates[key] = normalize_key(updates[key])
+        if "vacancies" in updates:
+            try:
+                value = int(updates["vacancies"])
+            except (ValueError, TypeError) as exc:
+                raise RecruitmentServiceError("Vacancies must be a positive integer.", code="job_vacancies_invalid") from exc
+            if value < 1 or value < int(job.get("filled_vacancies") or 0):
+                raise RecruitmentServiceError("Vacancies cannot be less than one or below filled positions.", code="job_vacancies_invalid")
+            updates["vacancies"] = value
+        if "closing_date" in updates:
+            new_deadline = parse_date(updates["closing_date"], "closing_date", required=True)
+            if new_deadline < _recruitment_today() and normalize_key(job.get("status")) in {"draft", "open", "paused"}:
+                raise RecruitmentServiceError("Closing date cannot be in the past for an active vacancy.", code="invalid_job_closing_date", status_code=409)
+            updates["closing_date"] = new_deadline
+        if "salary_visible" in updates:
+            updates["salary_visible"] = updates["salary_visible"] is True
+        updates.update({"updated_at": utcnow(), "updated_by": self.actor_id, "updated_by_name": self.actor_name})
+        result = self._c(JOB_OPENINGS).update_one(
+            {"_id": job["_id"], "tenant_id": self.tenant_id, "is_deleted": {"$ne": True}},
+            {"$set": updates},
+        )
+        if result.matched_count != 1:
+            raise RecruitmentServiceError("Job opening changed; refresh and retry.", code="job_edit_conflict", status_code=409)
+        self._activity("updated", "job_opening", job["_id"], message="Job opening details updated.")
+        return self._get(JOB_OPENINGS, job["_id"], "Job opening")
+
     def change_job_status(self,job_id,status,channels=None,reason=""):
         self._require_hr_publisher(); doc=self._get(JOB_OPENINGS,job_id,"Job opening"); old,new=self._transition(doc.get("status"),status,JOB_OPENING_TRANSITIONS,"Job opening"); now=utcnow(); update={"status":new,"status_reason":safe_str(reason),"updated_at":now,"updated_by":self.actor_id,"updated_by_name":self.actor_name}
         if new=="open" and _recruitment_deadline_passed(doc.get("closing_date")):

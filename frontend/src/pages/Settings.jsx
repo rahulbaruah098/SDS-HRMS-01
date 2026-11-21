@@ -639,6 +639,7 @@ function CareerCompanySettingsV2({ user }) {
   const canEdit = roles.some((role) => allowedRoles.has(role));
   const [about, setAbout] = useState('');
   const [website, setWebsite] = useState('');
+  const [organizationWebsitesText, setOrganizationWebsitesText] = useState('');
   const [loadingProfile, setLoadingProfile] = useState(true);
   const [savingProfile, setSavingProfile] = useState(false);
   const [notice, setNotice] = useState('');
@@ -652,6 +653,7 @@ function CareerCompanySettingsV2({ user }) {
       const record = response?.item || response?.data || response?.result || response || {};
       setAbout(String(record.career_company_about || ''));
       setWebsite(String(record.career_company_website || ''));
+      setOrganizationWebsitesText((record.career_organization_websites || []).map((entry) => `${entry.name} | ${entry.url}`).join('\n'));
     }).catch((cause) => {
       if (alive) setError(cause?.message || 'Unable to read company profile.');
     }).finally(() => {
@@ -674,7 +676,8 @@ function CareerCompanySettingsV2({ user }) {
     }
     setSavingProfile(true);
     try {
-      await updateRecruitmentSettings({ career_company_about: about.trim(), career_company_website: normalizedWebsite });
+      const organizationWebsites = organizationWebsitesText.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => { const [name, ...parts] = line.split('|'); return { name: name.trim(), url: parts.join('|').trim() }; });
+      await updateRecruitmentSettings({ career_company_about: about.trim(), career_company_website: normalizedWebsite, career_organization_websites: organizationWebsites });
       setWebsite(normalizedWebsite);
       setNotice('Company details saved. These details now appear on your tenant’s public Career Portal.');
     } catch (cause) {
@@ -695,6 +698,12 @@ function CareerCompanySettingsV2({ user }) {
           <label htmlFor="yc-company-web-input">Company website (optional)</label>
           <input id="yc-company-web-input" type="url" maxLength={320} value={website}
             onChange={(event) => setWebsite(event.target.value)} placeholder="https://company.example" />
+          {/* YC_RECRUITMENT_GROUP_WEBSITES_EDIT_V1 */}
+          <label htmlFor="yc-organization-websites">Other organizational websites (optional)</label>
+          <textarea id="yc-organization-websites" rows={4} value={organizationWebsitesText}
+            onChange={(event) => setOrganizationWebsitesText(event.target.value)}
+            placeholder={'Organization A | https://example.com\nOrganization B | https://example.org'} />
+          <small>One company per line. These group links appear on the public Careers page.</small>
           {error ? <div className="yc-company-settings-msg is-error" role="alert">{error}</div> : null}
           {notice ? <div className="yc-company-settings-msg" role="status">{notice}</div> : null}
           <button type="submit" disabled={savingProfile}>{savingProfile ? 'Saving...' : 'Save Company Details'}</button>

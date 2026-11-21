@@ -2183,6 +2183,15 @@ export function updateRecruitmentHiringRequest(requestId, payload = {}) {
   return recruitmentJson(`/hiring-requests/${recruitmentId(requestId, 'Hiring request ID')}`, 'PATCH', payload);
 }
 
+// YC_RECRUITMENT_HARD_DELETE_V1
+export function permanentlyDeleteRecruitmentHiringRequest(requestId) {
+  return recruitmentJson(`/hiring-requests/${recruitmentId(requestId, 'Hiring request ID')}`, 'DELETE');
+}
+
+export function permanentlyDeleteRecruitmentJobOpening(jobId) {
+  return recruitmentJson(`/job-openings/${recruitmentId(jobId, 'Job opening ID')}`, 'DELETE');
+}
+
 export function getRecruitmentHiringRequest(requestId) {
   return recruitmentJson(
     `/hiring-requests/${recruitmentId(requestId, 'Hiring request ID')}`,
@@ -2217,6 +2226,11 @@ export function getRecruitmentJobOpenings(params = {}) {
 
 export function createRecruitmentJobOpening(payload = {}) {
   return recruitmentJson('/job-openings', 'POST', payload);
+}
+
+// YC_RECRUITMENT_GROUP_WEBSITES_EDIT_V1
+export function updateRecruitmentJobOpening(jobId, payload = {}) {
+  return recruitmentJson(`/job-openings/${recruitmentId(jobId, 'Job opening ID')}`, 'PATCH', payload);
 }
 
 export function changeRecruitmentJobOpeningStatus(jobId, payload = {}) {
