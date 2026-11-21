@@ -24,7 +24,8 @@ import {
   X,
 } from 'lucide-react';
 
-import { api, normalizeProfilePhotoUrl } from '../api/client';
+import { api, normalizeProfilePhotoUrl, getRecruitmentSettings, updateRecruitmentSettings } from '../api/client';
+import '../career-company-settings-v2.css';
 import SprintTemplateBuilder from '../components/SprintTemplateBuilder';
 import FaceAttendanceSettings from '../components/FaceAttendanceSettings';
 import { getSprintPlanningSettings, updateSprintPlanningSettings } from '../api/sprintPlanning';
@@ -628,6 +629,79 @@ function AttendanceReasonListEditor({
           <Plus size={16} /> Add Reason
         </button>
       </div>
+    </section>
+  );
+}
+
+// YC_CAREER_COMPANY_SETTINGS_V2: tenant-owned public careers About panel.
+function CareerCompanySettingsV2({ user }) {
+  const allowedRoles = new Set(['super_admin', 'admin', 'hr', 'hr_admin', 'hr_manager']);
+  const roles = [user?.role, user?.user_role, ...(Array.isArray(user?.roles) ? user.roles : [])]
+    .map((value) => String(value || '').trim().toLowerCase().replaceAll('-', '_'));
+  const canEdit = roles.some((role) => allowedRoles.has(role));
+  const [about, setAbout] = useState('');
+  const [website, setWebsite] = useState('');
+  const [loadingProfile, setLoadingProfile] = useState(true);
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [notice, setNotice] = useState('');
+  const [error, setError] = useState('');
+  useEffect(() => {
+    if (!canEdit) return undefined;
+    let alive = true;
+    setLoadingProfile(true);
+    getRecruitmentSettings().then((response) => {
+      if (!alive) return;
+      const record = response?.item || response?.data || response?.result || response || {};
+      setAbout(String(record.career_company_about || ''));
+      setWebsite(String(record.career_company_website || ''));
+    }).catch((cause) => {
+      if (alive) setError(cause?.message || 'Unable to read company profile.');
+    }).finally(() => {
+      if (alive) setLoadingProfile(false);
+    });
+    return () => { alive = false; };
+  }, [canEdit]);
+  if (!canEdit) return null;
+  const save = async (event) => {
+    event.preventDefault();
+    setError(''); setNotice('');
+    if (!about.trim()) { setError('Please fill up the About the Company details.'); return; }
+    let normalizedWebsite = website.trim();
+    if (normalizedWebsite) {
+      try {
+        const parsed = new URL(normalizedWebsite);
+        if (!['http:', 'https:'].includes(parsed.protocol) || !parsed.hostname || parsed.username || parsed.password) throw new Error();
+        normalizedWebsite = parsed.href;
+      } catch { setError('Please enter a valid company website address (https://...).'); return; }
+    }
+    setSavingProfile(true);
+    try {
+      await updateRecruitmentSettings({ career_company_about: about.trim(), career_company_website: normalizedWebsite });
+      setWebsite(normalizedWebsite);
+      setNotice('Company details saved. These details now appear on your tenant’s public Career Portal.');
+    } catch (cause) {
+      setError(cause?.message || 'Could not save company details.');
+    } finally { setSavingProfile(false); }
+  };
+  return (
+    <section className="yc-career-company-admin" id="career-company-profile-settings" aria-labelledby="career-company-admin-title">
+      <span className="tenant-branding-kicker"><Building2 size={15} /> Tenant Careers Profile</span>
+      <h2 id="career-company-admin-title">About the Company</h2>
+      <p>Manage your company's public Career Portal introduction. These details are private to your tenant until published on its careers page. HR or Admin must complete the About section before hiring requests can be created or submitted.</p>
+      {loadingProfile ? <p role="status">Loading company details...</p> : (
+        <form onSubmit={save}>
+          <label htmlFor="yc-company-about-input">About the Company <span aria-hidden="true">*</span></label>
+          <textarea id="yc-company-about-input" rows={5} maxLength={1600} required value={about}
+            onChange={(event) => setAbout(event.target.value)}
+            placeholder="Describe the organisation, its work, mission and employment opportunities." />
+          <label htmlFor="yc-company-web-input">Company website (optional)</label>
+          <input id="yc-company-web-input" type="url" maxLength={320} value={website}
+            onChange={(event) => setWebsite(event.target.value)} placeholder="https://company.example" />
+          {error ? <div className="yc-company-settings-msg is-error" role="alert">{error}</div> : null}
+          {notice ? <div className="yc-company-settings-msg" role="status">{notice}</div> : null}
+          <button type="submit" disabled={savingProfile}>{savingProfile ? 'Saving...' : 'Save Company Details'}</button>
+        </form>
+      )}
     </section>
   );
 }
@@ -4918,6 +4992,7 @@ export default function Settings({ user, setPage }) {
         )}
       </section>
 
+      <CareerCompanySettingsV2 user={user} />
       <section className="tenant-branding-panel">
         <div className="tenant-branding-heading">
           <div>

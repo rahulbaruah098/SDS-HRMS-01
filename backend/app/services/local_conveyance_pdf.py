@@ -64,7 +64,8 @@ def _pdf_html(bill):
     logo_dir = Path(__file__).resolve().parent.parent / "static"
     left_logo = b64encode((logo_dir / "lc_logo_sds.png").read_bytes()).decode("ascii")
     right_logo = b64encode((logo_dir / "lc_logo_sayanant.png").read_bytes()).decode("ascii")
-    submitted = bill["created_at"].strftime("%d/%m/%Y") if isinstance(bill.get("created_at"), datetime) else ""
+    submitted_at = bill.get("submitted_at")
+    submitted = submitted_at.strftime("%d/%m/%Y") if isinstance(submitted_at, datetime) else "Not yet submitted"
     return f'''<!doctype html><html><head><meta charset="utf-8"><style>
         @page {{ size: A4; margin: 17mm 12mm 20mm; @bottom-center {{content: "SDS, H. No-02, 2nd Floor, Bishnujyoti Nagar, Dharapur, Guwahati, Assam 781017"; font-size:8pt;}} }}
         body {{ font-family: "DejaVu Sans", Arial, sans-serif; color: #141414; font-size: 9pt; }}
@@ -96,5 +97,32 @@ def _pdf_html(bill):
 
 
 def render_lc_bill_pdf(bill):
+    """Mixed monthly claims print one SDS vehicle section and one public transport section.
+
+    Each section has its original SDS table structure and its own correct subtotal.
+    The overall claim reference stays the same on both sections.
+    """
     from weasyprint import HTML
-    return HTML(string=_pdf_html(bill)).write_pdf()
+    if bill.get('bill_type') != 'mixed':
+        return HTML(string=_pdf_html(bill)).write_pdf()
+
+    vehicle_lines = [line for line in bill['lines'] if line['mode'] != MODE_PUBLIC]
+    public_lines = [line for line in bill['lines'] if line['mode'] == MODE_PUBLIC]
+    portions = []
+    for category, lines in (('own_two_wheeler', vehicle_lines), (MODE_PUBLIC, public_lines)):
+        if not lines:
+            continue
+        sub_bill = {**bill, 'bill_type': category, 'lines': lines,
+                    'total': round(sum(float(line['amount']) for line in lines), 2)}
+        html = _pdf_html(sub_bill)
+        body = html.split('<body>', 1)[1].rsplit('</body>', 1)[0]
+        portions.append(body)
+    if not portions:
+        raise ValueError('Monthly LC claim has no eligible journeys')
+    # Wrap sections in one WeasyPrint document; avoids adding another PDF dependency.
+    template = _pdf_html({**bill, 'bill_type': 'own_two_wheeler',
+                          'lines': vehicle_lines or public_lines, 'total': bill['total']})
+    header = template.split('<body>', 1)[0]
+    page = '<div style="break-after:page"></div>'.join(portions)
+    page += f'<p style="font-weight:bold; text-align:right; padding:8px; border:1px solid #333">Overall monthly claim total: Rs {bill["total"]:,.2f}</p>'
+    return HTML(string=header + '<body>' + page + '</body></html>').write_pdf()

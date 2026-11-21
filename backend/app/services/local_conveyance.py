@@ -93,7 +93,7 @@ def start_travel(payload, rates, allow_legacy=True):
     if not fields["from_location"] or not fields["to_location"] or not fields["purpose"]:
         raise ValueError("From, To and Purpose are required for Local Conveyance")
     if mode in (MODE_TWO, MODE_FOUR):
-        fields["vehicle_number"] = str(payload.get("vehicle_number") or "").strip()[:40]
+        fields["vehicle_number"] = str(payload.get("vehicle_number") or "").strip().upper()[:40]
         fields["start_km"] = _money(_amount(payload.get("start_km"), "Starting odometer", MAX_KM))
         fields["rate"] = _money(rates[mode])
     else:
@@ -144,3 +144,11 @@ def active_visit_query(tenant_id, employee):
 
 def has_active_visit(db, tenant_id, employee):
     return db.field_visits.find_one(active_visit_query(tenant_id, employee), {"_id": 1, "title": 1})
+
+
+def has_recorded_field_visit(db, tenant_id, employee, visit_date):
+    """A scheduled-only visit is not a recorded journey for LC reminder purposes."""
+    query = active_visit_query(tenant_id, employee)
+    query['scheduled_date'] = str(visit_date)
+    query['status'] = {'$in': ['started', 'reached', 'completed']}
+    return bool(db.field_visits.find_one(query, {'_id': 1}))

@@ -4013,6 +4013,20 @@ export async function downloadLocalConveyancePdf(reference) {
   setTimeout(() => URL.revokeObjectURL(url), 30000);
 }
 
+export function getSavedMyVisitVehicles() {
+  return api('/field-visits/saved-vehicles');
+}
+export function actionLocalConveyanceBill(reference, action, remarks = '') {
+  return api(`/local-conveyance/bills/${encodeURIComponent(reference)}/action`, {
+    method: 'POST', body: JSON.stringify({ action, remarks }),
+  });
+}
+export function correctLocalConveyanceBill(reference, lines) {
+  return api(`/local-conveyance/bills/${encodeURIComponent(reference)}/correction`, {
+    method: 'PATCH', body: JSON.stringify({ lines }),
+  });
+}
+
 export function getFieldVisits(params = {}) {
   return api(`/field-visits${buildQuery(params)}`);
 }

@@ -1082,6 +1082,9 @@ if (type === 'check-out' && !sprintReportAlreadySaved) {
       else setVisitPrompt('');
 
       alerts.success('Checked in successfully.', 'Checked In');
+      if (mode === 'field' && checkInResult?.field_visit_reminder?.required) {
+        alerts.warning(checkInResult.field_visit_reminder.message, 'Field Visit Reminder');
+      }
 
       setFieldLocation('');
       setFieldPhotoFile(null);
@@ -1100,10 +1103,13 @@ if (type === 'check-out' && !sprintReportAlreadySaved) {
       });
 
       if (!attendanceMounted.current) return false;
-      await submitCheckOut({ ...payload, ...identity });
-      setVisitPrompt('');
+      const checkOutResult = await submitCheckOut({ ...payload, ...identity });
+      setVisitPrompt(checkOutResult?.field_visit_checkout_reminder?.required ? 'missing-checkout' : '');
 
       alerts.success('Checked out successfully.', 'Checked Out');
+      if (checkOutResult?.field_visit_checkout_reminder?.required) {
+        alerts.warning(checkOutResult.field_visit_checkout_reminder.message, 'Local Conveyance Reminder');
+      }
       setEarlyCheckoutReasonCode('');
       setEarlyCheckoutOtherReason('');
     }
@@ -1526,9 +1532,10 @@ async function submitHolidayWorkRequest(event) {
       `}</style>
 
       {visitPrompt ? <div role="alert" style={{border: '1px solid #e9c7a0', borderRadius: 12, padding: 14, marginBottom: 12, background: '#fff9f0'}}>
-        <strong>{visitPrompt === 'checkout' ? 'Active Visit Not Completed' : 'Field Visit Reminder'}</strong>
+        <strong>{visitPrompt === 'checkout' ? 'Active Visit Not Completed' : visitPrompt === 'missing-checkout' ? 'Local Conveyance Reminder' : 'Field Visit Reminder'}</strong>
         <p style={{margin: '8px 0'}}>{visitPrompt === 'checkout' ?
-          'Please end all ongoing visits in My Visit, including final odometer readings, before checking out.' :
+          'Please end all ongoing visits in My Visit, including final odometer readings, before checking out.' : visitPrompt === 'missing-checkout' ?
+          'You have checked out without recording a My Visit for today. You cannot claim Local Conveyance for a journey without a properly recorded and completed visit.' :
           'You marked Field attendance. Start your journey in My Visit with travel details; completed visits are required for monthly LC claims.'}</p>
         <button type="button" onClick={() => typeof onNavigate === 'function' && onNavigate('my_visits')}
           style={{border: 'none', borderRadius: 8, padding: '9px 14px', background: '#264d8b', color: 'white', cursor: 'pointer'}}>

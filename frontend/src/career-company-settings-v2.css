@@ -1,0 +1,17 @@
+/* YC_CAREER_COMPANY_SETTINGS_V2 — isolated responsive settings and recruitment notices */
+.yc-career-company-admin { border: 1px solid #dbe4f1; background: #fff; border-radius: 20px; padding: clamp(16px, 3vw, 26px); margin-bottom: 24px; box-shadow: 0 8px 28px rgba(25,45,90,.04); }
+.yc-career-company-admin h2 { font-size: clamp(20px,2vw,25px); margin: 8px 0; color: #132441; }
+.yc-career-company-admin p { color: #526581; line-height: 1.55; margin: 8px 0 18px; }
+.yc-career-company-admin form { display: grid; gap: 14px; }
+.yc-career-company-admin label { font-size: 13px; font-weight: 700; color:#293e61; }
+.yc-career-company-admin input, .yc-career-company-admin textarea { width:100%; max-width:100%; border:1px solid #c9d6ed; border-radius:12px; background:#fff; padding:12px 14px; font:inherit; color:#152a4b; }
+.yc-career-company-admin textarea { min-height:140px; resize:vertical; }
+.yc-career-company-admin input:focus, .yc-career-company-admin textarea:focus { outline:2px solid #adbef3; outline-offset:1px; }
+.yc-career-company-admin button { border:0; border-radius:12px; background:#3459d7; color:#fff; padding:11px 18px; font-weight:700; cursor:pointer; justify-self:start; }
+.yc-career-company-admin button:disabled { opacity:.55; cursor:wait; }
+.yc-career-company-admin .yc-company-settings-msg { padding:10px 12px; border-radius:10px; background:#ecf5fc; color:#183f69; line-height:1.5; }
+.yc-career-company-admin .yc-company-settings-msg.is-error { background:#fff0f0; color:#9b2436; }
+.yc-company-profile-required { display:flex; flex-wrap:wrap; align-items:center; gap:12px; padding:14px 16px; background:#fff8e8; color:#79521b; border:1px solid #eecf8c; border-radius:12px; margin:14px 0; line-height:1.45; }
+.yc-company-profile-required strong { font-weight:800; }
+.yc-company-profile-required a { display:inline-flex; padding:7px 11px; background:#fff; border:1px solid #d3af60; border-radius:9px; color:#61491a; text-decoration:none; font-weight:700; }
+@media (max-width:640px) { .yc-career-company-admin {padding:16px; border-radius:15px;} .yc-career-company-admin button {width:100%;justify-self:stretch;} .yc-company-profile-required {align-items:flex-start;flex-direction:column;} }

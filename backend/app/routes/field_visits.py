@@ -18,7 +18,7 @@ from app.extensions import get_db
 from app.middleware.tenant_guard import tenant_module_required
 from app.utils.auth import audit
 from app.utils.serializers import clean_doc
-from app.services.local_conveyance import start_travel, finish_travel, tenant_rates
+from app.services.local_conveyance import start_travel, finish_travel, tenant_rates, MODE_TWO, MODE_FOUR
 
 
 field_visits_bp = Blueprint("field_visits", __name__)
@@ -643,6 +643,20 @@ def cancel_visit(visit_id):
     return jsonify({"message": "Visit cancelled successfully", "item": clean_doc(updated)})
 
 
+@field_visits_bp.get('/saved-vehicles')
+@tenant_module_required('attendance')
+def saved_vehicles():
+    db = get_db()
+    employee = get_current_employee(db)
+    if not employee:
+        return jsonify({'message': 'Employee profile not found'}), 404
+    vehicles = employee.get('my_visit_vehicles') or {}
+    return jsonify({'items': {
+        MODE_TWO: str(vehicles.get(MODE_TWO) or ''),
+        MODE_FOUR: str(vehicles.get(MODE_FOUR) or ''),
+    }})
+
+
 def transition_visit(visit_id, expected_status, next_status, location_field, timestamp_field):
     db = get_db()
     employee = get_current_employee(db)
@@ -672,8 +686,17 @@ def transition_visit(visit_id, expected_status, next_status, location_field, tim
         if next_status == "started":
             # Existing mobile API callers without a mode remain functional, but
             # their visits are intentionally ineligible for reimbursement.
+            # Prefer this employee's saved registration number on subsequent visits.
+            mode = str(payload.get('travel_mode') or '').strip().lower()
+            if mode in (MODE_TWO, MODE_FOUR):
+                payload = dict(payload)
+                saved = (employee.get('my_visit_vehicles') or {}).get(mode)
+                if not normalize_text(payload.get('vehicle_number')):
+                    payload['vehicle_number'] = saved
             updates["travel"] = start_travel(
                 payload, tenant_rates(db, current_tenant_id()), allow_legacy=True)
+            if mode in (MODE_TWO, MODE_FOUR) and not updates['travel'].get('vehicle_number'):
+                raise ValueError('Enter your vehicle registration number once to save it for future visits')
         elif next_status == "completed":
             updates["travel"] = finish_travel(visit.get("travel"), payload)
             if "visit_notes" in payload:
@@ -689,6 +712,18 @@ def transition_visit(visit_id, expected_status, next_status, location_field, tim
     }, {"$set": updates})
     if not changed.matched_count:
         return jsonify({"message": "Visit changed. Refresh and try again.", "code": "VISIT_STATE_CHANGED"}), 409
+    if next_status == 'started' and updates['travel'].get('mode') in (MODE_TWO, MODE_FOUR):
+        # Save only after the visit's start was committed; this employee's own
+        # record is the only mutable profile, and other employees are untouched.
+        mode = updates['travel']['mode']
+        try:
+            db.employees.update_one(
+                {'_id': employee['_id'], 'tenant_id': current_tenant_id()},
+                {'$set': {f'my_visit_vehicles.{mode}': updates['travel']['vehicle_number']}})
+        except Exception:
+            # The visit has already been started: never report that start failed
+            # due solely to optional profile persistence. The journey snapshot is intact.
+            current_app.logger.exception('Could not save preferred vehicle number')
     updated = db.field_visits.find_one({"_id": visit["_id"], "tenant_id": current_tenant_id()})
     return jsonify({
         "message": f"Visit marked as {next_status} successfully",

@@ -16,6 +16,13 @@ def ensure_indexes(db):
     db.local_conveyance_bills.create_index([("tenant_id", 1), ("visit_ids", 1)], unique=True)
     db.local_conveyance_bills.create_index([("tenant_id", 1), ("employee_ref_id", 1),
                                              ("year", 1), ("month", 1)])
+    # Legacy (pre-workflow) bills have no claim_key; only new monthly claims
+    # participate in this unique partial index. No existing rows are changed.
+    db.local_conveyance_bills.create_index(
+        [("tenant_id", 1), ("claim_key", 1)], unique=True,
+        partialFilterExpression={"claim_key": {"$type": "string"}})
+    db.local_conveyance_bills.create_index(
+        [("tenant_id", 1), ("approval.employee_ref_id", 1), ("status", 1)])
 
 
 def main():

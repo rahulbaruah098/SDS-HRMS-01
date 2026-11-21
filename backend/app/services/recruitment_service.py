@@ -10,8 +10,9 @@ from __future__ import annotations
 import hashlib
 import re
 import secrets
+from urllib.parse import urlsplit  # YC_CAREERS_COMPANY_PROFILE_V1
 from copy import deepcopy
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Iterable, Mapping, Sequence
 
 from bson import ObjectId
@@ -153,6 +154,8 @@ DEFAULT_RECRUITMENT_SETTINGS = {
     "email_candidate_on_rejection": True,
     "employee_code_prefix": "EMP",
     "public_career_slug": "",
+    "career_company_about": "",
+    "career_company_website": "",
 }
 
 class RecruitmentServiceError(RuntimeError):
@@ -166,6 +169,12 @@ class RecruitmentServiceError(RuntimeError):
         return data
 
 def utcnow(): return datetime.utcnow()
+# YC_RECRUITMENT_DEADLINE_V1 - calendar-day cutoff for India-based tenants (IST).
+def _recruitment_today():
+    return datetime.now(timezone(timedelta(hours=5, minutes=30))).date().isoformat()
+def _recruitment_deadline_passed(closing_date):
+    value = str(closing_date or "").strip()
+    return bool(value and value < _recruitment_today())
 def safe_str(value): return str(value or "").strip()
 def normalize_key(value): return re.sub(r"[^a-z0-9]+", "_", safe_str(value).lower()).strip("_")
 def normalize_email(value): return safe_str(value).lower()
@@ -1081,6 +1090,22 @@ class RecruitmentService:
                 code="recruitment_settings_empty",
             )
 
+        if "career_company_about" in payload:
+            payload["career_company_about"] = safe_str(payload["career_company_about"])[:1600]
+        if "career_company_website" in payload:
+            website = safe_str(payload["career_company_website"])
+            if website:
+                if len(website) > 320:
+                    raise RecruitmentServiceError("Company website URL is too long.", code="career_website_invalid")
+                try:
+                    parsed = urlsplit(website)
+                except ValueError:
+                    raise RecruitmentServiceError("Enter a valid company website URL.", code="career_website_invalid")
+                if (parsed.scheme.lower() not in {"https", "http"}
+                        or not parsed.hostname or parsed.username or parsed.password
+                        or any(ch.isspace() for ch in website)):
+                    raise RecruitmentServiceError("Enter a valid http:// or https:// company website.", code="career_website_invalid")
+            payload["career_company_website"] = website
         if "public_career_slug" in payload:
             requested_slug = re.sub(
                 r"[^a-z0-9]+",
@@ -1168,6 +1193,12 @@ class RecruitmentService:
 
     def create_hiring_request(self, payload):
         self._require_hiring_request_creator()
+        # YC_CAREER_COMPANY_SETTINGS_V2: tenant-level prerequisite for new requests.
+        if not safe_str(self._settings().get("career_company_about")):
+            raise RecruitmentServiceError(
+                "Please fill up the About the Company details in System Settings before creating a hiring request.",
+                code="career_company_about_required", status_code=409,
+            )
         data = dict(payload or {})
         title = safe_str(data.get("job_title") or data.get("title"))
         requested_department = safe_str(
@@ -1175,6 +1206,9 @@ class RecruitmentService:
         )
         requested_department_id = safe_str(data.get("department_id"))
         reason = safe_str(data.get("business_reason") or data.get("reason"))
+        deadline = parse_date(data.get("resume_submission_deadline"), "resume_submission_deadline", required=True)
+        if deadline < _recruitment_today():
+            raise RecruitmentServiceError("Last date to submit resume cannot be in the past.", code="invalid_resume_submission_deadline")
         team_leader_request = self._is_department_team_leader()
 
         if not title:
@@ -1282,6 +1316,7 @@ class RecruitmentService:
                 data.get("employment_type") or "permanent"
             ),
             "business_reason": reason,
+            "resume_submission_deadline": deadline,
             "replacement_for": safe_str(data.get("replacement_for")),
             "expected_joining_date": parse_date(
                 data.get("expected_joining_date"),
@@ -1292,6 +1327,11 @@ class RecruitmentService:
             ),
             "required_skills": unique_strings(
                 data.get("required_skills") or data.get("skills") or []
+            ),
+            "key_responsibilities": unique_strings(
+                re.split(r"\r?\n", data.get("key_responsibilities"))
+                if isinstance(data.get("key_responsibilities"), str)
+                else (data.get("key_responsibilities") or [])
             ),
             "qualification": safe_str(data.get("qualification")),
             "salary_min": salary_min,
@@ -1385,6 +1425,11 @@ class RecruitmentService:
 
     def submit_hiring_request(self, request_id):
         self._require_hiring_request_creator()
+        if not safe_str(self._settings().get("career_company_about")):
+            raise RecruitmentServiceError(
+                "Please fill up the About the Company details in System Settings before submitting a hiring request.",
+                code="career_company_about_required", status_code=409,
+            )
         doc = self._get(HIRING_REQUESTS, request_id, "Hiring request")
         team_leader_submission = self._is_department_team_leader()
 
@@ -1624,10 +1669,10 @@ class RecruitmentService:
         if self._c(JOB_OPENINGS).find_one(self._q({"hiring_request_id":str(req["_id"]),"status":{"$in":["draft","open","paused"]}})): raise RecruitmentServiceError("An active job opening already exists for this hiring request.",code="job_opening_already_exists",status_code=409)
         description=safe_str(data.get("description") or data.get("job_description"))
         if not description: raise RecruitmentServiceError("Job description is required.",code="job_description_required")
-        closing=parse_date(data.get("closing_date"),"closing_date")
-        if closing and closing<date.today().isoformat(): raise RecruitmentServiceError("Closing date cannot be in the past.",code="invalid_job_closing_date")
+        closing=parse_date(data.get("closing_date") or req.get("resume_submission_deadline"),"closing_date")
+        if closing and closing<_recruitment_today(): raise RecruitmentServiceError("Closing date cannot be in the past.",code="invalid_job_closing_date")
         ref=self._next("job_opening","JOB"); now=utcnow(); rounds=self._normalise_interview_rounds(clean_list(data.get("interview_rounds")) or deepcopy(self._settings().get("default_interview_rounds") or []), required=True)
-        doc={"tenant_id":self.tenant_id,"reference_no":ref,"hiring_request_id":str(req["_id"]),"hiring_request_reference":req.get("reference_no"),"job_title":safe_str(data.get("job_title") or req.get("job_title")),"department":safe_str(data.get("department") or req.get("department")),"department_id":safe_str(data.get("department_id") or req.get("department_id")),"vacancies":int(data.get("vacancies") or req.get("vacancies") or 1),"filled_vacancies":0,"description":description,"responsibilities":unique_strings(data.get("responsibilities") or []),"qualification":safe_str(data.get("qualification") or req.get("qualification")),"required_skills":unique_strings(data.get("required_skills") or req.get("required_skills") or []),"required_experience":safe_str(data.get("required_experience") or req.get("required_experience")),"employment_type":normalize_key(data.get("employment_type") or req.get("employment_type") or "permanent"),"work_location":safe_str(data.get("work_location") or req.get("work_location")),"work_mode":normalize_key(data.get("work_mode") or "office"),"salary_visible":bool(data.get("salary_visible")),"salary_min":req.get("salary_min"),"salary_max":req.get("salary_max"),"currency":req.get("currency") or "INR","recruiter_user_id":safe_str(data.get("recruiter_user_id") or self.actor_id),"recruiter_name":safe_str(data.get("recruiter_name") or self.actor_name),"hiring_manager_user_id":safe_str(data.get("hiring_manager_user_id") or req.get("hiring_manager_user_id")),"hiring_manager_name":safe_str(data.get("hiring_manager_name") or req.get("hiring_manager_name")),"panel_user_ids":unique_strings(data.get("panel_user_ids") or []),"interview_rounds":rounds,"opening_date":"","closing_date":closing,"public_slug":self._unique_slug(slugify(f"{data.get('job_title') or req.get('job_title')}-{ref}")),"published_channels":[],"application_form_fields":clean_list(data.get("application_form_fields")),"status":"draft","status_history":[],"created_at":now,"updated_at":now,"created_by":self.actor_id,"created_by_name":self.actor_name,"updated_by":self.actor_id,"updated_by_name":self.actor_name,"is_deleted":False}
+        doc={"tenant_id":self.tenant_id,"reference_no":ref,"hiring_request_id":str(req["_id"]),"hiring_request_reference":req.get("reference_no"),"job_title":safe_str(data.get("job_title") or req.get("job_title")),"department":safe_str(data.get("department") or req.get("department")),"department_id":safe_str(data.get("department_id") or req.get("department_id")),"vacancies":int(data.get("vacancies") or req.get("vacancies") or 1),"filled_vacancies":0,"description":description,"responsibilities":unique_strings(data.get("responsibilities") or req.get("key_responsibilities") or []),"qualification":safe_str(data.get("qualification") or req.get("qualification")),"required_skills":unique_strings(data.get("required_skills") or req.get("required_skills") or []),"required_experience":safe_str(data.get("required_experience") or req.get("required_experience")),"employment_type":normalize_key(data.get("employment_type") or req.get("employment_type") or "permanent"),"work_location":safe_str(data.get("work_location") or req.get("work_location")),"work_mode":normalize_key(data.get("work_mode") or "office"),"salary_visible":bool(data.get("salary_visible")),"salary_min":req.get("salary_min"),"salary_max":req.get("salary_max"),"currency":req.get("currency") or "INR","recruiter_user_id":safe_str(data.get("recruiter_user_id") or self.actor_id),"recruiter_name":safe_str(data.get("recruiter_name") or self.actor_name),"hiring_manager_user_id":safe_str(data.get("hiring_manager_user_id") or req.get("hiring_manager_user_id")),"hiring_manager_name":safe_str(data.get("hiring_manager_name") or req.get("hiring_manager_name")),"panel_user_ids":unique_strings(data.get("panel_user_ids") or []),"interview_rounds":rounds,"opening_date":"","closing_date":closing,"public_slug":self._unique_slug(slugify(f"{data.get('job_title') or req.get('job_title')}-{ref}")),"published_channels":[],"application_form_fields":clean_list(data.get("application_form_fields")),"status":"draft","status_history":[],"created_at":now,"updated_at":now,"created_by":self.actor_id,"created_by_name":self.actor_name,"updated_by":self.actor_id,"updated_by_name":self.actor_name,"is_deleted":False}
         result=self._c(JOB_OPENINGS).insert_one(doc); doc["_id"]=result.inserted_id; self._activity("created","job_opening",doc["_id"],message=f"Job opening {ref} was created.",new="draft",details={"hiring_request_id":str(req["_id"])}); return doc
     def _public_job(self,doc):
         keys={"_id","reference_no","job_title","department","vacancies","description","responsibilities","qualification","required_skills","required_experience","employment_type","work_location","work_mode","salary_visible","currency","opening_date","closing_date","public_slug","application_form_fields","status"}; result={k:deepcopy(v) for k,v in doc.items() if k in keys}
@@ -1637,7 +1682,7 @@ class RecruitmentService:
         q=self._q()
         if public:
             if not self.allow_public_actions: raise RecruitmentServiceError("Public recruitment access is disabled.",code="public_recruitment_access_denied",status_code=403)
-            q.update({"status":"open","$or":[{"closing_date":""},{"closing_date":{"$gte":date.today().isoformat()}}]})
+            q.update({"status":"open","$or":[{"closing_date":""},{"closing_date":{"$gte":_recruitment_today()}}]})
         else:
             self._require_reader()
             if status:q["status"]=normalize_key(status)
@@ -1651,9 +1696,13 @@ class RecruitmentService:
         if not self.allow_public_actions: raise RecruitmentServiceError("Public recruitment access is disabled.",code="public_recruitment_access_denied",status_code=403)
         doc=self._c(JOB_OPENINGS).find_one(self._q({"public_slug":safe_str(slug),"status":"open"}))
         if not doc: raise RecruitmentServiceError("This job opening is not available.",code="job_opening_not_found",status_code=404)
+        if _recruitment_deadline_passed(doc.get("closing_date")):
+            raise RecruitmentServiceError("This job opening is no longer accepting applications.", code="job_application_deadline_passed", status_code=404)
         return self._public_job(doc)
     def change_job_status(self,job_id,status,channels=None,reason=""):
         self._require_hr_publisher(); doc=self._get(JOB_OPENINGS,job_id,"Job opening"); old,new=self._transition(doc.get("status"),status,JOB_OPENING_TRANSITIONS,"Job opening"); now=utcnow(); update={"status":new,"status_reason":safe_str(reason),"updated_at":now,"updated_by":self.actor_id,"updated_by_name":self.actor_name}
+        if new=="open" and _recruitment_deadline_passed(doc.get("closing_date")):
+            raise RecruitmentServiceError("Cannot publish a vacancy after the application deadline.", code="job_application_deadline_passed", status_code=409)
         if new=="open": update.update({"opening_date":doc.get("opening_date") or date.today().isoformat(),"published_at":now,"published_by":self.actor_id,"published_channels":unique_strings(channels or doc.get("published_channels") or ["career_page"])})
         if new in {"closed","cancelled"}: update.update({"closed_at":now,"closed_by":self.actor_id})
         self._c(JOB_OPENINGS).update_one({"_id":doc["_id"],"tenant_id":self.tenant_id},{"$set":update}); self._history(JOB_OPENINGS,doc["_id"],old,new,reason); self._activity("status_changed","job_opening",doc["_id"],message=f"Job opening moved to {new.replace('_',' ')}.",old=old,new=new); return self._get(JOB_OPENINGS,doc["_id"],"Job opening")
@@ -1809,6 +1858,8 @@ class RecruitmentService:
                 code="job_opening_not_found",
                 status_code=404,
             )
+        if _recruitment_deadline_passed(job.get("closing_date")):
+            raise RecruitmentServiceError("The application deadline has passed.", code="job_application_deadline_passed", status_code=409)
         parser_result = clean_mapping(parser_result)
         match = score_resume_match(parser_result, job)
         return {
@@ -1937,6 +1988,8 @@ class RecruitmentService:
                 status_code=409,
             )
 
+        if public and _recruitment_deadline_passed(job.get("closing_date")):
+            raise RecruitmentServiceError("The application deadline has passed.", code="job_application_deadline_passed", status_code=409)
         existing = self._c(APPLICATIONS).find_one(
             self._q({
                 "candidate_id": str(candidate["_id"]),

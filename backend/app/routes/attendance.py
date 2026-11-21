@@ -11,7 +11,7 @@ from pymongo.errors import DuplicateKeyError
 from app.utils.auth import current_user_required, roles_required, audit
 from app.middleware.tenant_guard import tenant_module_required
 from app.utils.serializers import clean_doc
-from app.services.local_conveyance import has_active_visit
+from app.services.local_conveyance import has_active_visit, has_recorded_field_visit
 
 
 
@@ -2941,7 +2941,7 @@ def check_in():
 
     # Advisory only: a successful field check-in must never be rolled back
     # because an employee has not yet started My Visit.
-    field_reminder = bool(mode == "field" and not has_active_visit(db, tenant_id, e))
+    field_reminder = bool(mode == "field" and not has_recorded_field_visit(db, tenant_id, e, today))
     return jsonify({
         "message": "Check-in successful",
         "attendance": clean_doc(doc),
@@ -2992,7 +2992,7 @@ def check_out():
     if not rec:
         return jsonify({"message": "Please check in first"}), 400
 
-    check_out_mode = normalize_mode(data.get("mode") or rec.get("mode") or "office")
+    check_out_mode = normalize_mode(rec.get("mode") or data.get("mode") or "office")
 
     location_ok, location_error = validate_attendance_location(
         location,
@@ -3019,7 +3019,7 @@ def check_out():
     # An active started/reached visit must be ended before checkout. This guard
     # also applies when offline Flutter attendance is eventually synchronised;
     # an unsuccessful sync does not alter the saved attendance record.
-    active_visit = has_active_visit(db, tenant_id, e)
+    active_visit = has_active_visit(db, tenant_id, e) if check_out_mode == "field" else None
     if active_visit:
         return jsonify({
             "message": "You have an ongoing My Visit. End all active visits before attendance checkout.",
@@ -3170,10 +3170,19 @@ def check_out():
         "client_attendance_id": client_attendance_id,
     })
 
+    # Advisory only: Field attendance can checkout without a My Visit,
+    # but employees must be told that no LC is claimable for that journey.
+    missing_field_visit = (check_out_mode == "field" and
+        not has_recorded_field_visit(db, tenant_id, e, today))
     return jsonify({
         "message": "Check-out successful",
         "attendance": clean_doc(updated),
         "compoff": clean_doc(compoff),
+        "field_visit_checkout_reminder": {
+            "required": missing_field_visit,
+            "code": "FIELD_VISIT_NOT_RECORDED" if missing_field_visit else "",
+            "message": "You have not recorded My Visit for today's Field Attendance. Without a completed recorded visit, you cannot claim Local Conveyance for this journey." if missing_field_visit else "",
+        },
     })
 
 def month_start_from_query(value=None):

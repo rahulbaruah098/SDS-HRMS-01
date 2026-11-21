@@ -79,11 +79,12 @@ class LocalConveyanceHttp(unittest.TestCase):
         query=db.local_conveyance_bills.find_one.call_args.args[0]
         self.assertEqual(query['tenant_id'],'tenant-a')
 
-    def test_regular_employee_cannot_hr_verify(self):
+    def test_legacy_hr_verification_endpoint_disabled(self):
         self.ctx('/api/v1/local-conveyance/bills/LC/SDS/2026/11/000001/verify','POST',{'action':'hr_verify'})
         with patch.object(lc,'get_db',return_value=MagicMock()),patch.object(lc,'get_current_employee',return_value=EMP):
-            result=raw(lc.verify_bill)('LC/SDS/2026/11/000001')
-        self.assertEqual(status(result),403)
+            result=raw(lc.legacy_verify_disabled)('LC/SDS/2026/11/000001')
+        self.assertEqual(status(result),409)
+        self.assertEqual(payload(result)['code'],'LC_WORKFLOW_UPDATED')
 
     def test_accounts_can_only_verify_after_hr(self):
         self.ctx('/api/v1/local-conveyance/bills/LC/SDS/2026/11/000001/verify','POST',{'action':'accounts_verify'},role='finance')
@@ -91,28 +92,57 @@ class LocalConveyanceHttp(unittest.TestCase):
         db.local_conveyance_bills.find_one.return_value={'_id':ObjectId(),'tenant_id':'sds',
                'reference':'LC/SDS/2026/11/000001','status':'pending_verification','hr_verification':None}
         with patch.object(lc,'get_db',return_value=db), patch.object(lc,'get_current_employee',return_value=None):
-            result=raw(lc.verify_bill)('LC/SDS/2026/11/000001')
+            result=raw(lc.legacy_verify_disabled)('LC/SDS/2026/11/000001')
         self.assertEqual(status(result),409)
         db.local_conveyance_bills.update_one.assert_not_called()
 
-    def test_rejection_requires_remarks(self):
+    def test_legacy_rejection_endpoint_disabled(self):
         self.ctx('/api/v1/local-conveyance/bills/LC/SDS/2026/11/000001/verify','POST',{'action':'reject'},role='hr')
-        with patch.object(lc,'get_db',return_value=MagicMock()),patch.object(lc,'get_current_employee',return_value=EMP):
-            result=raw(lc.verify_bill)('LC/SDS/2026/11/000001')
-        self.assertEqual(status(result),400)
+        result=raw(lc.legacy_verify_disabled)('LC/SDS/2026/11/000001')
+        self.assertEqual(status(result),409)
 
-    def test_hr_can_verify_and_audit(self):
-        self.ctx('/api/v1/local-conveyance/bills/LC/SDS/2026/11/000001/verify','POST',{'action':'hr_verify','remarks':'GPS checked'},role='hr')
-        db=MagicMock()
-        db.local_conveyance_bills.find_one.return_value={'_id':ObjectId(),'tenant_id':'sds',
-            'reference':'LC/SDS/2026/11/000001','status':'pending_verification','hr_verification':None}
+    def test_manager_validates_only_assigned_bill(self):
+        manager = {**EMP, '_id': ObjectId(), 'is_team_leader': True}
+        self.ctx('/api/v1/local-conveyance/bills/LC/SDS/2026/11/000001/action',
+                 'POST', {'action': 'manager_validate', 'remarks': 'Checked'}, role='team_leader')
+        db = MagicMock()
+        db.local_conveyance_bills.find_one.return_value = {
+            '_id': ObjectId(), 'tenant_id': 'sds', 'revision': 0,
+            'employee_ref_id': str(EMP['_id']), 'employee_name':'Test Employee',
+            'reference': 'LC/SDS/2026/11/000001', 'status': 'pending_manager',
+            'approval': {'type':'team_leader','employee_ref_id':str(manager['_id'])}}
         db.local_conveyance_bills.update_one.return_value.matched_count=1
-        with (patch.object(lc,'get_db',return_value=db), patch.object(lc,'audit') as audit,
-              patch.object(lc,'get_current_employee',return_value=EMP)):
-            result=raw(lc.verify_bill)('LC/SDS/2026/11/000001')
-        self.assertEqual(status(result),200)
+        with (patch.object(lc, 'get_db', return_value=db), patch.object(lc,'audit') as audit,
+              patch.object(lc, 'get_current_employee', return_value=manager),
+              patch.object(lc, '_notify')):
+            result = raw(lc.bill_action)('LC/SDS/2026/11/000001')
+        self.assertEqual(status(result), 200)
+        self.assertEqual(db.local_conveyance_bills.update_one.call_args.args[1]['$set']['status'], 'pending_accounts')
         audit.assert_called_once()
-        self.assertEqual(db.local_conveyance_bills.update_one.call_args.args[0]['tenant_id'],'sds')
+
+    def test_accounts_cannot_mark_paid_without_manager_verification(self):
+        self.ctx('/api/v1/local-conveyance/bills/X/action', 'POST',
+                 {'action':'mark_paid', 'remarks':'TXN'}, role='accounts_finance')
+        db = MagicMock()
+        db.local_conveyance_bills.find_one.return_value = {
+            '_id':ObjectId(), 'tenant_id':'sds', 'reference':'X', 'status':'pending_accounts'}
+        with patch.object(lc,'get_db',return_value=db),patch.object(lc,'get_current_employee',return_value=None):
+            result=raw(lc.bill_action)('X')
+        self.assertEqual(status(result),403)
+        db.local_conveyance_bills.update_one.assert_not_called()
+
+    def test_submit_requires_hierarchy_mapping(self):
+        self.ctx('/api/v1/local-conveyance/bills/X/action', 'POST', {'action':'submit'})
+        db=MagicMock()
+        db.local_conveyance_bills.find_one.return_value={
+            '_id':ObjectId(),'tenant_id':'sds','reference':'X','status':'draft',
+            'employee_ref_id':str(EMP['_id'])}
+        with (patch.object(lc,'get_db',return_value=db),
+              patch.object(lc,'get_current_employee',return_value=EMP),
+              patch.object(lc,'resolve_approver',side_effect=ValueError('No reporting hierarchy'))):
+            result=raw(lc.bill_action)('X')
+        self.assertEqual(status(result),409)
+        db.local_conveyance_bills.update_one.assert_not_called()
 
     def test_legacy_start_works_but_not_reimbursable(self):
         self.ctx('/api/v1/field-visits/abc/start','POST',{'latitude':26.1,'longitude':91.7})
@@ -140,10 +170,10 @@ class LocalConveyanceHttp(unittest.TestCase):
         self.assertEqual(payload(result)['code'],'VISIT_STATE_CHANGED')
 
     def test_checkout_active_visit_blocks_before_sprint_or_write(self):
-        self.ctx('/api/v1/attendance/check-out','POST',{'mode':'office'})
+        self.ctx('/api/v1/attendance/check-out','POST',{'mode':'field'})
         db=MagicMock()
         db.attendance_logs.find_one.return_value={'_id':ObjectId(),'tenant_id':'sds',
-            'employee_id':str(EMP['_id']),'check_out':None,'mode':'office'}
+            'employee_id':str(EMP['_id']),'check_out':None,'mode':'field'}
         offline={'attendance_time':datetime(2026,11,20,18,15),'server_received_at':datetime.utcnow(),
                  'created_offline':False,'offline_marked_at':None,'client_attendance_id':''}
         with (patch.object(attendance,'get_db',return_value=db), patch.object(attendance,'emp',return_value=EMP),

@@ -1,10 +1,9 @@
-"""Tenant-safe My Visit monthly LC documents and HR/Finance verification."""
+"""Tenant-safe, employee-owned monthly Local Conveyance approval and payment workflow."""
 from datetime import datetime
 from decimal import Decimal
 from io import BytesIO
 
-from bson import ObjectId
-from flask import Blueprint, g, jsonify, request, send_file
+from flask import Blueprint, current_app, jsonify, request, send_file
 from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
@@ -15,292 +14,445 @@ from app.routes.field_visits import (get_current_employee, current_tenant_id,
 from app.services.local_conveyance import (MODE_TWO, MODE_FOUR, MODE_PUBLIC,
     tenant_rates, validate_rates)
 from app.services.local_conveyance_pdf import render_lc_bill_pdf
+from app.services.lc_workflow import (ACCOUNT_ROLES, PAYMENT_ROLES, OVERSIGHT_ROLES,
+    can_read, can_mark_paid, correction_lines, is_approver, resolve_approver, MANAGER_ROLES)
 from app.utils.auth import audit
 from app.utils.serializers import clean_doc
 
-lc_bp = Blueprint("local_conveyance", __name__)
-HR = {"admin", "hr", "hr_admin", "hr_manager"}
-FINANCE = {"admin", "finance", "accounts_finance"}
-STAFF = HR | FINANCE
+lc_bp = Blueprint('local_conveyance', __name__)
 BILL_TYPES = {MODE_TWO, MODE_FOUR, MODE_PUBLIC}
+REVIEW_STATES = {'pending_manager', 'pending_accounts', 'verified', 'paid', 'rejected'}
 
 
 def _error(message, status=400, code=None):
-    return jsonify({"message": message, **({"code": code} if code else {})}), status
+    return jsonify({'message': message, **({'code': code} if code else {})}), status
 
 
 def _valid_period(payload):
     try:
-        year, month = int(payload.get("year")), int(payload.get("month"))
+        year, month = int(payload.get('year')), int(payload.get('month'))
         if not 2020 <= year <= 2100 or not 1 <= month <= 12:
             raise ValueError()
     except (ValueError, TypeError):
-        raise ValueError("Please select a valid LC month and year")
+        raise ValueError('Please select a valid LC month and year')
     return year, month
 
 
-def _bill_scope(employee):
-    return {"tenant_id": current_tenant_id(),
-            "employee_ref_id": {"$in": sorted(employee_identity_values(employee))}}
-
-
-def _can_review():
-    return bool(current_user_roles() & STAFF)
-
-
-def _owned_or_reviewable(bill, employee):
-    return _can_review() or bool(employee and str(bill.get("employee_ref_id")) in employee_identity_values(employee))
-
-
 def _bill(db, ref):
-    return db.local_conveyance_bills.find_one({"tenant_id": current_tenant_id(), "reference": str(ref)})
+    return db.local_conveyance_bills.find_one({'tenant_id': current_tenant_id(), 'reference': str(ref)})
 
 
-def _bill_document(db, bill_type, employee, year, month, visits):
-    tenant = current_tenant_id()
-    amount = float(sum(Decimal(str(v["travel"]["amount"])) for v in visits))
-    # This is the only reference-number sequence; gaps are acceptable but reuse isn't.
-    counter = db.local_conveyance_counters.find_one_and_update(
-        {"_id": f"lc:{tenant}:{year}:{month:02d}"},
-        {"$inc": {"seq": 1}, "$setOnInsert": {"tenant_id": tenant}},
-        upsert=True, return_document=ReturnDocument.AFTER)
-    sequence = int(counter["seq"])
-    tenant_code = "".join(x for x in tenant.upper() if x.isalnum())[:14] or "TENANT"
-    reference = f"LC/{tenant_code}/{year}/{month:02d}/{sequence:06d}"
+def _owner(bill, employee):
+    return bool(employee and str(bill.get('employee_ref_id')) in employee_identity_values(employee))
+
+
+def _optimistic_filter(bill):
+    query = {'_id': bill['_id'], 'tenant_id': current_tenant_id(), 'status': bill.get('status')}
+    query['revision'] = bill['revision'] if 'revision' in bill else {'$exists': False}
+    return query
+
+
+def _serialize_with_actions(db, bill):
+    employee = get_current_employee(db)
+    roles = current_user_roles()
+    visible = clean_doc(bill)
+    visible['capabilities'] = {
+        'can_submit': _owner(bill, employee) and bill.get('status') in {'draft', 'rejected', 'pending_verification'},
+        'can_correct': _owner(bill, employee) and bill.get('status') == 'rejected',
+        'can_manager_validate': is_approver(bill, employee, roles) and bill.get('status') == 'pending_manager',
+        'can_accounts_verify': bool(roles & ACCOUNT_ROLES) and bill.get('status') == 'pending_accounts',
+        'can_mark_paid': can_mark_paid(roles, employee) and bill.get('status') == 'verified',
+    }
+    return visible
+
+
+def _updated(db, ref):
+    return jsonify({'message': 'LC bill updated', 'item': _serialize_with_actions(db, _bill(db, ref))})
+
+
+def _record(db, bill, action, comment='', **meta):
+    audit('lc_' + action, 'local_conveyance_bills', bill['_id'],
+          {'reference': bill['reference'], 'action': action, 'comment': comment, **meta})
+
+
+def _notify(db, user_ids, title, body, reference, target='my_local_conveyance'):
+    """Best-effort tenant-scoped bell notifications; do not rollback an approved transaction."""
+    try:
+        now = datetime.utcnow()
+        ids = sorted({str(x).strip() for x in user_ids if str(x or '').strip()})
+        if ids:
+            db.notifications.insert_many([{
+                'tenant_id': current_tenant_id(), 'user_id': uid,
+                'title': title, 'body': body,
+                'meta': {'page': target, 'target': target,
+                         'type': 'lc_workflow', 'reference': reference},
+                'read': False, 'status': 'unread', 'created_at': now, 'updated_at': now,
+            } for uid in ids])
+    except Exception:
+        current_app.logger.exception('LC notification could not be queued')
+
+
+def _user_ids_for_roles(db, roles):
+    users = db.users.find({'tenant_id': current_tenant_id(), 'is_deleted': {'$ne': True},
+                           '$or': [{'role': {'$in': sorted(roles)}},
+                                   {'roles': {'$in': sorted(roles)}}]})
+    return [str(user['_id']) for user in users]
+
+
+def _owner_user(db, bill):
+    employee = db.employees.find_one({'_id': _oid(bill['employee_ref_id']),
+        'tenant_id': current_tenant_id(), 'is_deleted': {'$ne': True}})
+    return str(employee.get('user_id') or '') if employee else ''
+
+
+def _oid(value):
+    from bson import ObjectId
+    return ObjectId(value) if ObjectId.is_valid(str(value)) else str(value)
+
+
+def _lines(visits):
     lines = []
-    for visit in visits:
-        travel = visit["travel"]
+    for v in visits:
+        t = v['travel']
         lines.append({
-            "visit_id": str(visit["_id"]),
-            "date": visit.get("scheduled_date") or "",
-            "title": visit.get("title") or "",
-            "from_location": travel.get("from_location") or "",
-            "to_location": travel.get("to_location") or "",
-            "purpose": travel.get("purpose") or visit.get("description") or "",
-            "project": travel.get("project") or "",
-            "remarks": travel.get("remarks") or "",
-            "mode": travel["mode"],
-            "vehicle_number": travel.get("vehicle_number") or "",
-            "start_km": travel.get("start_km"), "end_km": travel.get("end_km"),
-            "distance_km": travel.get("distance_km"), "rate": travel.get("rate"),
-            "transport_type": travel.get("transport_type"),
-            "transport_other": travel.get("transport_other") or "",
-            "fare": travel.get("fare"), "amount": travel["amount"],
+            'visit_id': str(v['_id']), 'date': v.get('scheduled_date') or '',
+            'title': v.get('title') or '', 'from_location': t.get('from_location') or '',
+            'to_location': t.get('to_location') or '',
+            'purpose': t.get('purpose') or v.get('description') or '',
+            'project': t.get('project') or '', 'remarks': t.get('remarks') or '',
+            'mode': t['mode'], 'vehicle_number': t.get('vehicle_number') or '',
+            'start_km': t.get('start_km'), 'end_km': t.get('end_km'),
+            'distance_km': t.get('distance_km'), 'rate': t.get('rate'),
+            'transport_type': t.get('transport_type'),
+            'transport_other': t.get('transport_other') or '',
+            'fare': t.get('fare'), 'amount': t['amount'],
         })
+    return lines
+
+
+def _document(db, employee, year, month, visits):
+    tenant = current_tenant_id()
+    counter = db.local_conveyance_counters.find_one_and_update(
+        {'_id': f'lc:{tenant}:{year}:{month:02d}'},
+        {'$inc': {'seq': 1}, '$setOnInsert': {'tenant_id': tenant}},
+        upsert=True, return_document=ReturnDocument.AFTER)
+    code = ''.join(x for x in tenant.upper() if x.isalnum())[:14] or 'TENANT'
+    lines = _lines(visits)
+    modes = {line['mode'] for line in lines}
     now = datetime.utcnow()
     return {
-        "tenant_id": tenant, "reference": reference,
-        "employee_ref_id": str(employee["_id"]),
-        "employee_code": str(employee.get("employee_code") or employee.get("emp_code") or ""),
-        "employee_name": employee_name(employee),
-        "designation": str(employee.get("designation") or ""),
-        "department": str(employee.get("department") or ""),
-        "location": str(employee.get("location") or employee.get("state") or ""),
-        "year": year, "month": month, "bill_type": bill_type,
-        "visit_ids": [line["visit_id"] for line in lines],
-        "lines": lines, "total": amount, "currency": "INR",
-        "status": "pending_verification", "hr_verification": None,
-        "accounts_verification": None, "verification_history": [],
-        "created_at": now, "created_by": current_user_id(),
-        "updated_at": now, "paid": False,
+        'tenant_id': tenant,
+        'claim_key': f'{employee["_id"]}:{year}:{month:02d}',
+        'reference': f'LC/{code}/{year}/{month:02d}/{int(counter["seq"]):06d}',
+        'employee_ref_id': str(employee['_id']),
+        'employee_code': str(employee.get('employee_code') or employee.get('emp_code') or ''),
+        'employee_name': employee_name(employee), 'designation': str(employee.get('designation') or ''),
+        'department': str(employee.get('department') or ''),
+        'location': str(employee.get('location') or employee.get('state') or ''),
+        'year': year, 'month': month, 'bill_type': next(iter(modes)) if len(modes) == 1 else 'mixed',
+        'visit_ids': [line['visit_id'] for line in lines],
+        'lines': lines, 'source_lines': [dict(line) for line in lines],
+        'total': float(sum((Decimal(str(v['amount'])) for v in lines), Decimal('0'))),
+        'currency': 'INR', 'status': 'draft', 'revision': 0,
+        'approval': None, 'manager_validation': None, 'accounts_verification': None,
+        'verification_history': [], 'created_at': now,
+        'created_by': current_user_id(), 'updated_at': now,
+        'paid': False, 'paid_at': None,
     }
 
 
-@lc_bp.get("/settings")
-@tenant_module_required("attendance")
+@lc_bp.get('/settings')
+@tenant_module_required('attendance')
 def lc_settings():
     rates = tenant_rates(get_db(), current_tenant_id())
-    return jsonify({"two_wheeler_rate": float(rates[MODE_TWO]),
-                    "four_wheeler_rate": float(rates[MODE_FOUR]),
-                    "editable": bool(current_user_roles() & HR)})
+    return jsonify({'two_wheeler_rate': float(rates[MODE_TWO]),
+                    'four_wheeler_rate': float(rates[MODE_FOUR]),
+                    'editable': bool(current_user_roles() & OVERSIGHT_ROLES)})
 
 
-@lc_bp.put("/settings")
-@tenant_module_required("attendance")
+@lc_bp.put('/settings')
+@tenant_module_required('attendance')
 def update_lc_settings():
-    if not current_user_roles() & HR:
-        return _error("Only HR/Admin can update local conveyance rates", 403)
+    if not current_user_roles() & OVERSIGHT_ROLES:
+        return _error('Only HR/Admin can update local conveyance rates', 403)
     try:
         validated = validate_rates(request.get_json(silent=True) or {})
     except ValueError as exc:
         return _error(str(exc))
     tenant = current_tenant_id()
     get_db().system_settings.update_one(
-        {"_id": f"local-conveyance:{tenant}", "tenant_id": tenant},
-        {"$set": {**validated, "setting_group": "local_conveyance", "setting_key": "rates",
-                  "updated_at": datetime.utcnow(), "updated_by": current_user_id(), "is_deleted": False},
-         "$setOnInsert": {"tenant_id": tenant}}, upsert=True)
-    audit("update_lc_rates", "system_settings", f"local-conveyance:{tenant}", validated)
-    return jsonify({"message": "Rates updated for future visits", **validated})
+        {'_id': f'local-conveyance:{tenant}', 'tenant_id': tenant},
+        {'$set': {**validated, 'setting_group': 'local_conveyance', 'setting_key': 'rates',
+                  'updated_at': datetime.utcnow(), 'updated_by': current_user_id(), 'is_deleted': False},
+         '$setOnInsert': {'tenant_id': tenant}}, upsert=True)
+    audit('update_lc_rates', 'system_settings', f'local-conveyance:{tenant}', validated)
+    return jsonify({'message': 'Rates updated for future visits', **validated})
 
 
-@lc_bp.get("/bills")
-@tenant_module_required("attendance")
+@lc_bp.get('/bills')
+@tenant_module_required('attendance')
 def list_bills():
-    db = get_db()
-    employee = get_current_employee(db)
-    if not employee and not _can_review():
-        return _error("Employee profile not found", 404)
-    query = {"tenant_id": current_tenant_id()}
-    if not (_can_review() and request.args.get("scope") == "all"):
+    db, employee, roles = get_db(), get_current_employee(get_db()), current_user_roles()
+    query = {'tenant_id': current_tenant_id()}
+    if request.args.get('scope') == 'all':
+        if roles & (ACCOUNT_ROLES | OVERSIGHT_ROLES):
+            query['status'] = {'$in': sorted(REVIEW_STATES | {'hr_verified', 'accounts_verified'})}
+        elif employee and (roles & MANAGER_ROLES or
+                            str(employee.get('is_team_leader') or '').lower() in ('true','yes','1') or
+                            str(employee.get('is_reporting_officer') or '').lower() in ('true','yes','1')):
+            query['approval.employee_ref_id'] = str(employee['_id'])
+            query['status'] = {'$in': sorted(REVIEW_STATES)}
+        else:
+            return _error('No review access', 403)
+    else:
         if not employee:
-            return _error("Employee profile not found", 404)
-        query["employee_ref_id"] = {"$in": sorted(employee_identity_values(employee))}
-    ref = str(request.args.get("reference") or "").strip()
+            return _error('Employee profile not found', 404)
+        query['employee_ref_id'] = {'$in': sorted(employee_identity_values(employee))}
+    ref = str(request.args.get('reference') or '').strip()
     if ref:
-        query["reference"] = ref
+        query['reference'] = ref
     try:
-        if request.args.get("year") or request.args.get("month"):
+        if request.args.get('year') or request.args.get('month'):
             year, month = _valid_period(request.args)
-            query.update({"year": year, "month": month})
+            query.update({'year': year, 'month': month})
     except ValueError as exc:
         return _error(str(exc))
-    bills = list(db.local_conveyance_bills.find(query).sort("created_at", -1).limit(150))
-    return jsonify({"items": clean_doc(bills), "count": len(bills)})
+    bills = list(db.local_conveyance_bills.find(query).sort('created_at', -1).limit(150))
+    bills = [b for b in bills if can_read(b, employee, roles)]
+    return jsonify({'items': clean_doc(bills), 'count': len(bills)})
 
 
-@lc_bp.post("/bills/generate")
-@tenant_module_required("attendance")
+@lc_bp.post('/bills/generate')
+@tenant_module_required('attendance')
 def generate_bills():
-    db = get_db()
+    db, tenant = get_db(), current_tenant_id()
     employee = get_current_employee(db)
     if not employee:
-        return _error("Employee profile not found", 404)
+        return _error('Employee profile not found', 404)
     try:
         year, month = _valid_period(request.get_json(silent=True) or {})
     except ValueError as exc:
         return _error(str(exc))
-    query = {**_bill_scope(employee), "scheduled_date": {"$regex": f"^{year}-{month:02d}-"},
-             "status": "completed", "is_deleted": {"$ne": True},
-             "travel.eligible": True, "travel.mode": {"$in": sorted(BILL_TYPES)}}
-    eligible = list(db.field_visits.find(query).sort([("scheduled_date", 1), ("created_at", 1)]))
+    query = {'tenant_id': tenant,
+        'employee_ref_id': {'$in': sorted(employee_identity_values(employee))},
+        'scheduled_date': {'$regex': f'^{year}-{month:02d}-'},
+        'status': 'completed', 'is_deleted': {'$ne': True},
+        'travel.eligible': True, 'travel.mode': {'$in': sorted(BILL_TYPES)}}
+    eligible = list(db.field_visits.find(query).sort([('scheduled_date', 1), ('created_at', 1)]))
+    existing_query = {'tenant_id': tenant, 'employee_ref_id': str(employee['_id']), 'year': year, 'month': month}
+    existing = list(db.local_conveyance_bills.find(existing_query).sort('created_at', -1))
+    if existing:
+        # A draft can be refreshed to include journeys completed since it was
+        # first generated. Once submitted it is immutable until rejection.
+        current = existing[0]
+        if len(existing) == 1 and current.get('claim_key') and current.get('status') == 'draft' and eligible:
+            new_ids = [str(v['_id']) for v in eligible]
+            if new_ids != current.get('visit_ids', []):
+                lines = _lines(eligible)
+                modes = {line['mode'] for line in lines}
+                changed_data = {'lines': lines, 'source_lines': [dict(x) for x in lines],
+                    'visit_ids': new_ids,
+                    'bill_type': next(iter(modes)) if len(modes) == 1 else 'mixed',
+                    'total': float(sum((Decimal(str(x['amount'])) for x in lines), Decimal('0'))),
+                    'updated_at': datetime.utcnow()}
+                try:
+                    changed = db.local_conveyance_bills.update_one(_optimistic_filter(current),
+                        {'$set': changed_data, '$inc': {'revision': 1}})
+                except DuplicateKeyError:
+                    return _error('A journey in this month has already been claimed. Refresh the bill.', 409)
+                if not changed.matched_count:
+                    return _error('Monthly draft changed. Refresh and retry.', 409)
+                _record(db, current, 'refresh_draft')
+                existing = list(db.local_conveyance_bills.find(existing_query).sort('created_at', -1))
+        return jsonify({'message': 'Existing monthly claim returned. Drafts refresh with any newly completed visits; submitted claims remain locked.',
+                        'generated_references': [], 'items': clean_doc(existing)})
     if not eligible:
-        return _error("No completed eligible visit journeys for the selected month", 404)
-    # Fail closed if the mandatory duplicate-claim protection is missing.
-    # The local setup script creates the unique multikey index once.
+        return _error('No completed eligible visit journeys for the selected month', 404)
     try:
         indexes = db.local_conveyance_bills.index_information()
-        protected = any(
-            list(ix.get("key", [])) == [("tenant_id", 1), ("visit_ids", 1)]
-            and ix.get("unique") is True
-            for ix in indexes.values()
-        )
+        protected = any(list(ix.get('key', [])) == [('tenant_id', 1), ('visit_ids', 1)]
+                        and ix.get('unique') is True for ix in indexes.values())
+        monthly = any(list(ix.get('key', [])) == [('tenant_id', 1), ('claim_key', 1)]
+                      and ix.get('unique') is True for ix in indexes.values())
     except Exception:
-        protected = False
-    if not protected:
-        return _error("Local Conveyance index migration is required before bill generation", 503, "LC_INDEXES_REQUIRED")
-
-    # Compound unique multikey (tenant_id, visit_ids) prevents duplicate bills.
-    already = set()
-    for item in db.local_conveyance_bills.find({"tenant_id": current_tenant_id(),
-                        "visit_ids": {"$in": [str(v["_id"]) for v in eligible]}}, {"visit_ids": 1}):
-        already.update(item.get("visit_ids") or [])
-    generated = []
-    for bill_type in (MODE_TWO, MODE_FOUR, MODE_PUBLIC):
-        fresh = [v for v in eligible if v["travel"]["mode"] == bill_type
-                 and str(v["_id"]) not in already]
-        if not fresh:
-            continue
-        doc = _bill_document(db, bill_type, employee, year, month, fresh)
-        try:
-            inserted = db.local_conveyance_bills.insert_one(doc)
-            audit("generate_lc_bill", "local_conveyance_bills", inserted.inserted_id,
-                  {"reference": doc["reference"], "total": doc["total"]})
-            generated.append(doc["reference"])
-            already.update(doc["visit_ids"])
-        except DuplicateKeyError:
-            # Another concurrent request claimed at least one visit. Never duplicate it.
-            continue
-    existing = list(db.local_conveyance_bills.find({"tenant_id": current_tenant_id(),
-           "employee_ref_id": str(employee["_id"]), "year": year, "month": month}).sort("created_at", -1))
-    return jsonify({"message": "LC bills generated" if generated else "Existing LC bills returned (no new eligible journeys)",
-                    "generated_references": generated, "items": clean_doc(existing)})
+        protected = monthly = False
+    if not protected or not monthly:
+        return _error('Updated Local Conveyance index migration is required before monthly bill generation',
+                      503, 'LC_INDEXES_REQUIRED')
+    doc = _document(db, employee, year, month, eligible)
+    try:
+        db.local_conveyance_bills.insert_one(doc)
+        _record(db, doc, 'generate')
+        return jsonify({'message': 'Monthly claim generated as Draft. Review and submit it for validation.',
+                        'generated_references': [doc['reference']], 'items': clean_doc([doc])})
+    except DuplicateKeyError:
+        return _error('One or more journeys are already claimed, or a monthly bill was generated simultaneously. Refresh your bills.',
+                      409, 'LC_DUPLICATE_CLAIM')
 
 
-@lc_bp.get("/bills/<path:reference>")
-@tenant_module_required("attendance")
+@lc_bp.get('/bills/<path:reference>')
+@tenant_module_required('attendance')
 def bill_detail(reference):
     db = get_db()
-    employee = get_current_employee(db)
-    if not employee and not _can_review():
-        return _error("Employee profile not found", 404)
     bill = _bill(db, reference)
     if not bill:
-        return _error("LC bill not found", 404)
-    if not _owned_or_reviewable(bill, employee):
-        return _error("Not authorised to view this LC bill", 403)
-    return jsonify({"item": clean_doc(bill)})
+        return _error('LC bill not found', 404)
+    if not can_read(bill, get_current_employee(db), current_user_roles()):
+        return _error('Not authorised to view this LC bill', 403)
+    return jsonify({'item': _serialize_with_actions(db, bill)})
 
 
-@lc_bp.get("/bills/<path:reference>/pdf")
-@tenant_module_required("attendance")
+@lc_bp.get('/bills/<path:reference>/pdf')
+@tenant_module_required('attendance')
 def download_bill(reference):
     db = get_db()
-    employee = get_current_employee(db)
-    if not employee and not _can_review():
-        return _error("Employee profile not found", 404)
     bill = _bill(db, reference)
     if not bill:
-        return _error("LC bill not found", 404)
-    if not _owned_or_reviewable(bill, employee):
-        return _error("Not authorised to view this LC bill", 403)
+        return _error('LC bill not found', 404)
+    if not can_read(bill, get_current_employee(db), current_user_roles()):
+        return _error('Not authorised to view this LC bill', 403)
     try:
         rendered = render_lc_bill_pdf(bill)
     except Exception:
-        return _error("LC PDF renderer unavailable. Check WeasyPrint dependencies.", 503)
-    # Never expose a raw filesystem path; this is sent from in-memory bytes.
-    safe_name = bill["reference"].replace("/", "-") + ".pdf"
-    return send_file(BytesIO(rendered), mimetype="application/pdf", as_attachment=True,
-                     download_name=safe_name)
+        current_app.logger.exception('LC bill PDF rendering failed')
+        return _error('LC PDF renderer unavailable. Check WeasyPrint dependencies.', 503)
+    return send_file(BytesIO(rendered), mimetype='application/pdf', as_attachment=True,
+                     download_name=bill['reference'].replace('/', '-') + '.pdf')
 
 
-@lc_bp.post("/bills/<path:reference>/verify")
-@tenant_module_required("attendance")
-def verify_bill(reference):
+@lc_bp.patch('/bills/<path:reference>/correction')
+@tenant_module_required('attendance')
+def correct_bill(reference):
     db = get_db()
-    employee = get_current_employee(db)
-    if not employee and not _can_review():
-        return _error("Employee profile not found", 404)
-    roles = current_user_roles()
-    payload = request.get_json(silent=True) or {}
-    action = str(payload.get("action") or "").strip().lower()
-    remarks = str(payload.get("remarks") or "").strip()[:1000]
-    if action not in {"hr_verify", "accounts_verify", "reject"}:
-        return _error("Select HR Verify, Accounts Verify or Reject")
-    if action == "hr_verify" and not roles & HR:
-        return _error("HR/Admin verification rights required", 403)
-    if action == "accounts_verify" and not roles & FINANCE:
-        return _error("Finance/Accounts verification rights required", 403)
-    if action == "reject" and not roles & STAFF:
-        return _error("HR or Accounts verification rights required", 403)
-    if action == "reject" and not remarks:
-        return _error("A rejection reason is required")
     bill = _bill(db, reference)
     if not bill:
-        return _error("LC bill not found", 404)
-    if bill.get("status") == "rejected":
-        return _error("Rejected bills cannot be verified without a correction workflow", 409)
-    if bill.get("status") == "accounts_verified":
-        return _error("Already Accounts verified; this bill is locked", 409)
-    if action == "hr_verify" and bill.get("hr_verification"):
-        return _error("This bill is already HR verified", 409)
-    if action == "accounts_verify" and not bill.get("hr_verification"):
-        return _error("HR verification is required before Accounts verification", 409)
+        return _error('LC bill not found', 404)
+    if not _owner(bill, get_current_employee(db)):
+        return _error('Only the employee who owns this bill can correct it', 403)
+    if bill.get('status') != 'rejected':
+        return _error('Bills can only be edited after rejection', 409)
+    try:
+        lines, total = correction_lines(bill['lines'], (request.get_json(silent=True) or {}).get('lines'))
+    except ValueError as exc:
+        return _error(str(exc))
     now = datetime.utcnow()
-    stage = {"hr_verify": "hr_verified", "accounts_verify": "accounts_verified", "reject": "rejected"}[action]
-    record = {"stage": stage, "by": current_user_id(), "roles": sorted(roles),
-              "at": now, "remarks": remarks}
-    update = {"$set": {"status": stage, "updated_at": now},
-              "$push": {"verification_history": record}}
-    if action == "hr_verify":
-        update["$set"]["hr_verification"] = record
-    elif action == "accounts_verify":
-        update["$set"]["accounts_verification"] = record
-    # Optimistic lock: simultaneous approvals cannot both silently succeed.
-    changed = db.local_conveyance_bills.update_one(
-        {"_id": bill["_id"], "tenant_id": current_tenant_id(), "status": bill["status"]}, update)
+    event = {'stage': 'corrected', 'by': current_user_id(), 'at': now,
+             'remarks': 'Employee corrected rejected bill', 'old_total': bill['total'],
+             'new_total': total, 'previous_lines': bill['lines']}
+    updated = db.local_conveyance_bills.update_one(_optimistic_filter(bill), {
+        '$set': {'lines': lines, 'total': total, 'updated_at': now},
+        '$inc': {'revision': 1}, '$push': {'verification_history': event}})
+    if not updated.matched_count:
+        return _error('Bill changed during editing. Refresh and retry.', 409)
+    _record(db, bill, 'correct', old_total=bill['total'], new_total=total)
+    return _updated(db, reference)
+
+
+@lc_bp.post('/bills/<path:reference>/action')
+@tenant_module_required('attendance')
+def bill_action(reference):
+    db, roles = get_db(), current_user_roles()
+    bill = _bill(db, reference)
+    if not bill:
+        return _error('LC bill not found', 404)
+    employee = get_current_employee(db)
+    data = request.get_json(silent=True) or {}
+    action = str(data.get('action') or '').strip().lower()
+    remarks = str(data.get('remarks') or '').strip()[:1000]
+    state = bill.get('status')
+    owner = _owner(bill, employee)
+    manager = is_approver(bill, employee, roles)
+    accounts = bool(roles & ACCOUNT_ROLES)
+    payer = can_mark_paid(roles, employee)
+    changes = {'updated_at': datetime.utcnow()}
+    if action == 'submit':
+        if not owner:
+            return _error('Only the claimant can submit this bill', 403)
+        if state not in {'draft', 'rejected', 'pending_verification'}:
+            return _error('Only draft or rejected bills can be submitted', 409)
+        try:
+            approver = resolve_approver(db, current_tenant_id(), employee)
+        except ValueError as exc:
+            return _error(str(exc), 409, 'LC_APPROVER_MAPPING_REQUIRED')
+        changes.update({'status': 'pending_manager', 'approval': approver,
+            'manager_validation': None, 'accounts_verification': None,
+            'submitted_at': changes['updated_at'], 'paid': False,
+            'rejected_by': None, 'rejection_reason': '', 'rejected_stage': None})
+        stage = 'submitted'
+        notify = ([approver.get('user_id')], 'LC bill awaiting your validation',
+                  f'{bill["employee_name"]} submitted {reference} for validation.')
+    elif action == 'manager_validate':
+        if not manager:
+            return _error('This claim is not assigned to you as Team Leader or Reporting Officer', 403)
+        if state != 'pending_manager':
+            return _error('Bill is not pending manager validation', 409)
+        record = {'by': current_user_id(), 'employee_ref_id': str(employee['_id']),
+                  'name': employee_name(employee), 'at': changes['updated_at'], 'remarks': remarks,
+                  'role': (bill.get('approval') or {}).get('type')}
+        changes.update({'status': 'pending_accounts', 'manager_validation': record})
+        stage = 'manager_validated'
+        notify = (_user_ids_for_roles(db, ACCOUNT_ROLES), 'LC claim awaiting Accounts verification',
+                  f'{reference} has been validated and is pending Accounts verification.')
+    elif action == 'accounts_verify':
+        if not accounts:
+            return _error('Accounts role required', 403)
+        if state != 'pending_accounts' or not bill.get('manager_validation'):
+            return _error('Manager validation is required before Accounts verification', 409)
+        record = {'by': current_user_id(), 'at': changes['updated_at'], 'remarks': remarks,
+                  'roles': sorted(roles)}
+        changes.update({'status': 'verified', 'accounts_verification': record})
+        stage = 'accounts_verified'
+        notify = ([_owner_user(db, bill)], 'LC claim verified by Accounts',
+                  f'{reference} was verified by Accounts and is awaiting payment.')
+    elif action == 'mark_paid':
+        if not payer:
+            return _error('Only an Accounts Manager can confirm payment', 403)
+        if state != 'verified' or not bill.get('accounts_verification'):
+            return _error('Only an Accounts-verified bill may be marked paid', 409)
+        # Payment has been made outside YourComate. Recording it needs no UTR/input.
+        # Preserve actor, server timestamp, optimistic revision, history and audit.
+        changes.update({'status': 'paid', 'paid': True, 'paid_at': changes['updated_at'],
+                        'paid_by': current_user_id()})
+        stage = 'paid'
+        notify = ([_owner_user(db, bill), (bill.get('approval') or {}).get('user_id')],
+                  'Local Conveyance paid', f'{reference} has been marked paid by Accounts.')
+    elif action == 'reject':
+        if state == 'pending_manager' and not manager:
+            return _error('Only the assigned manager can reject at this stage', 403)
+        if state == 'pending_accounts' and not accounts:
+            return _error('Only Accounts can reject at this stage', 403)
+        if state not in {'pending_manager', 'pending_accounts'}:
+            return _error('This claim is not awaiting your review', 409)
+        if not remarks:
+            return _error('Rejection reason is required')
+        changes.update({'status': 'rejected', 'rejected_by': current_user_id(),
+                        'rejection_reason': remarks, 'rejected_stage': state})
+        stage = 'rejected'
+        notify = ([_owner_user(db, bill)], 'LC bill rejected — correction required',
+                  f'{reference}: {remarks}')
+    else:
+        return _error('Invalid LC workflow action')
+    record = {'stage': stage, 'by': current_user_id(), 'roles': sorted(roles),
+              'at': changes['updated_at'], 'remarks': remarks,
+              'from_status': state, 'to_status': changes['status']}
+    changed = db.local_conveyance_bills.update_one(_optimistic_filter(bill), {
+        '$set': changes, '$inc': {'revision': 1}, '$push': {'verification_history': record}})
     if not changed.matched_count:
-        return _error("Bill was changed by another reviewer. Refresh it.", 409)
-    audit("verify_lc_bill", "local_conveyance_bills", bill["_id"],
-          {"reference": reference, "stage": stage, "remarks": remarks})
-    return jsonify({"message": "LC verification saved", "item": clean_doc(_bill(db, reference))})
+        return _error('Bill was changed by another user. Refresh and retry.', 409)
+    _record(db, bill, stage, remarks)
+    _notify(db, *notify, reference, target='lc_verification' if stage in ('submitted', 'manager_validated') else 'my_local_conveyance')
+    if stage == 'accounts_verified':
+        # The Accounts Manager gets a review-queue notification; the employee
+        # gets the normal claim-status notification above. These targets differ.
+        _notify(db, _user_ids_for_roles(db, PAYMENT_ROLES),
+                'LC claim ready for payment',
+                f'{reference} is verified and awaits actual disbursement and payment confirmation.',
+                reference, target='lc_verification')
+    return _updated(db, reference)
+
+
+@lc_bp.post('/bills/<path:reference>/verify')
+@tenant_module_required('attendance')
+def legacy_verify_disabled(reference):
+    # Never let old HR/Finance clients skip the new reporting hierarchy.
+    return _error('Use the new LC submission and validation workflow', 409, 'LC_WORKFLOW_UPDATED')

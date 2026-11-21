@@ -31,6 +31,7 @@ import {
   createFieldVisit,
   endFieldVisit,
   getFieldVisit,
+  getSavedMyVisitVehicles,
   getLocalConveyanceSettings,
   getMyFieldVisits,
   getTeamFieldVisits,
@@ -536,7 +537,7 @@ function VisitCard({ visit, onOpen }) {
   );
 }
 
-export default function MyVisits({ user = {} }) {
+export default function MyVisits({ user = {}, setPage: navigatePage }) {
   const canViewTeam = useMemo(
     () => userCanViewTeam(user),
     [user],
@@ -559,12 +560,18 @@ export default function MyVisits({ user = {} }) {
   const [detailLoading, setDetailLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState('');
   const [travelForm, setTravelForm] = useState({ ...EMPTY_TRAVEL_FORM });
+  const [savedVehicles, setSavedVehicles] = useState({});
+  useEffect(() => {
+    getSavedMyVisitVehicles().then(data => setSavedVehicles(data?.items || {})).catch(() => {});
+  }, []);
   const [endKm, setEndKm] = useState('');
   const [lcRates, setLcRates] = useState({ two_wheeler_rate: 4, four_wheeler_rate: 14 });
   useEffect(() => {
     getLocalConveyanceSettings().then(setLcRates).catch(() => {});
   }, []);
-  const updateTravelField = (key, value) => setTravelForm(old => ({ ...old, [key]: value }));
+  const updateTravelField = (key, value) => setTravelForm(old => ({ ...old, [key]: value,
+    ...(key === 'travel_mode' ? { vehicle_number: savedVehicles[value] || '' } : {}),
+  }));
   const [visitNotes, setVisitNotes] = useState('');
   const [savingNotes, setSavingNotes] = useState(false);
   const [rescheduleDate, setRescheduleDate] = useState('');
@@ -1062,6 +1069,9 @@ export default function MyVisits({ user = {} }) {
       if (action === 'start') {
         if (!travelForm.travel_mode) throw new Error('Select the mode of travel before starting your visit.');
         response = await startFieldVisit(visitId, { ...location, ...travelForm });
+        if (['own_two_wheeler', 'own_four_wheeler'].includes(travelForm.travel_mode)) {
+          setSavedVehicles(old => ({ ...old, [travelForm.travel_mode]: response?.item?.travel?.vehicle_number || travelForm.vehicle_number }));
+        }
       } else if (action === 'reached') response = await markFieldVisitReached(visitId, location);
       else response = await endFieldVisit(visitId, {
         ...location, ...(selectedVisit.travel?.mode === 'own_two_wheeler' || selectedVisit.travel?.mode === 'own_four_wheeler' ? { end_km: endKm } : {}),
@@ -2695,6 +2705,32 @@ export default function MyVisits({ user = {} }) {
             Create Visit
           </button>
 
+          <button
+            type="button"
+            className="mv-button mv-button--ghost"
+            onClick={() => navigatePage?.('my_local_conveyance')}
+            title="Generate, submit and track your monthly Local Conveyance claim"
+          >
+            <ReceiptText size={18} />
+            My Local Conveyance
+          </button>
+
+          {(userCanViewTeam(user) || [
+            'accounts', 'accountant', 'accounts_finance', 'finance',
+            'accounts_manager', 'finance_manager', 'hr', 'hr_admin',
+            'hr_manager', 'admin',
+          ].some((role) => [user.role, ...(user.roles || [])].map(normalizeRole).includes(role))) && (
+            <button
+              type="button"
+              className="mv-button mv-button--secondary"
+              onClick={() => navigatePage?.('lc_verification')}
+              title="Review employee LC bills, Accounts verification and paid status"
+            >
+              <ReceiptText size={18} />
+              LC Approvals & Payments
+            </button>
+          )}
+
           <VisitInlineMessage
             message={feedbackMap['hero-create']}
             onClose={() => clearFeedback('hero-create')}
@@ -3250,7 +3286,8 @@ export default function MyVisits({ user = {} }) {
                           {TRAVEL_MODES.map(([code, label]) => <option key={code} value={code}>{label}</option>)}
                         </LcField>
                         {['own_two_wheeler', 'own_four_wheeler'].includes(travelForm.travel_mode) ? <>
-                          <LcField label="Vehicle Number" value={travelForm.vehicle_number} onChange={e => updateTravelField('vehicle_number', e.target.value)} />
+                          <LcField label="Vehicle Number (saved for future visits)" value={travelForm.vehicle_number} onChange={e => updateTravelField('vehicle_number', e.target.value)} required />
+                          {savedVehicles[travelForm.travel_mode] ? <p style={{fontSize:12,margin:0,color:'#475569'}}>Saved vehicle pre-filled. Edit the number to update it for your future visits.</p> : null}
                           <LcField label="Starting Odometer (KM)" type="number" value={travelForm.start_km} onChange={e => updateTravelField('start_km', e.target.value)} required />
                         </> : null}
                         {travelForm.travel_mode === 'public_transport' ? <>

@@ -564,6 +564,9 @@ def _company_public_payload(tenant: Mapping[str, Any], settings: Mapping[str, An
         "company_name": company_name,
         "company_logo": company_logo,
         "career_slug": safe_str(settings.get("public_career_slug")),
+        # YC_CAREERS_COMPANY_PROFILE_V1: public, tenant-scoped, non-sensitive fields only.
+        "company_about": safe_str(settings.get("career_company_about"))[:1600],
+        "company_website": safe_str(settings.get("career_company_website"))[:320],
     }
 
 

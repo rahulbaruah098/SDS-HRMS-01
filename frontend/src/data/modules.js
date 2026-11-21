@@ -140,6 +140,7 @@ export const NOTIFICATION_VIEW_ROLES = [
   'hr',
   'finance',
   'accounts_finance',
+  'accounts', 'accountant', 'accounts_manager', 'finance_manager',
   ...CAPABILITY_ROLES,
   BASE_EMPLOYEE_ROLE,
 ];
@@ -166,6 +167,7 @@ export const ALL_COMMON_ROLES = [
   'hr',
   'finance',
   'accounts_finance',
+  'accounts', 'accountant', 'accounts_manager', 'finance_manager',
   ...CAPABILITY_ROLES,
   BASE_EMPLOYEE_ROLE,
 ];
@@ -680,10 +682,10 @@ export const coreModules = [
   ],
   [
     'lc_verification',
-    'Local Conveyance Verification',
+    'LC Approvals & Payments',
     FileText,
-    'Verify reference-numbered LC bills through HR and Accounts controls.',
-    [...HR_ROLES, 'finance', 'accounts_finance'],
+    'Validate submitted monthly LC bills, verify in Accounts, and record actual payment as Accounts Manager.',
+    [...HR_ROLES, 'finance', 'accounts_finance', 'accounts', 'accountant', 'accounts_manager', 'finance_manager', 'team_leader', 'reporting_officer', 'ro', 'manager'],
   ],
   [
     'attendance_logs',

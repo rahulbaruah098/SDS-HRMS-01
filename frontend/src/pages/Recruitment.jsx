@@ -54,6 +54,7 @@ import {
   updateRecruitmentSettings,
 } from '../api/client';
 import '../recruitment.css';
+import '../career-company-settings-v2.css'; // YC_CAREER_COMPANY_SETTINGS_V2
 
 const TABS = [
   ['overview', 'Overview', LayoutDashboard],
@@ -98,6 +99,7 @@ const EMPTY_REQUEST = {
   job_title: '', department: '', department_id: '', vacancies: 1,
   work_location: '', employment_type: 'permanent', business_reason: '',
   expected_joining_date: '', required_experience: '', required_skills: '',
+  key_responsibilities: '', resume_submission_deadline: '',
   qualification: '', salary_min: '', salary_max: '', currency: 'INR',
   budget_notes: '', hiring_manager_user_id: '', approver_user_id: '',
   finance_approval_required: false, leadership_approval_required: false,
@@ -2896,6 +2898,13 @@ export default function Recruitment() {
 
   function requestPage() {
     return <section className="recruitment-panel"><SectionHead title="Hiring requests" description="Team Leaders raise their department need, Admin or Managing Director gives final approval, and HR publishes the vacancy">{canCreateRequest ? <button type="button" className="recruitment-btn recruitment-btn-primary" disabled={isTeamLeader && !departmentScope.department} onClick={() => setModal({ type: 'request' })}><Plus size={15} />New request</button> : null}</SectionHead>
+      {!String(settings.career_company_about || '').trim() ? (
+        <div className="yc-company-profile-required" role="alert">
+          <AlertCircle size={18} />
+          <span><strong>Please fill up the About the Company details.</strong> HR/Admin must complete System Settings → About the Company before hiring requests can be created or submitted.</span>
+          {canManage ? <a href="/hrms/system_settings">Open System Settings</a> : <span>Contact your HR or Admin to complete this information.</span>}
+        </div>
+      ) : null}
       {isTeamLeader ? <div className="recruitment-scope-note"><ShieldCheck size={17} /><div><strong>Department hiring scope</strong>{departmentScope.department ? `You can create and submit hiring requests only for ${departmentScope.department}. The department is locked, and final approval goes to Admin or the Managing Director.` : 'Your employee profile has no assigned department. Ask HR or Admin to update it before creating a hiring request.'}</div></div> : null}
       <Toolbar search={filters.requestSearch} setSearch={(value) => setFilters((state) => ({ ...state, requestSearch: value }))} status={filters.requestStatus} setStatus={(value) => setFilters((state) => ({ ...state, requestStatus: value }))} statuses={['draft', 'submitted', 'approved', 'rejected', 'on_hold', 'closed']} onApply={() => load('requests')} placeholder="Search request, role or department" />
       {requests.length ? <Table headers={['Request', 'Department', 'Vacancies', 'Required by', 'Budget', 'Status', 'Final approval', 'Requested by', '']} wide>{requests.map((request) => {
@@ -3340,7 +3349,7 @@ export default function Recruitment() {
     <nav className="recruitment-tabs-shell" aria-label="Recruitment sections"><div className="recruitment-tabs" role="tablist">{visibleTabs.map(([key, label, Icon]) => <button type="button" role="tab" aria-selected={tab === key} className={`recruitment-tab${tab === key ? ' active' : ''}`} key={key} onClick={() => changeTab(key)} disabled={transitioning}><Icon size={15} />{label}{Number(counts[key]) > 0 ? <span className="recruitment-tab-count">{counts[key]}</span> : null}</button>)}</div></nav>
     <div className={`recruitment-route-stage${transitioning ? ' is-leaving' : ''}`} key={tab}>{content()}</div>
 
-    {modal?.type === 'request' ? <RequestModal employees={employees} departments={departments} busy={busy === 'create-request'} isTeamLeader={isTeamLeader} departmentScope={departmentScope} actorId={actorId} actorName={userName} onClose={() => setModal(null)} onSave={(payload) => act('create-request', () => createRecruitmentHiringRequest(payload), 'Hiring request created as a draft.', 'requests')} /> : null}
+    {modal?.type === 'request' ? <RequestModal settings={settings} employees={employees} departments={departments} busy={busy === 'create-request'} isTeamLeader={isTeamLeader} departmentScope={departmentScope} actorId={actorId} actorName={userName} onClose={() => setModal(null)} onSave={(payload) => act('create-request', () => createRecruitmentHiringRequest(payload), 'Hiring request created as a draft.', 'requests')} /> : null}
     {modal?.type === 'job' ? <JobModal requests={approvedRequests} initial={modal.request} employees={employees} busy={busy === 'create-job'} onClose={() => setModal(null)} onSave={(payload) => act('create-job', () => createRecruitmentJobOpening(payload), 'Job opening created as a draft.', 'jobs')} /> : null}
     {modal?.type === 'candidate' ? <CandidateModal jobs={jobs.filter((job) => ['open', 'draft'].includes(keyOf(job.status)))} busy={busy === 'create-candidate'} onClose={() => setModal(null)} onSave={async ({ candidatePayload, resumeFile, jobOpeningId, source }) => { setBusy('create-candidate'); try { const result = await createRecruitmentCandidate(candidatePayload, resumeFile); const candidate = itemOf(result); if (jobOpeningId) await createRecruitmentApplication({ candidate_id: idOf(candidate), job_opening_id: jobOpeningId, source }); flash('success', jobOpeningId ? 'Candidate and application created.' : 'Candidate saved.'); setModal(null); await load('candidates', true); } catch (error) { flash('danger', messageOf(error)); } finally { setBusy(''); } }} /> : null}
     {modal?.type === 'screen' ? <ScreenModal application={modal.application} busy={busy === `screen:${idOf(modal.application)}`} onClose={() => setModal(null)} onSave={(payload) => act(`screen:${idOf(modal.application)}`, () => updateRecruitmentScreening(idOf(modal.application), payload), 'Candidate screening saved.', 'candidates')} /> : null}
@@ -3392,7 +3401,7 @@ function ReportStats({ title, rows }) {
   return <section className="recruitment-report-card"><h4>{title}</h4><p>Summary for the selected period.</p><div className="recruitment-stat-list">{rows.length ? rows.slice(0, 10).map((item, index) => <div className="recruitment-stat-row" key={`${item.label}-${index}`}><span>{item.label}</span><strong>{item.value}</strong></div>) : <p className="recruitment-muted">No data available.</p>}</div></section>;
 }
 
-function RequestModal({ employees, departments, busy, isTeamLeader, departmentScope, actorId, actorName, onClose, onSave }) {
+function RequestModal({ settings, employees, departments, busy, isTeamLeader, departmentScope, actorId, actorName, onClose, onSave }) {
   const [form, setForm] = useState(() => ({
     ...EMPTY_REQUEST,
     department: isTeamLeader ? departmentScope.department : '',
@@ -3412,6 +3421,7 @@ function RequestModal({ employees, departments, busy, isTeamLeader, departmentSc
       salary_min: form.salary_min === '' ? null : Number(form.salary_min),
       salary_max: form.salary_max === '' ? null : Number(form.salary_max),
       required_skills: commaList(form.required_skills),
+      key_responsibilities: form.key_responsibilities.split(/\r?\n/).map((item) => item.trim()).filter(Boolean),
       hiring_manager_user_id: isTeamLeader ? actorId : form.hiring_manager_user_id,
       hiring_manager_name: isTeamLeader ? actorName : manager ? employeeName(manager) : '',
       approver_user_ids: isTeamLeader ? [] : form.approver_user_id ? [form.approver_user_id] : [],
@@ -3419,8 +3429,10 @@ function RequestModal({ employees, departments, busy, isTeamLeader, departmentSc
     });
   };
   const departmentMissing = isTeamLeader && !departmentScope.department;
-  return <Modal title="Create hiring request" subtitle={isTeamLeader ? 'Raise a manpower need for your assigned department. Final approval goes to Admin or the Managing Director.' : 'Record the business need before HR opens a vacancy.'} onClose={onClose} large footer={<><button type="button" className="recruitment-btn recruitment-btn-neutral" onClick={onClose}>Cancel</button><button type="submit" form="request-form" className="recruitment-btn recruitment-btn-primary" disabled={busy || departmentMissing}>{busy ? <Loader2 size={15} /> : <Check size={15} />}Save draft</button></>}>
-    <form id="request-form" className="recruitment-form" onSubmit={submit}>
+  const careerCompanyMissing = !String(settings?.career_company_about || '').trim();
+  return <Modal title="Create hiring request" subtitle={isTeamLeader ? 'Raise a manpower need for your assigned department. Final approval goes to Admin or the Managing Director.' : 'Record the business need before HR opens a vacancy.'} onClose={onClose} large footer={<><button type="button" className="recruitment-btn recruitment-btn-neutral" onClick={onClose}>Cancel</button><button type="submit" form="request-form" className="recruitment-btn recruitment-btn-primary" disabled={busy || departmentMissing || careerCompanyMissing}>{busy ? <Loader2 size={15} /> : <Check size={15} />}Save draft</button></>}>
+    {careerCompanyMissing ? <div className="yc-company-profile-required" role="alert"><AlertCircle size={18}/><strong>Please fill up the About the Company details in System Settings. Ask HR/Admin to complete it before creating a hiring request.</strong></div> : null}
+      <form id="request-form" className="recruitment-form" onSubmit={submit}>
       {isTeamLeader ? <div className={`recruitment-alert ${departmentMissing ? 'recruitment-alert-danger' : 'recruitment-alert-success'}`}>{departmentMissing ? <AlertCircle size={17} /> : <ShieldCheck size={17} />}<span>{departmentMissing ? 'Your employee profile has no assigned department. Ask HR or Admin to update it before creating a request.' : `Department is locked to ${departmentScope.department}. You cannot create a request for another department or approve your own request.`}</span></div> : null}
       <div className="recruitment-form-section"><h3 className="recruitment-form-section-title">Position requirement</h3><div className="recruitment-form-grid recruitment-form-grid-3">
         <Field label="Job title" required><input required value={form.job_title} onChange={(event) => update('job_title', event.target.value)} /></Field>
@@ -3435,6 +3447,9 @@ function RequestModal({ employees, departments, busy, isTeamLeader, departmentSc
         <Field label="Required experience"><input value={form.required_experience} onChange={(event) => update('required_experience', event.target.value)} placeholder="Example: 3-5 years or Fresher" /></Field>
         <Field label="Qualification"><input value={form.qualification} onChange={(event) => update('qualification', event.target.value)} /></Field>
         <Field label="Required skills" full hint="Separate skills with commas. These structured skills support the explainable resume-match score."><input value={form.required_skills} onChange={(event) => update('required_skills', event.target.value)} /></Field>
+        {/* YC_RECRUITMENT_DEADLINE_V1: company hiring request fields */}
+        <Field label="Key Responsibilities" full hint="Enter one responsibility per line. These will appear in the published job opening."><textarea rows={4} value={form.key_responsibilities} onChange={(event) => update('key_responsibilities', event.target.value)} placeholder="Enter each key responsibility on a new line" /></Field>
+        <Field label="Last date to submit resume" required full hint="Candidates can apply through this date. The public vacancy disappears the following day."><input type="date" required value={form.resume_submission_deadline} onChange={(event) => update('resume_submission_deadline', event.target.value)} /></Field>
       </div></div>
       <div className="recruitment-form-section"><h3 className="recruitment-form-section-title">Budget and final approval</h3><div className="recruitment-form-grid recruitment-form-grid-3">
         <Field label="Minimum salary"><input type="number" min="0" value={form.salary_min} onChange={(event) => update('salary_min', event.target.value)} /></Field>
@@ -3450,16 +3465,16 @@ function RequestModal({ employees, departments, busy, isTeamLeader, departmentSc
 
 function JobModal({ requests, initial, employees, busy, onClose, onSave }) {
   const source = initial || requests[0] || {};
-  const [form, setForm] = useState({ ...EMPTY_JOB, hiring_request_id: idOf(source), job_title: source.job_title || '', department: source.department || '', vacancies: source.vacancies || 1, qualification: source.qualification || '', required_skills: (source.required_skills || []).join(', '), required_experience: source.required_experience || '', employment_type: source.employment_type || 'permanent', work_location: source.work_location || '', hiring_manager_user_id: source.hiring_manager_user_id || '' });
+  const [form, setForm] = useState({ ...EMPTY_JOB, hiring_request_id: idOf(source), job_title: source.job_title || '', department: source.department || '', vacancies: source.vacancies || 1, qualification: source.qualification || '', required_skills: (source.required_skills || []).join(', '), required_experience: source.required_experience || '', responsibilities: (source.key_responsibilities || []).join('\n'), closing_date: source.resume_submission_deadline || '', employment_type: source.employment_type || 'permanent', work_location: source.work_location || '', hiring_manager_user_id: source.hiring_manager_user_id || '' });
   const update = (key, value) => setForm((state) => ({ ...state, [key]: value }));
   const choose = (requestId) => {
     const request = requests.find((item) => idOf(item) === requestId) || {};
-    setForm((state) => ({ ...state, hiring_request_id: requestId, job_title: request.job_title || '', department: request.department || '', vacancies: request.vacancies || 1, qualification: request.qualification || '', required_skills: (request.required_skills || []).join(', '), required_experience: request.required_experience || '', employment_type: request.employment_type || 'permanent', work_location: request.work_location || '', hiring_manager_user_id: request.hiring_manager_user_id || '' }));
+    setForm((state) => ({ ...state, hiring_request_id: requestId, job_title: request.job_title || '', department: request.department || '', vacancies: request.vacancies || 1, qualification: request.qualification || '', required_skills: (request.required_skills || []).join(', '), required_experience: request.required_experience || '', responsibilities: (request.key_responsibilities || []).join('\n'), closing_date: request.resume_submission_deadline || '', employment_type: request.employment_type || 'permanent', work_location: request.work_location || '', hiring_manager_user_id: request.hiring_manager_user_id || '' }));
   };
   const submit = (event) => {
     event.preventDefault();
     const recruiter = employees.find((item) => employeeUserId(item) === form.recruiter_user_id);
-    onSave({ ...form, vacancies: Number(form.vacancies || 1), responsibilities: commaList(form.responsibilities), required_skills: commaList(form.required_skills), recruiter_name: recruiter ? employeeName(recruiter) : '' });
+    onSave({ ...form, vacancies: Number(form.vacancies || 1), responsibilities: form.responsibilities.split(/\r?\n|,/).map((item) => item.trim()).filter(Boolean), required_skills: commaList(form.required_skills), recruiter_name: recruiter ? employeeName(recruiter) : '' });
   };
   return <Modal title="Create job opening" subtitle="Turn an approved hiring request into a clear vacancy." onClose={onClose} large footer={<><button type="button" className="recruitment-btn recruitment-btn-neutral" onClick={onClose}>Cancel</button><button type="submit" form="job-form" className="recruitment-btn recruitment-btn-primary" disabled={busy || !form.hiring_request_id}>{busy ? <Loader2 size={15} /> : <Check size={15} />}Save draft</button></>}>
     <form id="job-form" className="recruitment-form" onSubmit={submit}><div className="recruitment-alert recruitment-alert-warning"><AlertCircle size={17} /><span>Only approved requests without an active vacancy are available.</span></div>
@@ -3470,7 +3485,7 @@ function JobModal({ requests, initial, employees, busy, onClose, onSave }) {
         <Field label="Vacancies"><input type="number" min="1" value={form.vacancies} onChange={(event) => update('vacancies', event.target.value)} /></Field>
         <Field label="Work location"><input value={form.work_location} onChange={(event) => update('work_location', event.target.value)} /></Field>
         <Field label="Work mode"><select value={form.work_mode} onChange={(event) => update('work_mode', event.target.value)}>{['office', 'hybrid', 'remote', 'field'].map((value) => <option key={value} value={value}>{labelOf(value)}</option>)}</select></Field>
-        <Field label="Closing date"><input type="date" value={form.closing_date} onChange={(event) => update('closing_date', event.target.value)} /></Field>
+        <Field label="Last date to submit resume" required hint="Prefilled from the approved hiring request; HR can adjust before publishing."><input type="date" required value={form.closing_date} onChange={(event) => update('closing_date', event.target.value)} /></Field>
         <Field label="Recruiter / HR owner"><select value={form.recruiter_user_id} onChange={(event) => update('recruiter_user_id', event.target.value)}><option value="">Current user</option>{employees.map((item) => <option key={employeeUserId(item)} value={employeeUserId(item)}>{employeeName(item)}</option>)}</select></Field>
         <Field label="Job description" required full><textarea required value={form.description} onChange={(event) => update('description', event.target.value)} /></Field>
         <Field label="Responsibilities" full><textarea value={form.responsibilities} onChange={(event) => update('responsibilities', event.target.value)} /></Field>

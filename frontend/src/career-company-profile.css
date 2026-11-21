@@ -1,0 +1,180 @@
+/* YC_CAREERS_COMPANY_PROFILE_V1
+   Sober, accessible, responsive refinements for the public Careers experience.
+   The existing job listings, job details and application widgets remain intact. */
+.yc-career-page {
+  --yc-career-editorial-ink: #17213a;
+  --yc-career-company-border: #dfe5ee;
+}
+.yc-career-page a:focus-visible,
+.yc-career-page button:focus-visible {
+  outline: 2px solid #3159bd;
+  outline-offset: 3px;
+}
+.yc-career-editorial-main {
+  background: #f8fafc;
+  padding-top: 24px;
+}
+.yc-career-editorial-hero {
+  position: relative;
+  display: block !important;
+  width: 100%;
+  min-height: 0 !important;
+  height: auto !important;
+  margin: 0 !important;
+  overflow: hidden;
+  border: 1px solid var(--yc-career-company-border);
+  border-radius: 22px;
+  background: #ffffff !important;
+  box-shadow: none !important;
+}
+.yc-career-editorial-hero::before,
+.yc-career-editorial-hero::after,
+.yc-career-editorial-hero-copy::before,
+.yc-career-editorial-hero-copy::after {
+  content: none !important;
+  display: none !important;
+}
+.yc-career-editorial-hero-copy {
+  display: flex;
+  min-width: 0;
+  min-height: 0 !important;
+  max-width: 100%;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: clamp(30px, 5vw, 74px) clamp(22px, 6vw, 82px) !important;
+  text-align: left !important;
+}
+.yc-career-editorial-hero-copy .yc-career-eyebrow {
+  display: inline-flex;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: #4460a0;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .10em;
+  text-transform: uppercase;
+}
+.yc-career-editorial-hero-copy h1 {
+  margin: 14px 0 14px !important;
+  color: #17213a;
+  font-size: clamp(48px, 7vw, 90px);
+  line-height: 1.02;
+  letter-spacing: -.055em;
+}
+.yc-career-editorial-hero-copy .yc-career-editorial-kicker {
+  max-width: 680px;
+  color: #536078;
+  font-size: clamp(15px, 1.6vw, 19px);
+  line-height: 1.6;
+}
+.yc-career-editorial-jump {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  gap: 9px;
+  margin-top: 27px;
+  padding: 11px 17px !important;
+  border: 1px solid #283967;
+  border-radius: 9px;
+  background: #24355f;
+  color: #fff !important;
+  font-size: 13px;
+  font-weight: 700;
+  text-decoration: none;
+  box-shadow: none;
+}
+.yc-career-editorial-jump:hover { background: #19284b; }
+.yc-career-company-about {
+  display: flex;
+  min-width: 0;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 30px;
+  margin: 26px 0 0;
+  padding: clamp(23px, 3.2vw, 40px);
+  border: 1px solid var(--yc-career-company-border);
+  border-radius: 18px;
+  background: #fff;
+}
+.yc-career-company-about-copy {
+  flex: 1;
+  min-width: 0;
+  max-width: 840px;
+}
+.yc-career-company-about h2 {
+  margin: 10px 0 13px;
+  color: #182442;
+  font-family: var(--yc-display, Georgia, 'Times New Roman', serif);
+  font-size: clamp(27px, 3vw, 41px);
+  font-weight: 700;
+  line-height: 1.14;
+  letter-spacing: -.035em;
+}
+.yc-career-company-about p {
+  margin: 0;
+  color: #526078;
+  font-size: 15px;
+  line-height: 1.77;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+.yc-career-company-website {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  gap: 9px;
+  padding: 10px 16px;
+  border: 1px solid #cbd5e1;
+  border-radius: 9px;
+  color: #1f3768;
+  background: #fff;
+  font-size: 13px;
+  font-weight: 750;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.yc-career-company-website:hover { border-color: #506b9d; background: #f7f9fd; }
+.yc-career-editorial-openings { padding-top: clamp(35px, 5vw, 62px) !important; }
+.yc-career-editorial-job-row,
+.yc-career-editorial-jobs-table,
+.yc-career-editorial-openings { min-width: 0; max-width: 100%; }
+.yc-career-editorial-job-row { overflow-wrap: anywhere; }
+.yc-career-topbar { background: #fff !important; }
+.yc-career-platform-link,
+.yc-career-platform-link:visited {
+  color: #304f90;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.yc-career-platform-link:hover { text-decoration: underline; }
+.yc-career-footer a { color: inherit; text-decoration: none; text-underline-offset: 3px; }
+.yc-career-footer a:hover { text-decoration: underline; }
+.yc-career-footer-left a { display: inline-block; margin-left: 12px; font-weight: 650; }
+.recruitment-career-profile-help { margin: 5px 0 14px; color: #64748b; font-size: 13px; line-height: 1.6; }
+@media (max-width: 880px) {
+  .yc-career-company-about { flex-direction: column; align-items: flex-start; gap: 22px; }
+  .yc-career-company-website { white-space: normal; }
+}
+@media (max-width: 700px) {
+  .yc-career-editorial-main { padding-top: 12px; }
+  .yc-career-editorial-hero { border-radius: 15px; }
+  .yc-career-editorial-hero-copy { padding: 40px 23px !important; }
+  .yc-career-editorial-hero-copy h1 { font-size: clamp(43px, 12vw, 68px) !important; }
+  .yc-career-company-about { padding: 25px 21px; border-radius: 14px; }
+  .yc-career-company-about p { font-size: 14px; }
+  .yc-career-company-website { width: 100%; }
+  .yc-career-footer-left a { display: block; margin: 8px 0 0; }
+  /* Original stylesheet hides the powered badge on small screens; footer still links to features. */
+}
+@media (max-width: 380px) {
+  .yc-career-editorial-hero-copy { padding: 30px 17px !important; }
+  .yc-career-company-about { padding: 22px 16px; }
+  .yc-career-editorial-jump { width: 100%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .yc-career-page *, .yc-career-page *::before, .yc-career-page *::after { scroll-behavior: auto !important; }
+}

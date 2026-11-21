@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import '../career-portal.css';
+import '../career-company-profile.css'; // YC_CAREERS_COMPANY_PROFILE_V1
+import '../career-header-logo-v2.css'; // YC_CAREER_HEADER_LOGO_V2
 import {
   AlertCircle,
   ArrowLeft,
@@ -162,6 +164,16 @@ function statusTone(status) {
   return 'neutral';
 }
 
+function validCareerCompanyUrl(value) {
+  // Never send an unsafe or malformed URL to a clickable link.
+  try {
+    const url = new URL(String(value || '').trim());
+    if (!['https:', 'http:'].includes(url.protocol) || !url.hostname || url.username || url.password) return '';
+    return url.href;
+  } catch {
+    return '';
+  }
+}
 function resolveCompanyLogo(value) {
   const logo = String(value || '').trim();
   if (!logo) return '';
@@ -478,6 +490,8 @@ function startPublicNavigation(
 }
 
 function CompanyBrand({ company, onNavigate }) {
+  // YC_CAREER_HEADER_LOGO_V2: initials fallback for missing tenant logos.
+  const [failedLogoUrl, setFailedLogoUrl] = useState('');
   const name = company?.company_name || 'Company Careers';
   const logo = resolveCompanyLogo(company?.company_logo);
 
@@ -501,7 +515,18 @@ function CompanyBrand({ company, onNavigate }) {
       }}
     >
       <span className="yc-career-logo">
-        {logo ? <img src={logo} alt={`${name} logo`} /> : companyInitials(name)}
+        {logo && failedLogoUrl !== logo ? (
+          <img
+            src={logo}
+            alt={`${name} logo`}
+            decoding="async"
+            onError={() => setFailedLogoUrl(logo)}
+          />
+        ) : (
+          <span className="yc-career-logo-fallback" aria-label={`${name} logo unavailable`}>
+            {companyInitials(name)}
+          </span>
+        )}
       </span>
       <span className="yc-career-brand-copy">
         <strong>{name}</strong>
@@ -536,10 +561,13 @@ function PublicLayout({
       <header className="yc-career-topbar">
         <div className="yc-career-shell yc-career-topbar-inner">
           <CompanyBrand company={company} onNavigate={onNavigate} />
-          <span className="yc-career-powered">
+          <a className="yc-career-powered yc-career-platform-link"
+             href="https://yourcomate.com/" target="_blank" rel="noopener noreferrer"
+             aria-label="Explore YourComate HRMS features on the official website">
             <ShieldCheck size={14} />
-            Recruitment powered by YourComate
-          </span>
+            <span>Powered by YourComate</span>
+            <ArrowRight size={14} />
+          </a>
         </div>
       </header>
 
@@ -555,15 +583,19 @@ function PublicLayout({
   <div className="yc-career-shell yc-career-footer-inner">
     <span className="yc-career-footer-left">
       Recruitment records are handled privately.
+      <a href="https://yourcomate.com/" target="_blank" rel="noopener noreferrer">YourComate features</a>
     </span>
 
     <span className="yc-career-footer-center">
-      Powered and developed by Sayanant Group IT CELL
+      <a href="https://tech.sayanant.com/" target="_blank" rel="noopener noreferrer">
+        Powered and developed by Sayanant Group IT CELL
+      </a>
     </span>
 
     <span className="yc-career-footer-right">
-      © {new Date().getFullYear()}{' '}
-      {company?.company_name || 'Company'}
+      <a href="https://www.sayanant.com/" target="_blank" rel="noopener noreferrer">
+        © {new Date().getFullYear()} Sayanant Group
+      </a>
     </span>
   </div>
 </footer>
@@ -1919,7 +1951,6 @@ function CareerJobsView({ companyKey, jobSlug }) {
           <section className="yc-career-editorial-hero">
             <div className="yc-career-editorial-hero-copy">
               <span className="yc-career-eyebrow">
-                <span aria-hidden="true">👋</span>
                 Join our team
               </span>
               <h1>Careers</h1>
@@ -1935,25 +1966,21 @@ function CareerJobsView({ companyKey, jobSlug }) {
               </a>
             </div>
 
-            <div className="yc-career-editorial-mosaic" aria-label="Recruitment experience highlights">
-              <div className="yc-career-editorial-mosaic-card is-large">
-                <span aria-hidden="true">📄</span>
-                <strong>Resume-assisted application</strong>
-                <p>Upload your resume to prefill editable application details.</p>
-              </div>
-              <div className="yc-career-editorial-mosaic-card is-top">
-                <span aria-hidden="true">✨</span>
-                <strong>Clear role-match preview</strong>
-                <p>Review an explainable match summary before submitting.</p>
-              </div>
-              <div className="yc-career-editorial-mosaic-card is-bottom">
-                <span aria-hidden="true">🤝</span>
-                <strong>Human-led hiring</strong>
-                <p>Every application and hiring decision is reviewed by people.</p>
-              </div>
-            </div>
+
           </section>
 
+          <section className="yc-career-company-about" id="about-company" aria-labelledby="yc-career-company-about-heading">
+            <div className="yc-career-company-about-copy">
+              <span className="yc-career-editorial-section-label">About the organisation</span>
+              <h2 id="yc-career-company-about-heading">About {company.company_name || 'the company'}</h2>
+              <p>{company.company_about || 'Explore our current opportunities and learn more about the organisation through its official website.'}</p>
+            </div>
+            {validCareerCompanyUrl(company.company_website) ? (
+              <a className="yc-career-company-website" href={validCareerCompanyUrl(company.company_website)} target="_blank" rel="noopener noreferrer">
+                Visit company website <ArrowRight size={16} />
+              </a>
+            ) : null}
+          </section>
           <section className="yc-career-editorial-openings" id="open-positions">
             <div className="yc-career-editorial-openings-head">
               <div className="yc-career-heading">

@@ -1270,10 +1270,10 @@ if (normalizedPage === 'attendance_logs') {
 }
 
 if (normalizedPage === 'my_local_conveyance') {
-  return <LocalConveyance user={safeUser} manage={false} />;
+  return <LocalConveyance user={safeUser} manage={false} setPage={setPage} />;
 }
 if (normalizedPage === 'lc_verification') {
-  return <LocalConveyance user={safeUser} manage />;
+  return <LocalConveyance user={safeUser} manage setPage={setPage} />;
 }
 if (normalizedPage === 'my_visits') {
   return <MyVisits setPage={setPage} user={safeUser} />;
