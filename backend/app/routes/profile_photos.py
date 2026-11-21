@@ -209,8 +209,10 @@ def company_logo_alias_payload(logo_path):
 def company_name_value(tenant):
     tenant = tenant or {}
 
+    branding = tenant.get("branding") if isinstance(tenant.get("branding"), dict) else {}
     return normalize_text(
-        tenant.get("company_name")
+        branding.get("company_name")
+        or tenant.get("company_name")
         or tenant.get("name")
         or tenant.get("tenant_name")
         or tenant.get("legal_name")

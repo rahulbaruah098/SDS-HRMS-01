@@ -1666,7 +1666,6 @@ export default function AppLayout({ user, setUser, page, setPage, children, spri
 
   useEffect(() => {
     if (
-      page !== 'dashboard' ||
       saasSummary.isExpired ||
       saasSummary.isSuspended
     ) {
@@ -1680,7 +1679,14 @@ export default function AppLayout({ user, setUser, page, setPage, children, spri
         const data = await api('/tenant-branding');
 
         if (!cancelled) {
-          setTenantBranding(normalizeTenantBranding(data));
+          const freshBranding = normalizeTenantBranding(data);
+          setTenantBranding(freshBranding);
+          window.dispatchEvent(new CustomEvent('yourcomate:tenant-branding-updated', {
+            detail: {
+              ...freshBranding,
+              tenantId: data?.branding?.tenant_id || data?.tenant?.tenant_id || '',
+            },
+          }));
         }
       } catch {
         if (!cancelled) {
@@ -3113,7 +3119,7 @@ export default function AppLayout({ user, setUser, page, setPage, children, spri
                 <p>
                   {displayRole}
                   {capabilityText ? ` • ${capabilityText}` : ''}
-                  {saasSummary.companyName ? ` • ${saasSummary.companyName}` : ''}
+                  {headerCompanyName ? ` • ${headerCompanyName}` : ''}
                 </p>
 
                 {safeUser.roles.length > 0 ? (

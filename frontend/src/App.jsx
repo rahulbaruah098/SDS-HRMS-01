@@ -1439,6 +1439,41 @@ export default function App() {
     : null;
 
   const [user, setUser] = useState(initialUser);
+  useEffect(() => {
+    function handleDynamicTenantCompanyName(event) {
+      const updatedName = String(event?.detail?.companyName || '').trim();
+      if (!updatedName) return;
+      const sourceTenant = String(event?.detail?.tenantId || '').trim().toLowerCase();
+      setUser((previous) => {
+        if (!previous) return previous;
+        const currentTenant = String(
+          previous.tenant_id || previous.tenant?.tenant_id || previous.company?.tenant_id || ''
+        ).trim().toLowerCase();
+        if (sourceTenant && currentTenant && sourceTenant !== currentTenant) return previous;
+        if (
+          previous.company_name === updatedName &&
+          previous.tenant?.company_name === updatedName
+        ) return previous;
+        return {
+          ...previous,
+          company_name: updatedName,
+          tenant: previous.tenant ? {
+            ...previous.tenant,
+            company_name: updatedName,
+            name: updatedName,
+          } : previous.tenant,
+          company: previous.company ? {
+            ...previous.company,
+            company_name: updatedName,
+            name: updatedName,
+          } : previous.company,
+        };
+      });
+    }
+    window.addEventListener('yourcomate:tenant-branding-updated', handleDynamicTenantCompanyName);
+    return () => window.removeEventListener('yourcomate:tenant-branding-updated', handleDynamicTenantCompanyName);
+  }, []);
+
   const [page, setPage] = useState(() => {
     const pathname = getBrowserPathname();
     const routePage = getPageFromHrmsPath(pathname);
