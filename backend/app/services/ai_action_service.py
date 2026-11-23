@@ -14,6 +14,7 @@ from app.routes.workflow import (
     leave_type_label,
     parse_date,
     calculate_leave_days,
+    leave_working_day_preview,
     build_initial_leave_stage,
     leave_stage_label,
     leave_stage_status_fields,
@@ -1950,13 +1951,27 @@ def _selected_leave_balance_blocker(data, user_context=None):
     if parsed_dates.get("invalid"):
         return None
 
-    requested_days = calculate_leave_days({
-        "from_date": parsed_dates.get("from_date"),
-        "to_date": parsed_dates.get("to_date"),
-        "leave_type": leave_type,
-        "is_half_day": False,
-        "day_type": "full_day",
-    })
+    # Balance guidance must use the same employee/state calendar as the final
+    # application. If identity/calendar cannot be checked here, avoid a false
+    # denial; the authoritative submit endpoint will still enforce balance.
+    try:
+        db = get_db()
+        employee_ref = _as_object_id(_employee_id(user_context))
+        if not employee_ref:
+            return None
+        employee = db.employees.find_one({
+            "$and": [_tenant_match_filter(user_context),
+                     {"_id": employee_ref}, {"is_deleted": {"$ne": True}}]
+        })
+        if not employee:
+            return None
+        preview = leave_working_day_preview(
+            db, employee, parsed_dates["start_date"],
+            parsed_dates["end_date"], False,
+        )
+        requested_days = preview["chargeable_days"]
+    except (ValueError, TypeError, RuntimeError):
+        return None
 
     if available < float(requested_days):
         return {
@@ -2981,14 +2996,17 @@ def _submit_leave_request_from_ai(data, user_context=None):
     if not reason:
         raise RuntimeError("Leave reason is required.")
 
-    leave_days = calculate_leave_days({
-        "from_date": parsed_dates.get("from_date"),
-        "to_date": parsed_dates.get("to_date"),
-        "leave_days": data.get("leave_days"),
-        "leave_type": leave_type,
-        "is_half_day": leave_type == "HALF-DAY",
-        "day_type": "half_day" if leave_type == "HALF-DAY" else "full_day",
-    })
+    try:
+        day_preview = leave_working_day_preview(
+            db, employee, from_date, to_date, leave_type == "HALF-DAY"
+        )
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
+    leave_days = day_preview["chargeable_days"]
+    if leave_days <= 0:
+        raise RuntimeError(
+            "Selected dates contain only weekly offs or declared holidays. No leave is required."
+        )
 
     # Native HRMS duplicate leave check
     existing_leave = db.leave_requests.find_one({
@@ -3071,6 +3089,12 @@ def _submit_leave_request_from_ai(data, user_context=None):
         "leave_days": leave_days,
         "days": leave_days,
         "total_days": leave_days,
+        "calendar_days": day_preview["calendar_days"],
+        "excluded_nonworking_days": day_preview["excluded_days"],
+        "excluded_weekly_off_days": day_preview["weekly_off_days"],
+        "excluded_declared_holiday_days": day_preview["declared_holiday_days"],
+        "leave_working_dates": day_preview["working_dates"],
+        "leave_excluded_dates": day_preview["excluded_dates"],
 
         "from_date": from_date.isoformat(),
         "to_date": to_date.isoformat(),

@@ -16,6 +16,7 @@ import {
 import {
   applyLeaveRequest,
   getLeaveOptions,
+  previewLeaveWorkingDays,
 } from '../api/client';
 
 const HR_ADMIN_ROLES = new Set([
@@ -295,21 +296,6 @@ function getTrialDaysLeft(value) {
   return Math.max(diff, 0);
 }
 
-function daysBetween(fromDate, toDate, dayType) {
-  if (dayType === 'half_day') return 0.5;
-
-  const from = new Date(`${fromDate}T00:00:00`);
-  const to = new Date(`${toDate || fromDate}T00:00:00`);
-
-  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) {
-    return 1;
-  }
-
-  const diff = Math.round((to - from) / (1000 * 60 * 60 * 24)) + 1;
-
-  return diff > 0 ? diff : 1;
-}
-
 
 function normalizeLeaveCode(value) {
   return String(value || '')
@@ -439,10 +425,37 @@ export default function ApplyLeave({ user = {}, setPage } = {}) {
   const [feedbackMap, setFeedbackMap] = useState({});
   const feedbackTimersRef = useRef({});
 
-  const leaveDays = useMemo(
-    () => daysBetween(form.from_date, form.to_date, form.day_type),
-    [form.from_date, form.to_date, form.day_type],
-  );
+  // The preview is calculated on the server using the employee's tenant,
+  // state and active Holiday Calendar. Never show calendar-day estimates.
+  const [leavePreview, setLeavePreview] = useState({ key: '', status: 'loading', data: null, error: '' });
+  const previewKey = [form.from_date, form.to_date, form.day_type, form.leave_type].join('|');
+  useEffect(() => {
+    if (!form.from_date || !form.to_date || form.to_date < form.from_date) {
+      setLeavePreview({ key: previewKey, status: 'error', data: null, error: 'Select a valid date range.' });
+      return;
+    }
+    let active = true;
+    setLeavePreview({ key: previewKey, status: 'loading', data: null, error: '' });
+    previewLeaveWorkingDays({
+      from_date: form.from_date,
+      to_date: form.to_date,
+      day_type: form.day_type,
+      leave_type: form.leave_type,
+      is_half_day: form.day_type === 'half_day',
+    }).then((data) => {
+      if (active) setLeavePreview({ key: previewKey, status: 'ready', data, error: '' });
+    }).catch((error) => {
+      if (active) setLeavePreview({ key: previewKey, status: 'error', data: null, error: error.message || 'Unable to calculate working days.' });
+    });
+    return () => { active = false; };
+  }, [previewKey]);
+  const currentPreview = leavePreview.key === previewKey && leavePreview.status === 'ready'
+    ? leavePreview.data : null;
+  const leaveDays = currentPreview ? currentPreview.chargeable_days : null;
+  const leaveDaysLabel = leaveDays === null ? '—' : leaveDays;
+  const leaveDayBreakdown = currentPreview
+    ? `${currentPreview.calendar_days} calendar days · ${currentPreview.weekly_off_days} weekly offs · ${currentPreview.declared_holiday_days} declared holidays excluded`
+    : (leavePreview.key === previewKey && leavePreview.status === 'error' ? leavePreview.error : 'Calculating from your Holiday Calendar...');
 
   const approvalText = useMemo(() => {
     if (isHrUser) return 'This leave request will be sent to Admin for approval.';
@@ -712,6 +725,13 @@ async function handleSubmit(event) {
       'To date cannot be before from date.',
       'Invalid Date Range',
     );
+    return;
+  }
+
+  if (leaveDays === null || leaveDays <= 0) {
+    showFeedback('submit', 'warning',
+      currentPreview ? 'No working days in the selected range.' : 'Wait for the leave-day calculation to finish and review any error.',
+      'Working Days Required');
     return;
   }
 
@@ -1573,8 +1593,8 @@ async function handleSubmit(event) {
 
         <article className="apply-leave-balance-card">
           <span>Request Days</span>
-          <strong>{leaveDays}</strong>
-          <small>Calculated from the selected dates and day type</small>
+          <strong>{leaveDaysLabel}</strong>
+          <small>{leaveDayBreakdown}</small>
         </article>
 
         <article className="apply-leave-balance-card">
@@ -1692,7 +1712,8 @@ async function handleSubmit(event) {
 
             <div className="apply-leave-summary-card">
               <span>Calculated Days</span>
-              <strong>{leaveDays}</strong>
+              <strong>{leaveDaysLabel}</strong>
+              <small>{leaveDayBreakdown}</small>
             </div>
           </div>
         </aside>

@@ -66,9 +66,11 @@ class SeniorRoutingUnitTests(unittest.TestCase):
         self.assertTrue(service.senior_direct_accounts_eligible({**CLAIMANT,
                           'designation': 'Project Head', 'lc_direct_accounts_approval': True}))
 
-    def test_accounts_finance_role_cannot_approve_direct(self):
+    def test_finance_role_can_approve_direct_without_manager_title(self):
         direct = bill('pending_accounts', {'type': 'direct_accounts_manager'})
-        self.assertFalse(service.can_verify_accounts(direct, None, {'finance'}, str(FINANCE_UID)))
+        self.assertTrue(service.can_verify_accounts(direct, None, {'finance'}, str(FINANCE_UID)))
+        self.assertTrue(service.can_verify_accounts(direct, {'designation': 'Accountant'},
+                         {'accounts_finance'}, str(FINANCE_UID)))
 
     def test_accounts_manager_role_can_verify_direct(self):
         direct = bill('pending_accounts', {'type': 'direct_accounts_manager'})
@@ -109,7 +111,7 @@ class SeniorRoutingHttpTests(unittest.TestCase):
         db = MagicMock()
         db.local_conveyance_bills.find_one.return_value = record
         db.local_conveyance_bills.update_one.return_value.matched_count = 1
-        db.users.find.return_value = [{'_id': FINANCE_UID, 'role': 'accounts_manager'}]
+        db.users.find.return_value = [{'_id': FINANCE_UID, 'role': 'finance'}]
         db.employees.find.return_value = []
         return db
 
@@ -129,6 +131,7 @@ class SeniorRoutingHttpTests(unittest.TestCase):
         self.assertEqual(changes['approval']['type'], 'direct_accounts_manager')
         self.assertTrue(changes['manager_validation']['skipped'])
         self.assertEqual(db.users.find.call_args.args[0]['tenant_id'], TENANT)
+        self.assertIn('finance', db.users.find.call_args.args[0]['$or'][0]['role']['$in'])
 
     def test_missing_finance_manager_refuses_submission(self):
         self.ctx()
@@ -156,13 +159,13 @@ class SeniorRoutingHttpTests(unittest.TestCase):
         self.assertEqual(status(result), 200)
         self.assertEqual(db.local_conveyance_bills.update_one.call_args.args[1]['$set']['status'], 'verified')
 
-    def test_plain_finance_user_cannot_verify_direct(self):
+    def test_plain_finance_user_can_verify_direct(self):
         self.ctx(role='finance', uid=FINANCE_UID, payload={'action': 'accounts_verify'})
         db = self.mock_db(bill('pending_accounts', {'type': 'direct_accounts_manager'},
                                manager_validation={'skipped': True}))
         result = self.call(db, {**FINANCE_MANAGER, 'designation': 'Accountant'})
-        self.assertEqual(status(result), 403)
-        db.local_conveyance_bills.update_one.assert_not_called()
+        self.assertEqual(status(result), 200)
+        self.assertEqual(db.local_conveyance_bills.update_one.call_args.args[1]['$set']['status'], 'verified')
 
     def test_accounts_manager_can_verify_direct(self):
         self.ctx(role='accounts_manager', uid=FINANCE_UID, payload={'action': 'accounts_verify'})

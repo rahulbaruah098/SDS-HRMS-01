@@ -120,7 +120,7 @@ class LocalConveyanceHttp(unittest.TestCase):
         self.assertEqual(db.local_conveyance_bills.update_one.call_args.args[1]['$set']['status'], 'pending_accounts')
         audit.assert_called_once()
 
-    def test_accounts_cannot_mark_paid_without_manager_verification(self):
+    def test_finance_cannot_mark_paid_before_accounts_verification(self):
         self.ctx('/api/v1/local-conveyance/bills/X/action', 'POST',
                  {'action':'mark_paid', 'remarks':'TXN'}, role='accounts_finance')
         db = MagicMock()
@@ -128,7 +128,8 @@ class LocalConveyanceHttp(unittest.TestCase):
             '_id':ObjectId(), 'tenant_id':'sds', 'reference':'X', 'status':'pending_accounts'}
         with patch.object(lc,'get_db',return_value=db),patch.object(lc,'get_current_employee',return_value=None):
             result=raw(lc.bill_action)('X')
-        self.assertEqual(status(result),403)
+        # Finance has payment permission, but the claim is not yet verified.
+        self.assertEqual(status(result),409)
         db.local_conveyance_bills.update_one.assert_not_called()
 
     def test_submit_requires_hierarchy_mapping(self):

@@ -11,7 +11,11 @@ from app.middleware.tenant_guard import tenant_module_required
 from app.routes.attendance import (
     attendance_schedule_for_tenant,
     format_attendance_schedule_time,
+    employee_state,
+    holiday_overlap_query,
+    weekly_holiday_reason,
 )
+from app.services.leave_working_days import calculate_chargeable_leave_period
 from app.utils.notification_service import (
     TENANT_DEVICE_SCOPE as NOTIFICATION_TENANT_DEVICE_SCOPE,
     active_fcm_device_rows_for_users as centralized_active_fcm_device_rows_for_users,
@@ -1960,6 +1964,59 @@ def calculate_leave_days(data):
 
     return 1.0
 
+
+
+def leave_working_day_preview(db, employee, from_date, to_date, is_half_day=False):
+    """Use the exact tenant/state Holiday Calendar and Attendance weekly offs.
+
+    Do not trust `leave_days` from the website or Flutter app. The caller
+    controls employee identity through the authenticated session.
+    """
+    tenant_id = employee.get("tenant_id") or current_tenant_id()
+    state = employee_state(employee)
+    if (to_date - from_date).days > 365:
+        raise ValueError("A leave request cannot exceed 366 calendar days")
+    holiday_query = holiday_overlap_query(
+        tenant_id, state, from_date.isoformat(), to_date.isoformat()
+    )
+    # Attendance supports a legacy `date` even on records that also carry
+    # start_date; match that same behavior for the leave calculation.
+    holiday_query["$or"].append({"date": {
+        "$gte": from_date.isoformat(), "$lte": to_date.isoformat()
+    }})
+    holidays = list(db.holiday_calendar.find(holiday_query))
+    preview = calculate_chargeable_leave_period(
+        from_date, to_date, holidays, weekly_holiday_reason,
+        half_day=is_half_day,
+    )
+    return {**preview, "state": state, "from_date": from_date.isoformat(),
+            "to_date": to_date.isoformat()}
+
+
+@workflow_bp.post("/leave_requests/day-preview")
+@tenant_module_required("apply_leave")
+@current_user_required
+def preview_leave_working_days():
+    db = get_db()
+    employee = current_employee(db)
+    if not employee:
+        return jsonify({"message": "Employee profile not found"}), 404
+    data = request.get_json(silent=True) or {}
+    start = parse_date(data.get("from_date"))
+    end = parse_date(data.get("to_date") or data.get("upto_date")) or start
+    if not start or not end:
+        return jsonify({"message": "From date and upto date are required"}), 400
+    if end < start:
+        return jsonify({"message": "Upto date cannot be before from date"}), 400
+    half_day = (
+        normalize_leave_type(data.get("leave_type")) == "HALF-DAY"
+        or truthy(data.get("is_half_day"))
+        or normalize_text(data.get("day_type")).lower() == "half_day"
+    )
+    try:
+        return jsonify(leave_working_day_preview(db, employee, start, end, half_day))
+    except ValueError as exc:
+        return jsonify({"message": str(exc)}), 400
 
 
 def applicant_is_admin_or_hr():
@@ -5254,14 +5311,15 @@ def apply_leave_request():
     )
     tenant_id = employee.get("tenant_id") or current_tenant_id()
 
-    leave_days = calculate_leave_days({
-        "from_date": from_date.isoformat() if from_date else "",
-        "to_date": to_date.isoformat() if to_date else "",
-        "leave_days": data.get("leave_days"),
-        "leave_type": leave_type,
-        "is_half_day": data.get("is_half_day"),
-        "day_type": data.get("day_type"),
-    })
+
+    # Authoritative day count is calculated from tenant/state holidays, never
+    # from a client-provided leave_days field.
+    is_half_day_request = (
+        leave_type == "HALF-DAY"
+        or truthy(data.get("is_half_day"))
+        or normalize_text(data.get("day_type")).lower() == "half_day"
+        or (data.get("leave_days") in (0.5, "0.5") and not data.get("day_type"))
+    )
 
     if leave_type not in ["CL", "EL", "COMP-OFF", "HALF-DAY"]:
         return jsonify({
@@ -5277,12 +5335,18 @@ def apply_leave_request():
     if from_date < date.today():
         return jsonify({"message": "Leave date cannot be in the past"}), 400
 
-    is_half_day_request = (
-        leave_type == "HALF-DAY"
-        or leave_days == 0.5
-        or truthy(data.get("is_half_day"))
-        or normalize_text(data.get("day_type")).lower() == "half_day"
-    )
+    try:
+        day_preview = leave_working_day_preview(
+            db, employee, from_date, to_date, is_half_day_request
+        )
+    except ValueError as exc:
+        return jsonify({"message": str(exc)}), 400
+    leave_days = day_preview["chargeable_days"]
+    if leave_days <= 0:
+        return jsonify({
+            "message": "Selected dates contain only weekly offs or holidays. No leave is required.",
+            "day_preview": day_preview,
+        }), 400
 
     local_now = leave_application_now_local()
 
@@ -5401,6 +5465,12 @@ def apply_leave_request():
         "is_half_day": leave_type == "HALF-DAY" or leave_days == 0.5,
         "day_type": "half_day" if leave_type == "HALF-DAY" or leave_days == 0.5 else "full_day",
         "leave_days": leave_days,
+        "calendar_days": day_preview["calendar_days"],
+        "excluded_nonworking_days": day_preview["excluded_days"],
+        "excluded_weekly_off_days": day_preview["weekly_off_days"],
+        "excluded_declared_holiday_days": day_preview["declared_holiday_days"],
+        "leave_working_dates": day_preview["working_dates"],
+        "leave_excluded_dates": day_preview["excluded_dates"],
         "from_date": from_date.isoformat(),
         "to_date": to_date.isoformat(),
         "compoff_id": str(selected_compoff["_id"]) if selected_compoff else "",

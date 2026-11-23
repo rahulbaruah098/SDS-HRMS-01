@@ -12,6 +12,10 @@ MANAGER_ROLES = {'team_leader', 'reporting_officer', 'ro', 'manager'}
 ACCOUNT_ROLES = {'finance', 'accounts_finance', 'accounts', 'accountant',
                  'accounts_manager', 'finance_manager'}
 PAYMENT_ROLES = {'accounts_manager', 'finance_manager'}
+# Any Finance login can record an already-disbursed LC payment.
+# Finance role can verify direct senior LC claims AND mark verified claims paid.
+# Existing manager aliases remain supported for backward compatibility.
+FINANCE_PAYMENT_ROLES = {'finance', 'accounts_finance'}
 
 # SENIOR_DIRECT_ACCOUNTS_ROUTING_V1: allowed only for HR-managed designation values.
 # No TL/RO assignment at all is required: broken/ambiguous assignments fail closed.
@@ -171,6 +175,9 @@ def direct_claimant(bill, employee, user_id=None):
 def can_verify_accounts(bill, employee, roles, user_id=None):
     if not is_direct_accounts_bill(bill):
         return bool(roles & ACCOUNT_ROLES)
+    # SENIOR_FINANCE_APPROVAL_V2: Direct senior claims can be reviewed by any
+    # authenticated Finance user, while the claimant cannot review their own bill.
+    # Preserve legacy Accounts Manager eligibility for existing assignments.
     return can_mark_paid(roles, employee) and not direct_claimant(bill, employee, user_id)
 
 
@@ -190,7 +197,8 @@ def is_approver(bill, employee, roles):
         kind == 'reporting_officer' and (bool(roles & {'ro', 'reporting_officer', 'manager'}) or str(employee.get('is_reporting_officer') or '').lower() in ('true', 'yes', '1')))
 
 
-def can_mark_paid(roles, employee):
+def _has_manager_payment_permission(roles, employee):
+    """Retain existing manager aliases for verification and payment."""
     if roles & PAYMENT_ROLES:
         return True
     if not roles & ACCOUNT_ROLES or not employee:
@@ -198,6 +206,17 @@ def can_mark_paid(roles, employee):
     designation = str(employee.get('designation') or '').strip().lower().replace('(', '').replace(')', '')
     return designation in {'accounts manager', 'manager accounts', 'finance manager',
                            'manager finance', 'manager of accounts'}
+
+
+def can_mark_paid(roles, employee):
+    """Any authenticated Finance role may confirm payment after Accounts verification.
+
+    This is permission only: bill state, tenant isolation and audit writes are
+    enforced by the API. Job titles alone never grant payment access.
+    """
+    if roles & FINANCE_PAYMENT_ROLES:
+        return True
+    return _has_manager_payment_permission(roles, employee)
 
 
 def can_read(bill, employee, roles):

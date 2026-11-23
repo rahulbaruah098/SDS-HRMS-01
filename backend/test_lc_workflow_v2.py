@@ -112,17 +112,19 @@ class WorkflowRules(unittest.TestCase):
         self.assertTrue(can_read(bill, None, {'accounts_finance'}))
         self.assertFalse(can_read(bill, None, {'employee'}))
 
-    def test_only_accounts_manager_can_mark_paid(self):
-        self.assertFalse(can_mark_paid({'accounts_finance'}, None))
+    def test_finance_role_can_mark_paid_without_manager_designation(self):
+        self.assertTrue(can_mark_paid({'finance'}, None))
+        self.assertTrue(can_mark_paid({'accounts_finance'}, None))
+        self.assertTrue(can_mark_paid({'accounts_finance'}, {'designation': 'Accountant'}))
         self.assertTrue(can_mark_paid({'accounts_manager'}, None))
-        self.assertTrue(can_mark_paid({'accounts_finance'}, {'designation': 'Manager (Accounts)'}))
+        self.assertFalse(can_mark_paid({'accountant'}, {'designation': 'Assistant'}))
         self.assertFalse(can_mark_paid({'admin'}, {'designation': 'Accounts Manager'}))
 
     def test_accounts_manager_can_verify_and_record_actual_payment(self):
         self.assertIn('accounts_manager', ACCOUNT_ROLES)
         self.assertTrue(can_mark_paid({'accounts_manager'}, None))
         self.assertIn('accounts_finance', ACCOUNT_ROLES)
-        self.assertFalse(can_mark_paid({'accounts_finance'}, None))
+        self.assertTrue(can_mark_paid({'accounts_finance'}, None))
 
     def test_employee_and_accounts_can_see_paid_status(self):
         bill = {'employee_ref_id': str(E['_id']), 'status': 'paid'}

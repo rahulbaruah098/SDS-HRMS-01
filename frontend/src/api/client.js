@@ -4230,6 +4230,13 @@ export function getLeaveOptions(params = {}) {
   return api(`/leave_requests/options${buildQuery(params)}`);
 }
 
+export function previewLeaveWorkingDays(payload = {}) {
+  return api('/leave_requests/day-preview', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
 export function applyLeaveRequest(payload = {}) {
   const normalizedPayload = { ...payload };
 

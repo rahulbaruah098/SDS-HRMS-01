@@ -42,7 +42,7 @@ const errorText = (error) => error?.message || 'Unable to complete the Local Con
 const tone = (status) => ({ paid: 'paid', verified: 'approved', rejected: 'rejected',
   pending_accounts: 'pending', pending_manager: 'pending', draft: 'draft' })[status] || 'draft';
 function StatusPill({ status, direct = false }) {
-  const label = direct && status === 'pending_accounts' ? 'Accounts Manager Verification Pending' : (statusName[status] || status);
+  const label = direct && status === 'pending_accounts' ? 'Finance Verification Pending' : (statusName[status] || status);
   return <span className={`lc-status lc-status--${tone(status)}`}>{label}</span>;
 }
 function Steps({ bill }) {
@@ -56,10 +56,10 @@ function Steps({ bill }) {
       bill.approval?.type === 'reporting_officer' ? 'Reporting Officer Validation' : 'TL / RO Validation',
     completed: Boolean(bill.manager_validation), skipped: direct,
     detail: direct ? 'Skipped for an eligible senior employee without a reporting line' : 'Assigned reviewer checks the claim' },
-    { label: direct ? 'Accounts Manager Verification' : 'Accounts Verification', completed: Boolean(bill.accounts_verification),
-      detail: direct ? 'Finance / Accounts Manager reviews the claim' : 'Accounts checks the approved claim' },
+    { label: direct ? 'Finance Verification' : 'Accounts Verification', completed: Boolean(bill.accounts_verification),
+      detail: direct ? 'Finance verifies the claim' : 'Accounts checks the approved claim' },
     { label: 'Payment Confirmation', completed: bill.status === 'paid',
-      detail: 'Accounts Manager confirms actual payment' },
+      detail: 'An authorised Finance user confirms actual payment' },
   ];
   return <div className="lc-progress" aria-label="Local Conveyance approval progress">
     {phases.map((phase, index) => <div className="lc-step" key={phase.label}>
@@ -209,7 +209,7 @@ export default function LocalConveyance({ user = {}, manage = false, setPage: na
         action === 'accounts_verify' ? 'Claim verified by Accounts. Payment confirmation is still required.' :
         action === 'manager_validate' ? 'Validated and forwarded to Accounts.' :
         action === 'submit' ? (data.item?.approval?.type === 'direct_accounts_manager'
-          ? 'Submitted directly to Finance / Accounts Manager for verification.'
+          ? 'Submitted directly to Finance for verification.'
           : 'Submitted to your mapped Team Leader / Reporting Officer.') : 'Claim status updated.');
       await reload();
     } catch (err) { setError(errorText(err)); }
@@ -350,7 +350,7 @@ export default function LocalConveyance({ user = {}, manage = false, setPage: na
     <section className="lc-panel">
       <div className="lc-panel__title">
         <div><h2>{manage ? 'Find a claim' : 'Generate monthly LC bill'}</h2>
-          <p className="lc-muted">{manage ? 'Search by reference or review claims within the selected month. Verified claims are ready for the Accounts Manager to record payment.' :
+          <p className="lc-muted">{manage ? 'Search by reference or review claims within the selected month. Verified claims are ready for Finance to record payment.' :
             'Only completed, eligible journeys are included. Generating a claim does not submit it.'}</p></div>
         <CalendarDays size={24} color="#4d77dd"/>
       </div>
@@ -457,12 +457,12 @@ export default function LocalConveyance({ user = {}, manage = false, setPage: na
             </button>
           </div> :
           <section className="lc-modal-payment lc-modal-payment--notice">
-            <h3><ShieldCheck size={20}/> Awaiting Accounts Manager</h3>
-            <p>Accounts has verified this claim. Only an authorised Accounts Manager may mark it Paid after the money has been disbursed.</p>
+            <h3><ShieldCheck size={20}/> Awaiting Finance payment confirmation</h3>
+            <p>Accounts has verified this claim. An authorised Finance user may mark it Paid once the money has been disbursed.</p>
           </section>) :
         <section className="lc-modal-payment lc-modal-payment--notice">
           <h3><Wallet size={20}/> Awaiting payment</h3>
-          <p>Your claim has been verified by Accounts. An authorised Accounts Manager will mark it Paid after the funds are disbursed. Employees cannot mark their own claims paid.</p>
+          <p>Your claim has been verified by Accounts. An authorised Finance user will mark it Paid once funds are disbursed. Employees cannot confirm payment on their own direct senior-management claims.</p>
         </section>
       ) : null}
       <Steps bill={selected}/>
@@ -512,7 +512,7 @@ export default function LocalConveyance({ user = {}, manage = false, setPage: na
         </div></div> : null}
       {manage && selected.capabilities?.can_accounts_verify ? <div><hr className="lc-divider"/><h3>Accounts Verification</h3>
         <p className="lc-muted">{selected.approval?.type === 'direct_accounts_manager'
-          ? 'Direct senior-management claim: TL/RO review was not required. Finance / Accounts Manager verifies the expenses; payment is recorded separately.'
+          ? 'Direct senior-management claim: TL/RO review was not required. An authorised Finance reviewer verifies the expenses; payment is recorded separately.'
           : 'Confirm that the monthly expenses and manager validation are correct. This verification does not mean payment.'}</p>
         <label>Verification remarks / rejection reason<textarea style={inputStyle} rows={3} value={remarks} onChange={(event)=>setRemarks(event.target.value)}/></label>
         <div className="lc-actions" style={{marginTop:12}}>

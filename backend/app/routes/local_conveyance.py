@@ -14,7 +14,7 @@ from app.routes.field_visits import (get_current_employee, current_tenant_id,
 from app.services.local_conveyance import (MODE_TWO, MODE_FOUR, MODE_PUBLIC,
     tenant_rates, validate_rates)
 from app.services.local_conveyance_pdf import render_lc_bill_pdf
-from app.services.lc_workflow import (ACCOUNT_ROLES, PAYMENT_ROLES, OVERSIGHT_ROLES,
+from app.services.lc_workflow import (ACCOUNT_ROLES, PAYMENT_ROLES, FINANCE_PAYMENT_ROLES, OVERSIGHT_ROLES,
     can_read, can_mark_paid, can_verify_accounts, can_confirm_payment,
     senior_direct_accounts_eligible, is_direct_accounts_bill, correction_lines,
     is_approver, resolve_approver, MANAGER_ROLES)
@@ -63,7 +63,9 @@ def _serialize_with_actions(db, bill):
         'can_correct': _owner(bill, employee) and bill.get('status') == 'rejected',
         'can_manager_validate': is_approver(bill, employee, roles) and bill.get('status') == 'pending_manager',
         'can_accounts_verify': can_verify_accounts(bill, employee, roles, current_user_id()) and bill.get('status') == 'pending_accounts',
-        'can_mark_paid': can_confirm_payment(bill, employee, roles, current_user_id()) and bill.get('status') == 'verified',
+        'can_mark_paid': (can_confirm_payment(bill, employee, roles, current_user_id())
+                          and bill.get('status') == 'verified'
+                          and bool(bill.get('accounts_verification'))),
         'direct_accounts': is_direct_accounts_bill(bill),
     }
     return visible
@@ -103,20 +105,21 @@ def _user_ids_for_roles(db, roles):
 
 
 def _direct_manager_user_ids(db, claimant_user_id):
-    """Find real, active Accounts Managers in this tenant (not the claimant).
+    """Find active, tenant-scoped Finance reviewers excluding the claimant.
 
-    Finance-role users whose HR-managed designation is Accounts Manager are
-    supported as well, matching the existing can_mark_paid permission rule.
+    Finance roles may verify directly routed senior LC claims, whether or not
+    the employee's HR designation contains "Manager". Retain established
+    Accounts Manager role/designation eligibility as a compatibility path.
     """
     tenant = current_tenant_id()
     active = {'is_deleted': {'$ne': True}, 'is_active': {'$ne': False},
               'status': {'$nin': ['inactive', 'disabled', 'suspended']}}
     query = {'tenant_id': tenant, **active,
-             '$or': [{'role': {'$in': sorted(PAYMENT_ROLES)}},
-                     {'roles': {'$in': sorted(PAYMENT_ROLES)}}]}
+             '$or': [{'role': {'$in': sorted(PAYMENT_ROLES | FINANCE_PAYMENT_ROLES)}},
+                     {'roles': {'$in': sorted(PAYMENT_ROLES | FINANCE_PAYMENT_ROLES)}}]}
     result = {str(u['_id']) for u in db.users.find(query) if u.get('_id')}
-    # Compatibility: a Finance employee with designation "Accounts Manager"
-    # is permitted to mark payments in the existing HRMS workflow.
+    # Compatibility: include account users authorized through legacy manager
+    # designations, without requiring every Finance user to have that title.
     candidates = db.employees.find({'tenant_id': tenant, 'is_deleted': {'$ne': True},
         'designation': {'$regex': r'^(accounts manager|manager accounts|finance manager|manager finance|manager of accounts)$',
                         '$options': 'i'}})
@@ -414,14 +417,14 @@ def bill_action(reference):
         except ValueError as exc:
             if not senior_direct_accounts_eligible(employee):
                 return _error(str(exc), 409, 'LC_APPROVER_MAPPING_REQUIRED')
-            # Direct routing is restricted to Finance/Accounts Manager users in
-            # this tenant. The submitting user cannot review their own claim.
+            # Direct senior claims route to active Finance-role reviewers in
+            # the same tenant; the claimant cannot review their own claim.
             finance_ids = _direct_manager_user_ids(db, current_user_id())
             if not finance_ids:
-                return _error('No separate active Finance/Accounts Manager is configured for this company. Ask HR/Admin to assign one.',
+                return _error('No separate active Finance reviewer is configured for this company. Ask HR/Admin to assign a Finance user.',
                               409, 'LC_FINANCE_MANAGER_REQUIRED')
             approver = {'type': 'direct_accounts_manager',
-                        'name': 'Finance / Accounts Manager', 'user_id': ''}
+                        'name': 'Finance Verification', 'user_id': ''}
             changes.update({'status': 'pending_accounts', 'approval': approver,
                 'manager_validation': {'skipped': True,
                     'reason': 'Senior employee without an assigned TL/RO',
@@ -430,7 +433,7 @@ def bill_action(reference):
                 'submitted_at': changes['updated_at'], 'paid': False,
                 'rejected_by': None, 'rejection_reason': '', 'rejected_stage': None})
             stage = 'submitted'
-            notify = (finance_ids, 'Senior LC bill awaiting Accounts Manager verification',
+            notify = (finance_ids, 'Senior LC bill awaiting Finance verification',
                       f'{bill["employee_name"]} submitted {reference} directly for verification.')
         else:
             changes.update({'status': 'pending_manager', 'approval': approver,
@@ -454,7 +457,7 @@ def bill_action(reference):
                   f'{reference} has been validated and is pending Accounts verification.')
     elif action == 'accounts_verify':
         if not accounts:
-            return _error('Accounts Manager required for direct senior claims, or Accounts role for standard claims', 403)
+            return _error('Only an authorised Finance reviewer may verify this senior claim, or an Accounts reviewer may verify a standard claim', 403)
         if state != 'pending_accounts' or not bill.get('manager_validation'):
             return _error('Manager validation or authorised senior-routing bypass is required before Accounts verification', 409)
         record = {'by': current_user_id(), 'at': changes['updated_at'], 'remarks': remarks,
@@ -465,7 +468,7 @@ def bill_action(reference):
                   f'{reference} was verified by Accounts and is awaiting payment.')
     elif action == 'mark_paid':
         if not payer:
-            return _error('Only an Accounts Manager can confirm payment', 403)
+            return _error('Only authorised Finance users may confirm payment', 403)
         if state != 'verified' or not bill.get('accounts_verification'):
             return _error('Only an Accounts-verified bill may be marked paid', 409)
         # Payment has been made outside YourComate. Recording it needs no UTR/input.
@@ -501,9 +504,9 @@ def bill_action(reference):
     _record(db, bill, stage, remarks)
     _notify(db, *notify, reference, target='lc_verification' if stage in ('submitted', 'manager_validated') else 'my_local_conveyance')
     if stage == 'accounts_verified':
-        # The Accounts Manager gets a review-queue notification; the employee
-        # gets the normal claim-status notification above. These targets differ.
-        _notify(db, _user_ids_for_roles(db, PAYMENT_ROLES),
+        # Finance reviewers get a payment-ready queue notification; the employee
+        # receives the normal claim-status notification above.
+        _notify(db, _user_ids_for_roles(db, PAYMENT_ROLES | FINANCE_PAYMENT_ROLES),
                 'LC claim ready for payment',
                 f'{reference} is verified and awaits actual disbursement and payment confirmation.',
                 reference, target='lc_verification')
