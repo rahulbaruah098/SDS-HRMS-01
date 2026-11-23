@@ -551,6 +551,81 @@ function ProjectTeamRootCard({ project }) {
   );
 }
 
+// YC_DASHBOARD_PENDING_REQUEST_CARDS_V1
+// Presentation-only: all leave/WFH/Field approval logic and APIs stay unchanged.
+function DashboardRequestDatum({ label, value, wide = false }) {
+  const missing = value === null || value === undefined || value === '';
+  return (
+    <div className={`yc-request-datum${wide ? ' yc-request-datum--wide' : ''}`}>
+      <dt>{label}</dt>
+      <dd>{missing ? '—' : value}</dd>
+    </div>
+  );
+}
+
+function DashboardPendingRequestCards({ rows = [], type = 'leave' }) {
+  const isLeave = type === 'leave';
+  const data = Array.isArray(rows) ? rows : [];
+
+  if (!data.length) {
+    return (
+      <div className="yc-request-empty" role="status">
+        {isLeave ? 'No pending leave requests.' : 'No pending WFH or Field requests.'}
+      </div>
+    );
+  }
+
+  return (
+    <div className="yc-request-list" role="list" aria-label={isLeave ? 'Pending leave requests' : 'Pending work mode requests'}>
+      {data.map((row, index) => (
+        <article className="yc-request-card" role="listitem" key={`${row.employee_id || row.employee_name || 'request'}-${index}`}>
+          <div className="yc-request-card-head">
+            <div className="yc-request-person">
+              <span className="yc-request-eyebrow">Employee</span>
+              <h4>{row.employee_name || '—'}</h4>
+              <p>
+                {[row.employee_id, row.department, row.designation]
+                  .filter((value) => value && value !== '—')
+                  .join(' · ') || 'Employee request'}
+              </p>
+            </div>
+            <div className="yc-request-status-group">
+              <span className="yc-request-pill" title="Approval stage">{row.current_stage || 'Pending review'}</span>
+              <span className="yc-request-pill yc-request-pill--quiet" title="Final status">{row.final_status || row.status || 'Pending'}</span>
+            </div>
+          </div>
+
+          <dl className="yc-request-facts">
+            {isLeave ? (
+              <>
+                <DashboardRequestDatum label="Leave type" value={row.leave_type} />
+                <DashboardRequestDatum label="From" value={row.from_date} />
+                <DashboardRequestDatum label="To" value={row.upto_date} />
+                <DashboardRequestDatum label="Leave days" value={row.leave_days} />
+                <DashboardRequestDatum label="Task handover to" value={row.task_handover_to} />
+                <DashboardRequestDatum label="Project handover" value={row.project_handover} />
+              </>
+            ) : (
+              <>
+                <DashboardRequestDatum label="Mode" value={row.mode} />
+                <DashboardRequestDatum label="Date" value={row.date} />
+                <DashboardRequestDatum label="Department" value={row.department} />
+                <DashboardRequestDatum label="Designation" value={row.designation} />
+                <DashboardRequestDatum label="Field location" value={row.field_location} wide />
+              </>
+            )}
+          </dl>
+          <div className="yc-request-reason">
+            <span className="yc-request-eyebrow">Reason</span>
+            <p>{row.reason || '—'}</p>
+          </div>
+          {row.action ? <div className="yc-request-actions">{row.action}</div> : null}
+        </article>
+      ))}
+    </div>
+  );
+}
+
 export default function AdminDashboard({ setPage, user = {} }) {
   const alerts = useCustomAlert();
   const [data, setData] = useState(null);
@@ -3187,6 +3262,169 @@ export default function AdminDashboard({ setPage, user = {} }) {
           }
         }
 
+
+        /* YC_DASHBOARD_PENDING_REQUEST_CARDS_V1: dashboard-only responsive request summaries */
+        .admin-dashboard-page .yc-request-panels {
+          display: grid !important;
+          grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+          align-items: start;
+          gap: 20px;
+          min-width: 0;
+        }
+        .admin-dashboard-page .yc-request-panel {
+          min-width: 0;
+          width: 100%;
+          overflow: visible;
+        }
+        .admin-dashboard-page .yc-request-panel .toolbar {
+          min-width: 0;
+          flex-wrap: wrap;
+        }
+        .admin-dashboard-page .yc-request-panel .toolbar > div { min-width: 0; flex: 1 1 280px; }
+        .admin-dashboard-page .yc-request-list {
+          min-width: 0;
+          display: grid;
+          grid-template-columns: minmax(0, 1fr);
+          gap: 14px;
+        }
+        .admin-dashboard-page .yc-request-card {
+          min-width: 0;
+          padding: clamp(14px, 1.6vw, 20px);
+          border: 1px solid rgba(98, 84, 218, .16);
+          border-radius: 18px;
+          background: rgba(255, 255, 255, .82);
+          box-shadow: 0 8px 24px rgba(34, 38, 110, .05);
+          color: var(--dash-ink);
+          font-family: inherit;
+          font-size: inherit;
+        }
+        .admin-dashboard-page .yc-request-card-head {
+          display: flex;
+          flex-wrap: wrap;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 12px;
+          padding-bottom: 13px;
+          border-bottom: 1px solid rgba(98, 84, 218, .12);
+        }
+        .admin-dashboard-page .yc-request-person { min-width: 0; flex: 1 1 190px; }
+        .admin-dashboard-page .yc-request-eyebrow,
+        .admin-dashboard-page .yc-request-datum dt {
+          display: block;
+          margin: 0 0 5px;
+          font-size: .8em;
+          font-weight: 700;
+          line-height: 1.35;
+          color: var(--dash-soft);
+          letter-spacing: 0;
+        }
+        .admin-dashboard-page .yc-request-person h4 {
+          margin: 0 0 4px;
+          font-size: 1.08em;
+          font-weight: 800;
+          line-height: 1.3;
+          color: var(--dash-ink);
+          overflow-wrap: anywhere;
+        }
+        .admin-dashboard-page .yc-request-person p {
+          margin: 0;
+          font-size: .87em;
+          line-height: 1.45;
+          color: var(--dash-soft);
+          overflow-wrap: anywhere;
+        }
+        .admin-dashboard-page .yc-request-status-group {
+          min-width: 0;
+          display: flex;
+          flex-wrap: wrap;
+          gap: 6px;
+          align-items: flex-start;
+          max-width: 100%;
+        }
+        .admin-dashboard-page .yc-request-pill {
+          display: inline-flex;
+          align-items: center;
+          max-width: 100%;
+          padding: 6px 10px;
+          border: 1px solid rgba(98, 84, 218, .2);
+          border-radius: 999px;
+          background: var(--dash-lilac);
+          font-size: .8em;
+          font-weight: 700;
+          line-height: 1.35;
+          color: var(--dash-deep);
+          overflow-wrap: anywhere;
+          white-space: normal;
+        }
+        .admin-dashboard-page .yc-request-pill--quiet {
+          background: var(--dash-sky);
+          border-color: rgba(55, 102, 219, .16);
+          color: var(--dash-ink);
+        }
+        .admin-dashboard-page .yc-request-facts {
+          min-width: 0;
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 12px 18px;
+          margin: 14px 0;
+        }
+        .admin-dashboard-page .yc-request-datum { min-width: 0; margin: 0; }
+        .admin-dashboard-page .yc-request-datum--wide { grid-column: 1 / -1; }
+        .admin-dashboard-page .yc-request-datum dd {
+          margin: 0;
+          font-size: .93em;
+          font-weight: 600;
+          line-height: 1.5;
+          color: var(--dash-ink);
+          overflow-wrap: anywhere;
+          word-break: normal;
+        }
+        .admin-dashboard-page .yc-request-reason {
+          padding: 12px 14px;
+          min-width: 0;
+          border-radius: 13px;
+          background: var(--dash-sky);
+        }
+        .admin-dashboard-page .yc-request-reason p {
+          margin: 0;
+          line-height: 1.6;
+          font-size: .94em;
+          color: var(--dash-ink);
+          overflow-wrap: anywhere;
+          word-break: normal;
+          white-space: pre-wrap;
+        }
+        .admin-dashboard-page .yc-request-actions {
+          display: flex;
+          flex-wrap: wrap;
+          align-items: center;
+          gap: 8px;
+          margin-top: 14px;
+        }
+        .admin-dashboard-page .yc-request-empty {
+          padding: 24px;
+          border: 1px dashed rgba(98, 84, 218, .24);
+          border-radius: 16px;
+          text-align: center;
+          color: var(--dash-soft);
+          background: rgba(255, 255, 255, .56);
+        }
+        @media (max-width: 1500px) {
+          .admin-dashboard-page .yc-request-panels {
+            grid-template-columns: minmax(0, 1fr) !important;
+          }
+        }
+        @media (max-width: 600px) {
+          .admin-dashboard-page .yc-request-card-head { flex-direction: column; }
+          .admin-dashboard-page .yc-request-status-group { width: 100%; }
+          .admin-dashboard-page .yc-request-panel { padding: 16px !important; }
+          .admin-dashboard-page .yc-request-facts { gap: 11px; }
+          .admin-dashboard-page .yc-request-panel .toolbar button { width: 100%; }
+        }
+        @media (max-width: 370px) {
+          .admin-dashboard-page .yc-request-facts { grid-template-columns: minmax(0, 1fr); }
+        }
+
       `}</style>
 
         <section className="hero employee-hero admin-employee-hero">
@@ -3627,8 +3865,8 @@ export default function AdminDashboard({ setPage, user = {} }) {
       )}
 
       {employeeSummary && (
-        <section className="two-col">
-          <div className="panel">
+        <section className="two-col yc-request-panels">
+          <div className="panel yc-request-panel">
             <div className="toolbar">
               <div>
                 <h3>My Pending Leave Approvals</h3>
@@ -3644,10 +3882,10 @@ export default function AdminDashboard({ setPage, user = {} }) {
               </button>
             </div>
 
-            <Table rows={myPendingLeaveRows} maxColumns={11} />
+            <DashboardPendingRequestCards rows={myPendingLeaveRows} type="leave" />
           </div>
 
-          <div className="panel">
+          <div className="panel yc-request-panel">
             <div className="toolbar">
               <div>
                 <h3>My Pending WFH / Field Approvals</h3>
@@ -3662,13 +3900,13 @@ export default function AdminDashboard({ setPage, user = {} }) {
               </button>
             </div>
 
-            <Table rows={myPendingModeRows} maxColumns={9} />
+            <DashboardPendingRequestCards rows={myPendingModeRows} type="mode" />
           </div>
         </section>
       )}
 
-      <section className="two-col">
-        <div className="panel">
+      <section className="two-col yc-request-panels">
+        <div className="panel yc-request-panel">
           <div className="toolbar">
             <div>
               <h3>Pending Leave Requests</h3>
@@ -3684,10 +3922,10 @@ export default function AdminDashboard({ setPage, user = {} }) {
             </button>
           </div>
 
-          <Table rows={pendingLeaveRows} maxColumns={12} />
+          <DashboardPendingRequestCards rows={pendingLeaveRows} type="leave" />
         </div>
 
-        <div className="panel">
+        <div className="panel yc-request-panel">
           <div className="toolbar">
             <div>
               <h3>Pending WFH / Field Requests</h3>
@@ -3701,7 +3939,7 @@ export default function AdminDashboard({ setPage, user = {} }) {
             </button>
           </div>
 
-          <Table rows={pendingModeRows} maxColumns={9} />
+          <DashboardPendingRequestCards rows={pendingModeRows} type="mode" />
         </div>
       </section>
 
