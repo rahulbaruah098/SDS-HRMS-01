@@ -264,72 +264,251 @@ def list_bills():
     return jsonify({'items': clean_doc(bills), 'count': len(bills)})
 
 
+# LC_SUPPLEMENTARY_V1
 @lc_bp.post('/bills/generate')
 @tenant_module_required('attendance')
 def generate_bills():
     db, tenant = get_db(), current_tenant_id()
     employee = get_current_employee(db)
+
     if not employee:
         return _error('Employee profile not found', 404)
+
     try:
         year, month = _valid_period(request.get_json(silent=True) or {})
     except ValueError as exc:
         return _error(str(exc))
-    query = {'tenant_id': tenant,
-        'employee_ref_id': {'$in': sorted(employee_identity_values(employee))},
-        'scheduled_date': {'$regex': f'^{year}-{month:02d}-'},
-        'status': 'completed', 'is_deleted': {'$ne': True},
-        'travel.eligible': True, 'travel.mode': {'$in': sorted(BILL_TYPES)}}
-    eligible = list(db.field_visits.find(query).sort([('scheduled_date', 1), ('created_at', 1)]))
-    existing_query = {'tenant_id': tenant, 'employee_ref_id': str(employee['_id']), 'year': year, 'month': month}
-    existing = list(db.local_conveyance_bills.find(existing_query).sort('created_at', -1))
-    if existing:
-        # A draft can be refreshed to include journeys completed since it was
-        # first generated. Once submitted it is immutable until rejection.
-        current = existing[0]
-        if len(existing) == 1 and current.get('claim_key') and current.get('status') == 'draft' and eligible:
-            new_ids = [str(v['_id']) for v in eligible]
-            if new_ids != current.get('visit_ids', []):
-                lines = _lines(eligible)
-                modes = {line['mode'] for line in lines}
-                changed_data = {'lines': lines, 'source_lines': [dict(x) for x in lines],
-                    'visit_ids': new_ids,
-                    'bill_type': next(iter(modes)) if len(modes) == 1 else 'mixed',
-                    'total': float(sum((Decimal(str(x['amount'])) for x in lines), Decimal('0'))),
-                    'updated_at': datetime.utcnow()}
-                try:
-                    changed = db.local_conveyance_bills.update_one(_optimistic_filter(current),
-                        {'$set': changed_data, '$inc': {'revision': 1}})
-                except DuplicateKeyError:
-                    return _error('A journey in this month has already been claimed. Refresh the bill.', 409)
-                if not changed.matched_count:
-                    return _error('Monthly draft changed. Refresh and retry.', 409)
-                _record(db, current, 'refresh_draft')
-                existing = list(db.local_conveyance_bills.find(existing_query).sort('created_at', -1))
-        return jsonify({'message': 'Existing monthly claim returned. Drafts refresh with any newly completed visits; submitted claims remain locked.',
-                        'generated_references': [], 'items': clean_doc(existing)})
+
+    query = {
+        'tenant_id': tenant,
+        'employee_ref_id': {
+            '$in': sorted(employee_identity_values(employee))
+        },
+        'scheduled_date': {
+            '$regex': f'^{year}-{month:02d}-'
+        },
+        'status': 'completed',
+        'is_deleted': {'$ne': True},
+        'travel.eligible': True,
+        'travel.mode': {'$in': sorted(BILL_TYPES)},
+    }
+
+    eligible = list(
+        db.field_visits.find(query).sort([
+            ('scheduled_date', 1),
+            ('created_at', 1),
+        ])
+    )
+
+    existing_query = {
+        'tenant_id': tenant,
+        'employee_ref_id': str(employee['_id']),
+        'year': year,
+        'month': month,
+    }
+
+    collection = db.local_conveyance_bills
+
+    existing = list(
+        collection.find(existing_query).sort('created_at', -1)
+    )
+
     if not eligible:
-        return _error('No completed eligible visit journeys for the selected month', 404)
+        if existing:
+            return jsonify({
+                'message': 'No additional eligible journeys for this month.',
+                'generated_references': [],
+                'items': clean_doc(existing),
+            })
+        return _error(
+            'No completed eligible visit journeys for the selected month',
+            404
+        )
+
+    # Protect against double reimbursement.
+    # The existing unique multikey index must remain active.
     try:
-        indexes = db.local_conveyance_bills.index_information()
-        protected = any(list(ix.get('key', [])) == [('tenant_id', 1), ('visit_ids', 1)]
-                        and ix.get('unique') is True for ix in indexes.values())
-        monthly = any(list(ix.get('key', [])) == [('tenant_id', 1), ('claim_key', 1)]
-                      and ix.get('unique') is True for ix in indexes.values())
+        indexes = collection.index_information()
+
+        protected = any(
+            list(index.get('key', [])) ==
+            [('tenant_id', 1), ('visit_ids', 1)]
+            and index.get('unique') is True
+            for index in indexes.values()
+        )
+
+        monthly = any(
+            list(index.get('key', [])) ==
+            [('tenant_id', 1), ('claim_key', 1)]
+            and index.get('unique') is True
+            for index in indexes.values()
+        )
+
     except Exception:
         protected = monthly = False
+
     if not protected or not monthly:
-        return _error('Updated Local Conveyance index migration is required before monthly bill generation',
-                      503, 'LC_INDEXES_REQUIRED')
-    doc = _document(db, employee, year, month, eligible)
+        return _error(
+            'Local Conveyance indexes are required before bill generation',
+            503,
+            'LC_INDEXES_REQUIRED'
+        )
+
+    eligible_ids = [str(v['_id']) for v in eligible]
+
+    # Check ALL existing claims in this tenant, including
+    # approved, paid, rejected and draft claims.
+    already_claimed = set()
+
+    claimed_records = collection.find(
+        {
+            'tenant_id': tenant,
+            'visit_ids': {'$in': eligible_ids},
+        },
+        {'visit_ids': 1}
+    )
+
+    for record in claimed_records:
+        already_claimed.update(
+            str(visit_id)
+            for visit_id in (record.get('visit_ids') or [])
+        )
+
+    unclaimed = [
+        visit for visit in eligible
+        if str(visit['_id']) not in already_claimed
+    ]
+
+    # Repeated Generate requests must not create empty
+    # or duplicate supplementary bills.
+    if not unclaimed:
+        if existing:
+            return jsonify({
+                'message': 'All eligible journeys are already included in existing claims.',
+                'generated_references': [],
+                'items': clean_doc(existing),
+            })
+
+        return _error(
+            'Eligible journeys are already linked to another claim.',
+            409,
+            'LC_DUPLICATE_CLAIM'
+        )
+
+    # If a Draft already exists, append ONLY new unclaimed
+    # journeys. Never alter submitted/verified/paid bills.
+    drafts = [
+        bill for bill in existing
+        if bill.get('status') == 'draft'
+        and bill.get('claim_key')
+    ]
+
+    if drafts:
+        current = drafts[0]
+        additions = _lines(unclaimed)
+
+        merged_lines = list(current.get('lines') or []) + additions
+        merged_source = list(
+            current.get('source_lines') or current.get('lines') or []
+        ) + [dict(line) for line in additions]
+
+        merged_ids = list(current.get('visit_ids') or []) + [
+            str(visit['_id']) for visit in unclaimed
+        ]
+
+        if len(merged_ids) != len(set(map(str, merged_ids))):
+            return _error(
+                'Duplicate journeys detected. Refresh the claim.',
+                409,
+                'LC_DUPLICATE_CLAIM'
+            )
+
+        modes = {line['mode'] for line in merged_lines}
+        total = float(sum(
+            (Decimal(str(line['amount'])) for line in merged_lines),
+            Decimal('0')
+        ))
+
+        changes = {
+            'lines': merged_lines,
+            'source_lines': merged_source,
+            'visit_ids': merged_ids,
+            'bill_type': (
+                next(iter(modes)) if len(modes) == 1 else 'mixed'
+            ),
+            'total': total,
+            'updated_at': datetime.utcnow(),
+        }
+
+        try:
+            updated = collection.update_one(
+                _optimistic_filter(current),
+                {'$set': changes, '$inc': {'revision': 1}}
+            )
+        except DuplicateKeyError:
+            return _error(
+                'One or more journeys were claimed simultaneously. Refresh.',
+                409,
+                'LC_DUPLICATE_CLAIM'
+            )
+
+        if not updated.matched_count:
+            return _error(
+                'The draft changed during refresh. Retry.',
+                409,
+                'LC_CONCURRENT_UPDATE'
+            )
+
+        _record(db, current, 'refresh_draft')
+
+        refreshed = list(
+            collection.find(existing_query).sort('created_at', -1)
+        )
+
+        return jsonify({
+            'message': 'New eligible journeys added to the existing Draft.',
+            'generated_references': [],
+            'items': clean_doc(refreshed),
+        })
+
+    # No Draft is available. Create a new bill using
+    # ONLY the remaining unclaimed journeys.
+    doc = _document(db, employee, year, month, unclaimed)
+
+    if existing:
+        # Keep the existing unique claim_key index.
+        # Add a unique suffix for each supplementary claim.
+        base_key = doc['claim_key']
+        suffix = doc['reference'].rsplit('/', 1)[-1]
+
+        doc['claim_key'] = f'{base_key}:supp:{suffix}'
+        doc['claim_kind'] = 'supplementary'
+        doc['supplementary_of'] = existing[-1]['reference']
+    else:
+        doc['claim_kind'] = 'monthly'
+
     try:
-        db.local_conveyance_bills.insert_one(doc)
-        _record(db, doc, 'generate')
-        return jsonify({'message': 'Monthly claim generated as Draft. Review and submit it for validation.',
-                        'generated_references': [doc['reference']], 'items': clean_doc([doc])})
+        collection.insert_one(doc)
     except DuplicateKeyError:
-        return _error('One or more journeys are already claimed, or a monthly bill was generated simultaneously. Refresh your bills.',
-                      409, 'LC_DUPLICATE_CLAIM')
+        return _error(
+            'A claim was generated simultaneously or a journey was already claimed. Refresh.',
+            409,
+            'LC_DUPLICATE_CLAIM'
+        )
+
+    _record(db, doc, 'generate')
+
+    label = (
+        'Supplementary LC claim generated as Draft.'
+        if existing else
+        'Monthly LC claim generated as Draft.'
+    )
+
+    return jsonify({
+        'message': label,
+        'generated_references': [doc['reference']],
+        'items': clean_doc([doc]),
+    })
 
 
 @lc_bp.get('/bills/<path:reference>')
