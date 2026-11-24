@@ -264,6 +264,73 @@ def list_bills():
     return jsonify({'items': clean_doc(bills), 'count': len(bills)})
 
 
+@lc_bp.get('/pending-approvals')
+@tenant_module_required('attendance')
+def lc_pending_dashboard_approvals():
+    """Fast, tenant-scoped actions only for the authenticated LC reviewer.
+
+    Use existing per-bill authorization predicates: no blanket Admin oversight
+    approval, no self-approval for direct Finance claims, no unpaid claim shown
+    after it moves to the paid state.
+    """
+    db = get_db()
+    employee = get_current_employee(db)
+    roles = current_user_roles()
+    user_id = current_user_id()
+    reviewer_roles = ACCOUNT_ROLES | PAYMENT_ROLES | FINANCE_PAYMENT_ROLES | OVERSIGHT_ROLES
+    query = {
+        'tenant_id': current_tenant_id(),
+        'status': {'$in': ['pending_manager', 'pending_accounts', 'verified']},
+    }
+    if not (roles & reviewer_roles):
+        if not employee:
+            return jsonify({'items': [], 'count': 0})
+        query['approval.employee_ref_id'] = str(employee['_id'])
+
+    output = []
+    # One employee/role lookup and a small Mongo projection per request.
+    # The V1 endpoint repeatedly loaded the employee and serialized whole
+    # claims while scanning the pending list.
+    fields = {
+        'reference': 1, 'employee_name': 1, 'employee_code': 1,
+        'employee_ref_id': 1, 'total': 1, 'status': 1,
+        'approval': 1, 'manager_validation': 1, 'accounts_verification': 1,
+        'created_by': 1, 'updated_at': 1,
+    }
+    for bill in db.local_conveyance_bills.find(query, fields).sort('updated_at', -1).limit(400):
+        if not can_read(bill, employee, roles):
+            continue
+        state = bill.get('status')
+        action = ''
+        if state == 'pending_manager' and is_approver(bill, employee, roles):
+            action = 'manager_validate'
+        elif (state == 'pending_accounts' and
+              can_verify_accounts(bill, employee, roles, user_id)):
+            action = 'accounts_verify'
+        elif (state == 'verified' and bill.get('accounts_verification') and
+              can_confirm_payment(bill, employee, roles, user_id)):
+            action = 'mark_paid'
+        if not action:
+            continue
+        labels = {
+            'manager_validate': 'Review manager validation',
+            'accounts_verify': 'Verify accounts',
+            'mark_paid': 'Confirm recorded payment',
+        }
+        output.append({
+            'reference': str(bill.get('reference') or ''),
+            'employee_name': str(bill.get('employee_name') or
+                                 bill.get('employee_code') or 'Employee'),
+            'total': float(bill.get('total') or 0),
+            'status': state,
+            'action': action,
+            'action_label': labels[action],
+        })
+    response = jsonify({'items': output, 'count': len(output)})
+    response.headers['Cache-Control'] = 'private, no-store'
+    return response
+
+
 # LC_SUPPLEMENTARY_V1
 @lc_bp.post('/bills/generate')
 @tenant_module_required('attendance')

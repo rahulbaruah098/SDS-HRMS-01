@@ -2,6 +2,8 @@ from flask import Blueprint, request, jsonify, g, current_app
 from bson import ObjectId
 from datetime import datetime, timedelta, date
 import os
+import time
+from functools import wraps
 
 from app.extensions import get_db
 from app.utils.auth import roles_required, current_user_required, audit
@@ -1026,6 +1028,33 @@ def notification_user_id_for_record(db, record, tenant_id=None, fields=None):
     return ""
 
 
+def leave_decision_defer_push():
+    """Opt-in only AFTER the durable FCM outbox worker is running.
+
+    The default preserves existing push behavior so a missing worker does not
+    silently turn off Android notifications.
+    """
+    raw = current_app.config.get(
+        "LEAVE_DECISION_DEFER_PUSH", os.getenv("LEAVE_DECISION_DEFER_PUSH", "0")
+    )
+    return str(raw).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _timed_leave_decision(fn):
+    @wraps(fn)
+    def wrapped(*args, **kwargs):
+        started = time.perf_counter()
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            current_app.logger.info(
+                "LEAVE_DECISION_TIMING duration_ms=%.1f deferred_push=%s",
+                (time.perf_counter() - started) * 1000,
+                leave_decision_defer_push(),
+            )
+    return wrapped
+
+
 def notify_users(
     db,
     user_ids,
@@ -1037,19 +1066,30 @@ def notify_users(
     event="",
     event_key="",
     push=True,
+    defer_push=False,
 ):
     """Compatibility wrapper around the centralized notification engine."""
-    return centralized_notify_users(
-        db,
-        user_ids,
-        title,
-        body,
-        meta=meta,
-        tenant_id=tenant_id,
-        event=event,
-        event_key=event_key,
-        push=push,
-    )
+    started = time.perf_counter()
+    try:
+        return centralized_notify_users(
+            db,
+            user_ids,
+            title,
+            body,
+            meta=meta,
+            tenant_id=tenant_id,
+            event=event,
+            event_key=event_key,
+            push=push,
+            defer_push=defer_push,
+        )
+    finally:
+        if str(event).startswith("leave."):
+            current_app.logger.info(
+                "LEAVE_NOTIFICATION_TIMING event=%s duration_ms=%.1f deferred_push=%s recipients=%s",
+                event, (time.perf_counter() - started) * 1000,
+                bool(defer_push and push), len(user_ids) if isinstance(user_ids, (list, tuple, set)) else "unknown",
+            )
 
 def current_user_id():
     return str(g.current_user.get("_id") or "")
@@ -2778,6 +2818,7 @@ def notify_next_leave_approvers(db, employee, leave_doc, stage):
         tenant_id=tenant_id,
         event="leave.approval_pending",
         event_key=f"leave:{leave_id}:approval_pending:{stage}",
+        defer_push=leave_decision_defer_push(),
     )
 
 def notify_employee_leave_decision(db, employee, leave_doc, status):
@@ -2805,6 +2846,7 @@ def notify_employee_leave_decision(db, employee, leave_doc, status):
         tenant_id=employee.get("tenant_id") or current_tenant_id(),
         event=f"leave.{normalize_status(status) or 'updated'}",
         event_key=f"leave:{leave_id}:employee:{normalize_status(status) or 'updated'}",
+        defer_push=leave_decision_defer_push(),
     )
 
 
@@ -2849,6 +2891,7 @@ def notify_hr_leave_result(db, employee, leave_doc, status):
         tenant_id=tenant_id,
         event="leave.hr_record_update",
         event_key=f"leave:{leave_id}:hr_record:{normalize_status(status) or 'updated'}",
+        defer_push=leave_decision_defer_push(),
     )
 
     db.leave_requests.update_one(
@@ -5695,6 +5738,7 @@ def finalize_notice_leave_transaction(
 @workflow_bp.patch("/leave_requests/<req_id>/decision")
 @tenant_module_required("apply_leave")
 @current_user_required
+@_timed_leave_decision
 def leave_decision(req_id):
     leave_obj_id = safe_object_id(req_id)
 

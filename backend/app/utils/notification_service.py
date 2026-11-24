@@ -995,6 +995,7 @@ def notify_users(
     event: str = "",
     event_key: str = "",
     push: bool = True,
+    defer_push: bool = False,
 ) -> list[dict[str, Any]]:
     """Persist and optionally push an automatic workflow notification.
 
@@ -1110,7 +1111,9 @@ def notify_users(
             "created_by_name": actor_name,
             "is_deleted": False,
             "delivery_status": "persisted",
-            "push_status": "pending" if push else "disabled",
+            "push_status": "queued" if push and defer_push else ("pending" if push else "disabled"),
+            "deferred_push": bool(push and defer_push),
+            "next_push_attempt_at": now if push and defer_push else None,
             "push_attempt_count": 0,
             "last_push_attempt_at": "",
             "push_sent_at": "",
@@ -1123,7 +1126,7 @@ def notify_users(
         created_docs.append(doc)
 
     for doc in created_docs:
-        if not push:
+        if not push or defer_push:
             continue
 
         attempt_at = datetime.utcnow()
@@ -1282,3 +1285,24 @@ def unregister_device(
         "matched_count": result.matched_count,
         "modified_count": result.modified_count,
     }
+
+
+def deliver_deferred_notification(db, doc: Mapping[str, Any]) -> dict[str, Any]:
+    """Send an already-persisted push from a worker, outside the approval HTTP request.
+
+    Caller MUST hold an atomic lease on this exact notification document.
+    Does not create another notification, and never needs an active user session.
+    """
+    push_meta = dict(doc.get("meta") or {})
+    push_meta.update({
+        "notification_id": str(doc["_id"]),
+        "source_id": doc.get("source_id") or push_meta.get("source_id") or "",
+        "event": doc.get("event") or "",
+        "event_key": doc.get("event_key") or "",
+    })
+    tenant_id = doc.get("tenant_id") or ""
+    scope = PLATFORM_DEVICE_SCOPE if doc.get("platform_notification") else TENANT_DEVICE_SCOPE
+    return send_fcm_to_users(
+        db, [doc["user_id"]], doc["title"], doc["body"],
+        meta=push_meta, tenant_id=tenant_id, device_scope=scope,
+    )
