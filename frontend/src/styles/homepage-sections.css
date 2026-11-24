@@ -4604,3 +4604,34 @@ max-height: 680px;
     padding-block: 7px;
   }
 }
+
+/* PUBLIC-SITE UPDATE: long module names must wrap without ellipsis. */
+.yc-soft-module-card { min-width: 0; }
+.yc-soft-module-copy { min-width: 0; }
+.yc-soft-module-copy strong {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  overflow-wrap: break-word;
+  text-wrap: pretty;
+  line-height: 1.2;
+}
+@media (min-width: 941px) {
+  .yc-soft-module-card {
+    grid-template-columns: 38px minmax(0, 1fr) 13px;
+    gap: clamp(5px, .65vw, 9px);
+    padding: clamp(8px, .8vw, 11px);
+  }
+  .yc-soft-module-copy strong { font-size: clamp(9px, .78vw, 12px); }
+  .yc-soft-module-copy small { -webkit-line-clamp: 2; }
+}
+@media (max-width: 940px) {
+  .yc-soft-modules-track { grid-auto-rows: minmax(110px, auto); }
+  .yc-soft-module-card { height: auto; min-height: 110px; }
+  .yc-soft-module-copy strong { font-size: clamp(10px, 2.2vw, 13px); }
+}
+@media (max-width: 430px) {
+  .yc-soft-modules-track { grid-auto-rows: minmax(92px, auto); }
+  .yc-soft-module-card { min-height: 92px; }
+  .yc-soft-module-copy strong { font-size: 11px; }
+}

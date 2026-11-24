@@ -1,18 +1,18 @@
-export const POLICY_VERSION = "2026-08-12-v2";
-export const POLICY_EFFECTIVE_DATE = "12 August 2026";
+export const POLICY_VERSION = "2026-11-24-v3";
+export const POLICY_EFFECTIVE_DATE = "24 November 2026";
 
 export const legalPages = {
   privacy: {
     eyebrow: "Privacy Policy",
     title: "Privacy Policy",
     summary:
-      "This Privacy Policy explains how SDS handles personal data when organisations and individuals visit the YourComate website, request a trial, use a YourComate tenant, contact support, use optional HRMS capabilities or complete a payment through Razorpay.",
+      "This Privacy Policy explains how SDS handles personal data when organisations and individuals visit the YourComate website, request a trial, use a YourComate tenant, contact support, use optional HRMS capabilities (including AI-powered Face Recognition Attendance) or complete a payment through Razorpay.",
     icon: "shield",
     tone: "violet",
     sections: [
       [
         "Policy at a glance",
-        `This Privacy Policy explains how SDS handles personal data when organisations and individuals visit the YourComate website, request a trial, use a YourComate tenant, contact support, use optional HRMS capabilities or complete a payment through Razorpay.
+        `This Privacy Policy explains how SDS handles personal data when organisations and individuals visit the YourComate website, request a trial, use a YourComate tenant, contact support, use optional HRMS capabilities (including AI-powered Face Recognition Attendance) or complete a payment through Razorpay.
 
 Website and account data
 
@@ -62,6 +62,8 @@ IMPORTANT ROLE BOUNDARY Employees and candidates should normally raise an HR-rec
 
 • Time, attendance and field-work data: check-in/out records, worked time, work mode, timesheets, visit details and—where the Customer enables them—location, photographs or face-attendance data.
 
+• Optional AI-powered Face Recognition Attendance data: enrollment photographs or camera frames, face-quality and matching information, derived face templates (embeddings), enrollment and approval status, relevant consent or authorisation records, attendance-verification results and associated security/audit records, depending on the enabled workflow.
+
 • Payroll and financial administration data: salary structures, earnings, deductions, payable days, bank-related details, tax declarations, reimbursements, loans/advances, payroll reports and payslips.
 
 • Projects, support and communications: assignments, collaborators, progress, approvals, IT tickets, enquiry messages, emails, notification preferences and support history.
@@ -83,6 +85,8 @@ IMPORTANT ROLE BOUNDARY Employees and candidates should normally raise an HR-rec
 
 • Automatically generated data includes workflow status, audit history, login/security logs, attendance timestamps, notification activity and diagnostic events.
 
+• Where Face Recognition Attendance is enabled, employee camera capture or authorised HR/Admin/IT Head enrollment may supply face images; the system may generate templates, quality results and identity-verification outcomes needed for that workflow.
+
 • Third-party data may include Razorpay transaction metadata, Cloudflare Turnstile verification results, email-delivery status and information returned by a Customer-authorised integration.`,
         "03",
       ],
@@ -93,6 +97,8 @@ IMPORTANT ROLE BOUNDARY Employees and candidates should normally raise an HR-rec
 • Respond to enquiries; verify company email by OTP; review trial requests; create and administer tenant accounts; and communicate credentials, service notices or support updates.
 
 • Deliver configured HRMS capabilities, including recruitment, employee records, attendance, leave, projects, approvals, payroll, payslips, support, reports, mobile workflows and Saya assistance.
+
+• Where lawfully enabled by the Customer, use facial-verification information to enrol and verify the relevant employee for attendance check-in and checkout, subject to approved role permissions and attendance workflows.
 
 • Create Razorpay orders, verify successful payment, activate or renew subscriptions, issue billing records, reconcile failures and administer eligible refunds.
 
@@ -113,6 +119,8 @@ IMPORTANT ROLE BOUNDARY Employees and candidates should normally raise an HR-rec
 • Keep records accurate, relevant and limited to genuine employment, workforce, recruitment or organisational purposes.
 
 • Apply additional care to location, face-attendance, financial, grievance, health-related or other higher-impact data and enable such features only with a documented lawful basis.
+
+• Before activating face verification, explain the specific attendance purpose, collection method, relevant recipients, retention, rights and available procedures for enrollment review, failed verification and appropriate alternatives or accommodations.
 
 • Respond to rights requests and grievances concerning Customer-controlled HR records, with SDS assistance where required by the service agreement.
 
@@ -145,17 +153,38 @@ IMPORTANT ROLE BOUNDARY Employees and candidates should normally raise an HR-rec
         "07",
       ],
       [
-        "Saya, voice, location and face-attendance features",
+        "Saya, voice and location features",
         `Some YourComate capabilities can process data that requires additional context and care. These features are available only where implemented, enabled and permitted for the relevant tenant and user.
 
 Saya assistance Saya may use the signed-in user’s role, permissions, prompt and relevant workspace context to provide guidance. Voice interaction may require microphone permission and may create a transcription. Outputs are assistive and must not replace authorised human decisions concerning recruitment, discipline, payroll, performance or employment rights.
 
 Location and field activity Location is processed only when a location-enabled workflow is used and device permission is available. The Customer must define the purpose, access, retention and employee communication for such use.
 
-Face attendance and photographs Where enabled, face or photograph-based attendance data must be collected and used only for the configured attendance purpose. Customers are responsible for the notice, consent or other lawful authority required for their workforce and jurisdiction.
-
-PERMISSION IS NOT PURPOSE Device permission alone does not establish that workforce monitoring is lawful. The Customer must separately establish a lawful, necessary and proportionate business purpose.`,
+PERMISSION IS NOT PURPOSE Device permission alone does not establish that workforce monitoring is lawful. The Customer must separately establish a lawful, necessary and proportionate business purpose. The next section explains Face Recognition Attendance separately.`,
         "08",
+      ],
+      [
+        "AI-powered Face Recognition Attendance: privacy and biometric data",
+        `Face Recognition Attendance is an optional, tenant-controlled HRMS capability. It is not activated merely by visiting the public website. Depending on the Customer's configuration, it may be inactive, available for enrollment preparation, or enabled for camera-based attendance verification. Preparing employee enrollments and enforcing verification are separate steps. The Customer is responsible for establishing a lawful basis and giving the required workforce notices before processing face data.
+
+• Enrollment and approval: Where implemented and authorised, an employee may register through guided camera capture, which may include front and side views, or authorised HR, Admin or IT Head personnel may upload enrollment photographs. Face-quality checks may be applied, and authorised personnel may review and approve or reject an enrollment before it can be used for verification.
+
+• Information collected or generated: Depending on the workflow, this may include enrollment photographs, camera frames, derived numerical face templates (embeddings), image-quality or matching results, enrollment status, consent or authorisation records, review activity, check-in/checkout verification outcomes and related audit logs. A derived face template remains personal data capable of verifying an identity; it is not automatically anonymous because it is not a photograph.
+
+• Limited purpose: Face information is used for the configured employee enrollment and attendance-identity verification workflow, including detecting attempted impersonation. The feature is not intended for continuous surveillance, public-space identification, emotion analysis, advertising or making employment decisions without appropriate human review.
+
+• Access and security: Face information requires proportionate safeguards, including tenant separation, restricted role-based administration, protected storage of face templates, access auditing and secure transmission where applicable. Exact controls depend on the deployed implementation and configuration. Customers should allow access only to people with an authorised attendance or security responsibility.
+
+• Camera permission and consent: A device or browser may request camera access when a camera-based step is used. Allowing camera access does not, by itself, constitute consent to all personal-data processing or establish the Customer's legal authority. Notices and any required consent must be handled separately.
+
+• Accuracy and human review: Lighting, camera quality, physical changes or technical errors may affect verification. A failed or inconclusive face match should not, by itself, be treated as proof of attendance fraud or misconduct. Customers should provide a fair review process and an appropriate alternative attendance or accommodation route when required by policy or law.
+
+• Retention, deletion and rights: Enrollment photographs, derived templates and associated records should be retained only as necessary for the defined purpose and the applicable agreement, Customer instructions and law. Employees should contact their Customer's HR or administrator to request information, review, correction, withdrawal of consent where applicable, revocation of enrollment or deletion. Revoking a face enrollment does not necessarily remove historical attendance or audit records that must lawfully be kept.
+
+• Restricted secondary use: Face-attendance data must not be repurposed for unrelated AI training, advertising, employee profiling or unauthorised disclosures without a separately established lawful purpose and any required notice or permission.
+
+IMPORTANT Face Recognition Attendance may vary by tenant, plan, role, device and activation status. The Customer must communicate its actual configuration and workforce safeguards.`,
+        "09",
       ],
       [
         "Sharing and service providers",
@@ -172,12 +201,12 @@ PERMISSION IS NOT PURPOSE Device permission alone does not establish that workfo
 • Professional advisers, auditors, insurers, authorities or law-enforcement bodies where disclosure is reasonably necessary and legally permitted or required.
 
 • A successor in a merger, reorganisation, financing or transfer of business, subject to confidentiality, notice and applicable law.`,
-        "09",
+        "10",
       ],
       [
         "Storage, location and cross-border processing",
         `Personal data may be stored or processed on systems operated by SDS and approved service providers. The location depends on the deployed infrastructure, Customer configuration and providers used for hosting, communications, payments, security or optional integrations. Where personal data is processed outside the state or country in which a user is located, SDS and the Customer will apply contractual, access-control and other safeguards appropriate to their roles and comply with transfer restrictions notified under applicable law. A Customer requiring a specific data-residency arrangement must record it in the applicable Order Form or data-processing agreement.`,
-        "10",
+        "11",
       ],
       [
         "Retention, return and deletion",
@@ -187,15 +216,17 @@ PERMISSION IS NOT PURPOSE Device permission alone does not establish that workfo
 
 • Customer HRMS data is retained during the subscription and handled after expiry or termination according to the Order Form, data-processing agreement, documented export/deletion process and legal holds.
 
+• Face enrollment images and derived face templates require purpose-specific retention and review. Customers should request revocation or deletion when the authorised enrollment purpose ends, subject to lawful preservation of attendance, security and audit records; automatic deletion should not be assumed.
+
 • Payment, invoice and refund information may be retained for statutory accounting, tax, audit, fraud and dispute periods even after access ends.
 
 • Backups and security logs may remain for a limited rolling period and are isolated from ordinary use until securely overwritten, unless preservation is legally required. CUSTOMER ACTION BEFORE EXPIRY Customers should export information they are entitled to retain before subscription access ends. Expiry or suspension may restrict ordinary access while legally required billing and security records remain preserved.`,
-        "11",
+        "12",
       ],
       [
         "Security and incident response",
-        `SDS applies reasonable technical and organisational safeguards appropriate to the service and risk. Safeguards may include tenant-aware access controls, role permissions, authentication, transport security, password protection, audit logging, backups, monitoring, secure development practices and controlled administrative access. No internet service can guarantee absolute security. Customers must configure permissions carefully, use strong unique credentials, protect devices, review administrator access and notify SDS promptly of suspected compromise. SDS will investigate confirmed incidents and provide notices to affected Customers, Data Principals or authorities when required by applicable law or contract.`,
-        "12",
+        `SDS applies reasonable technical and organisational safeguards appropriate to the service and risk. Safeguards may include tenant-aware access controls, role permissions, authentication, transport security, password protection, audit logging, backups, monitoring, secure development practices and controlled administrative access. Biometric enrollment and verification data should receive additional protection through access restrictions, secure template handling and careful retention controls. No internet service can guarantee absolute security. Customers must configure permissions carefully, use strong unique credentials, protect devices, review administrator access and notify SDS promptly of suspected compromise. SDS will investigate confirmed incidents and provide notices to affected Customers, Data Principals or authorities when required by applicable law or contract.`,
+        "13",
       ],
       [
         "Your rights and choices",
@@ -203,17 +234,19 @@ PERMISSION IS NOT PURPOSE Device permission alone does not establish that workfo
 
 • For employee, candidate, payroll or attendance records, contact the relevant Customer organisation first because it ordinarily controls those records.
 
+• For a facial enrollment, contact the Customer's HR or administrator about enrollment status, any applicable consent withdrawal, access, correction, review, revocation or deletion. An unsuccessful face match can be escalated for human review according to the Customer's process.
+
 • For SDS-controlled website, account or billing data, email hr@sayanant.com with the subject ‘Privacy Request’. Include enough information to locate the record but do not send unnecessary identity documents.
 
 • SDS or the Customer may request proportionate verification, clarify the scope, preserve information required by law or refuse a request where an applicable legal exception permits.
 
 • Withdrawal of consent does not affect earlier lawful processing and may make a consent-dependent feature unavailable.`,
-        "13",
+        "14",
       ],
       [
         "Children and young persons",
         `The public website, trial registration and subscription purchase are intended for adults acting for organisations. SDS does not knowingly invite children to create public commercial accounts. If a Customer lawfully employs, engages or recruits a person under the age threshold applicable under data-protection law, the Customer must ensure an appropriate notice, verifiable parental/guardian consent where required, age-appropriate safeguards and a lawful employment or recruitment purpose before entering that person’s data into YourComate.`,
-        "14",
+        "15",
       ],
       [
         "Policy updates, grievances and contact",
@@ -238,7 +271,7 @@ Postal/location reference
 Sayanant Development Services Pvt. Ltd., Guwahati, Assam, India
 
 This Policy is intended to operate consistently with the Digital Personal Data Protection Act, 2023, the Digital Personal Data Protection Rules, 2025 as applicable and in force from time to time, contractual data-processing commitments and other applicable Indian law.`,
-        "15",
+        "16",
       ],
       [
         "Reference basis",

@@ -15,7 +15,7 @@ export const productGroups = [
     links: [
       ["Attendance management", "/product/attendance", "attendance"],
       ["Leave & holiday workflows", "/product/leave", "calendar"],
-      ["Projects & team delivery", "/product/projects", "project"],
+      ["Project & Sprint Planning", "/product/projects", "project"],
       ["Approvals & requests", "/product/approvals", "approval"],
     ],
   },

@@ -72,6 +72,9 @@ export default function FeatureGuideLayout({
   category,
   title,
   purpose,
+  purposeTitle,
+  purposeCopy,
+  heroKicker,
   icon,
   tone,
   heroHeading,
@@ -98,7 +101,7 @@ export default function FeatureGuideLayout({
       >
         <div className="yc-feature-hero-panel">
           <span className="yc-feature-hero-kicker">
-            <Icon name={icon} /> {title}
+            <Icon name={icon} /> {heroKicker || title}
           </span>
 
           <h2>{heroHeading}</h2>
@@ -123,8 +126,8 @@ export default function FeatureGuideLayout({
         <div className="page-width yc-feature-guide-shell">
           <FeatureHeading
             eyebrow="Purpose and scope"
-            title={title}
-            copy={purpose}
+            title={purposeTitle || title}
+            copy={purposeCopy || purpose}
           />
 
           <div className="yc-feature-cover-grid">

@@ -23014,3 +23014,28 @@ body.yc-resource-page-active .public-desktop-nav {
   }
 }
 
+
+/* PUBLIC-SITE UPDATE: let long footer workflow labels breathe. */
+.yc-flow-footer-modules {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+.yc-flow-footer-modules > a {
+  min-height: 72px;
+  height: auto;
+  align-content: center;
+}
+.yc-flow-footer-modules strong {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  overflow-wrap: break-word;
+  text-wrap: pretty;
+  line-height: 1.3;
+}
+@media (max-width: 760px) {
+  .yc-flow-footer-modules { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .yc-flow-footer-modules > a { min-height: 68px; }
+}
+@media (max-width: 350px) {
+  .yc-flow-footer-modules { grid-template-columns: minmax(0, 1fr); }
+}

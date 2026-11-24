@@ -4,6 +4,8 @@ import AppStoreBadges, { AppleIcon } from "../components/AppStoreBadges";
 import Icon from "../components/Icon";
 import "../styles/homepage-hero.css";
 import "../styles/homepage-sections.css";
+import "../styles/homepage-face-recognition.css";
+import FaceRecognitionShowcase from "../components/FaceRecognitionShowcase";
 
 const heroTaglines = [
   "People, process and performance — finally connected.",
@@ -15,8 +17,8 @@ const heroTaglines = [
 const heroCards = [
   [
     "attendance",
-    "Attendance",
-    "Office, remote and field attendance stays clearly tracked.",
+    "AI-powered Face Recognition Attendance",
+    "Secure camera verification alongside office, remote and field attendance.",
     "/product/attendance",
   ],
   [
@@ -37,13 +39,19 @@ const heroCards = [
     "Role-aware guidance connects every question to the next action.",
     "/saya",
   ],
+  [
+    "project",
+    "Project Management and Sprint Planning",
+    "Plan monthly goals, weekly sprints and daily team delivery.",
+    "/product/projects",
+  ],
 ];
 
 const modules = [
   ["People", "people", "/product/core-hr", "One dependable source for every employee record."],
-  ["Attendance", "attendance", "/product/attendance", "Office, remote, field and offline work in one view."],
+  ["AI-powered Face Recognition Attendance", "attendance", "/product/attendance", "Secure face verification alongside office, remote, field and offline attendance."],
   ["Leave", "calendar", "/product/leave", "Requests, balances and decisions without follow-up chains."],
-  ["Projects", "project", "/product/projects", "Owners, collaborators and delivery signals stay visible."],
+  ["Project Management and Sprint Planning", "project", "/product/projects", "Monthly plans, weekly sprints and daily progress stay connected."],
   ["Approvals", "approval", "/product/approvals", "The right context reaches the right decision-maker."],
   ["Support", "support", "/product/helpdesk", "Employee questions and IT requests stay connected."],
   ["Recruitment", "recruitment", "/product/recruitment", "Openings, candidates, interviews and offers stay in one clear hiring flow."],
@@ -141,6 +149,8 @@ export default function HomePage() {
           </div>
         </div>
       </section>
+
+      <FaceRecognitionShowcase />
 
       <section className="public-section yc-shift-official-panel" data-panel-label="From scattered to connected">
         <div className="page-width yc-shift-official-shell">

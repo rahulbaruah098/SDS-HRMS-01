@@ -1,0 +1,52 @@
+{
+  "patch_id": "yourcomate-public-face-recognition-v1-2026-11-24",
+  "source_archive": "frontendhrm.zip",
+  "description": "Website frontend content and responsive layout update (no backend changes)",
+  "files": [
+    {
+      "path": "src/pages/HomePage.jsx",
+      "original_sha256": "789b05087baf37d3c5f7e27ebcf37bef16dafd3e41fc8d0f79e93066d6d9319a",
+      "new_sha256": "157a01a465c8f8502c90a5edd60818b777d7fbd0137790822f0d6634c833e27c"
+    },
+    {
+      "path": "src/components/FaceRecognitionShowcase.jsx",
+      "original_sha256": null,
+      "new_sha256": "3da4bded611699648e6f86ddf153e0d092933335fbac3ef3a3ba844acdf7a3a1"
+    },
+    {
+      "path": "src/pages/AttendanceManagementPage.jsx",
+      "original_sha256": "c41094853d0866ab26ae0bd03db420b746ebbcfb31cce56b02d6a93ccddb0c25",
+      "new_sha256": "d99bb4da133bd452a93e6ce17b72ba273b0f89b74956353be6f9554be565e516"
+    },
+    {
+      "path": "src/components/SiteFooter.jsx",
+      "original_sha256": "4d104795778cdc1210998d28448b92cbc4c7cacb0bc61d0b058199e1e83b8bca",
+      "new_sha256": "ae9519170f5ef67de5d8c784830affa78390e7e533fe4a8f2810615415513497"
+    },
+    {
+      "path": "src/data/publicSiteData.js",
+      "original_sha256": "63526b50d0a21c2690f307739d2f242b3682c798e62ede1eb087609b562128a3",
+      "new_sha256": "a73d6bb90912b6dd3c3a1b01a34e21163431242ca7a3b6bafc81ef5a7a381c13"
+    },
+    {
+      "path": "src/styles/homepage-hero.css",
+      "original_sha256": "6d246c66d9f06ed5844fca3fc4ba4f48fc25f7db97f41a41ed0dadcd8b612d1c",
+      "new_sha256": "1ea8c10f4f2c34bc7734dd088fe6933b88b970abc4b6649833c31e64eba292d5"
+    },
+    {
+      "path": "src/styles/homepage-sections.css",
+      "original_sha256": "835c74d52d9f70d952db2b4d04d3e9a3f32caed26a4d8db2d2af9f1e36ca2264",
+      "new_sha256": "447a399568ecfa99773979aa41447ad5442d2224d8ca0232d18fe192ec76a9b6"
+    },
+    {
+      "path": "src/styles/homepage-face-recognition.css",
+      "original_sha256": null,
+      "new_sha256": "cceb9cd20b92f65705dacfdbdfc473aa74409d3457435af4d288376c778a253f"
+    },
+    {
+      "path": "src/styles/public-site.css",
+      "original_sha256": "9f77c8f8038fb3330763f3ef34910e98b79bf4112e7b73038067f61f9d545437",
+      "new_sha256": "d041b27bec7b627e0dc63ef33960054b8b66cc2aa68ab77ea0e51afb2139fca7"
+    }
+  ]
+}

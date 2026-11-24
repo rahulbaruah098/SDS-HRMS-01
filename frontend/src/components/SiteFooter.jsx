@@ -95,9 +95,9 @@ function WorkflowIcon({ name }) {
 
 const workflowModules = [
   ["people", "People records", "blue", "/product/core-hr"],
-  ["attendance", "Attendance", "mint", "/product/attendance"],
+  ["attendance", "AI-powered Face Recognition", "mint", "/product/attendance"],
   ["leave", "Leave", "yellow", "/product/leave"],
-  ["project", "Projects", "violet", "/product/projects"],
+  ["project", "Project Management & Sprint Planning", "violet", "/product/projects"],
   ["approval", "Approvals", "lilac", "/product/approvals"],
   ["support", "Support", "pink", "/product/helpdesk"],
   ["recruitment", "Recruitment", "coral", "/product/recruitment"],
