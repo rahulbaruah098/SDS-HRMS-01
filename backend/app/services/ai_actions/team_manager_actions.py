@@ -13,6 +13,7 @@ import re
 
 from bson import ObjectId
 
+from app.services import team_responsibility as responsibility
 from app.extensions import get_db
 from app.utils.auth import audit
 from app.services.ai_action_service import (
@@ -223,10 +224,10 @@ def _manager_stage_or(user_context=None):
     identifiers = _manager_identifiers(user_context)
     roles = _roles(user_context)
     clauses = []
-    if "team_leader" in roles:
+    if responsibility.leader_aliases(get_db(), _tenant_id(user_context), _employee(user_context)):
         clauses.append({
             "approval_stage": "team_leader",
-            "team_leader_id": {"$in": identifiers},
+            "team_leader_id": {"$in": responsibility.leader_aliases(get_db(), _tenant_id(user_context), _employee(user_context))},
         })
     if roles.intersection({"reporting_officer", "ro", "manager"}):
         clauses.append({
@@ -451,7 +452,7 @@ def _manager_project_query(user_context=None):
     if not tenant_id or not manager_ids:
         return {"_id": {"$exists": False}}
     relation_or = [
-        {"team_leader_id": {"$in": manager_ids}},
+        {"team_leader_id": {"$in": responsibility.leader_aliases(get_db(), tenant_id, _employee(user_context))}},
         {"reporting_officer_id": {"$in": manager_ids}},
         {"created_by_employee_id": {"$in": manager_ids}},
     ]
@@ -547,6 +548,7 @@ def _safe_request_by_id(collection_name, request_id, user_context=None):
     return None
 
 
+@responsibility.serialized_action
 def _decide_leave(request_id, decision, note, user_context=None):
     db = get_db()
     existing = _safe_leave_by_id(request_id, user_context)
@@ -690,6 +692,7 @@ def _decide_leave(request_id, decision, note, user_context=None):
     return "Leave approved successfully. The employee has been notified and the final leave workflow has been completed."
 
 
+@responsibility.serialized_action
 def _decide_attendance_request(collection_name, request_id, decision, note, user_context=None):
     db = get_db()
     request_doc = _safe_request_by_id(collection_name, request_id, user_context)

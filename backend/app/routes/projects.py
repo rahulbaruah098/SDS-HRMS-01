@@ -1,19 +1,36 @@
 from flask import Blueprint, request, jsonify, g
+from functools import wraps
+from app.services.tenant_service import is_platform_superadmin
 from bson import ObjectId
 from datetime import datetime, date, timedelta
 
+from app.services import team_responsibility as responsibility
 from app.extensions import get_db
 from app.utils.auth import audit
 from app.middleware.tenant_guard import tenant_module_required
 from app.utils.serializers import clean_doc
 from app.services.active_employee_scope import active_employee_fields
+from app.services import project_planning as planning
 
 
 projects_bp = Blueprint("projects", __name__)
 
+@projects_bp.before_request
+def validate_project_json_body():
+    if request.method in {"POST", "PATCH", "PUT"} and not isinstance(request.get_json(silent=True), dict):
+        return jsonify({"message": "Expected a JSON object"}), 400
+
+
+def private_progress_scope(db):
+    if planning.org_access():
+        return {}
+    if not hasattr(g, "project_progress_detail_ids"):
+        g.project_progress_detail_ids = list({str(v) for e in planning.detail_employees(db) for v in employee_identifier_values(e)})
+    return {"employee_id": {"$in": g.project_progress_detail_ids}}
+
+
 
 ADMIN_VIEW_ROLES = {
-    "super_admin",
     "admin",
 }
 
@@ -97,7 +114,23 @@ def today_str():
 
 
 def current_tenant_id():
-    return getattr(g, "tenant_id", None) or g.current_user.get("tenant_id") or "sds"
+    return getattr(g, "tenant_id", None) or g.current_user.get("tenant_id")
+
+
+def tenant_project_required(fn):
+    @wraps(fn)
+    @tenant_module_required("projects")
+    def wrapped(*args, **kwargs):
+        user = getattr(g, "current_user", {}) or {}
+        if is_platform_superadmin(user) or current_user_roles().intersection({"super_admin", "superadmin"}):
+            return jsonify({"message": "Projects are available only to tenant users"}), 403
+
+        tenant_id = getattr(g, "tenant_id", None)
+        if not isinstance(tenant_id, str) or not tenant_id.strip():
+            return jsonify({"message": "Company context is required"}), 403
+
+        return fn(*args, **kwargs)
+    return wrapped
 
 
 def current_user_id():
@@ -319,36 +352,11 @@ def employee_roles(employee):
 
 
 def employee_is_team_leader(employee):
-    roles = employee_roles(employee)
-
-    return bool(
-        employee
-        and (
-            truthy(employee.get("is_team_leader"))
-            or truthy(employee.get("team_leader_capability"))
-            or truthy(employee.get("tl_capability"))
-            or "team_leader" in roles
-            or "team_leader_capability" in roles
-            or "tl" in roles
-        )
-    )
+    return responsibility.capability(employee, 'tl')
 
 
 def employee_is_reporting_officer(employee):
-    roles = employee_roles(employee)
-
-    return bool(
-        employee
-        and (
-            truthy(employee.get("is_reporting_officer"))
-            or truthy(employee.get("reporting_officer_capability"))
-            or truthy(employee.get("ro_capability"))
-            or "reporting_officer" in roles
-            or "reporting_officer_capability" in roles
-            or "ro" in roles
-            or "manager" in roles
-        )
-    )
+    return responsibility.capability(employee, 'ro')
 
 
 def is_admin_view_user():
@@ -356,15 +364,8 @@ def is_admin_view_user():
 
 
 def is_hr_project_blocked_user():
-    roles = current_user_roles()
-
-    # Admin and Super Admin must always have Project module access,
-    # even if the user also has HR Manager / HR role.
-    if roles.intersection(ADMIN_VIEW_ROLES):
-        return False
-
-    # Block only pure HR users.
-    return bool(roles.intersection(HR_PROJECT_BLOCKED_ROLES))
+    # HR monitoring is permitted; writes are checked independently.
+    return False
 
 
 def hr_project_access_denied_response():
@@ -374,23 +375,10 @@ def hr_project_access_denied_response():
 
 
 def can_create_assign_or_collaborate_projects(db):
-    """
-    Rule:
-    Admin / Managing Director can manage all projects.
-    Team Leader and Reporting Officer capability users can manage scoped projects.
-    """
-    roles = current_user_roles()
-
-    if roles.intersection(ADMIN_VIEW_ROLES):
-        return True
-
+    if current_user_roles() & {"super_admin", "superadmin"}:
+        return False
     employee = get_current_employee(db)
-
-    return bool(
-        roles.intersection(PROJECT_CREATOR_ROLES)
-        or employee_is_team_leader(employee)
-        or employee_is_reporting_officer(employee)
-    )
+    return responsibility.capability(employee, 'tl') or responsibility.capability(employee, 'ro')
 
 
 def project_member_ids(project):
@@ -443,7 +431,7 @@ def project_member_ids(project):
 
 
 def can_view_project(db, project):
-    if is_admin_view_user():
+    if planning.org_access():
         return True
 
     employee = get_current_employee(db)
@@ -457,50 +445,17 @@ def can_view_project(db, project):
     if employee_id not in identifier_values:
         identifier_values.append(employee_id)
 
-    return bool(project_member_ids(project).intersection(set(identifier_values)))
+    return bool(project_member_ids(project).intersection(set(identifier_values))) or can_manage_project_team(db, project)
 
 
 def can_manage_project_team(db, project):
-    """
-    Allow project-team changes only to platform/company admins or to the
-    Team Leader / Reporting Officer who manages this project.
-
-    A capability user who is only an assigned member or collaborator on a
-    different manager's project must not be able to change that project's
-    responsibility or membership.
-    """
-    if is_admin_view_user():
-        return True
-
+    if project.get('tenant_id') != current_tenant_id() or not can_create_assign_or_collaborate_projects(db):
+        return False
     employee = get_current_employee(db)
-
-    if not employee:
-        return False
-
-    if not (
-        employee_is_team_leader(employee)
-        or employee_is_reporting_officer(employee)
-    ):
-        return False
-
-    identifier_values = {
-        normalize_text(value)
-        for value in employee_identifier_values(employee)
-        if normalize_text(value)
-    }
-
-    manager_values = {
-        normalize_text(project.get(key))
-        for key in [
-            "created_by_employee_id",
-            "created_by",
-            "team_leader_id",
-            "reporting_officer_id",
-        ]
-        if normalize_text(project.get(key))
-    }
-
-    return bool(identifier_values.intersection(manager_values))
+    if project.get('team_leader_id'):
+        return responsibility.can_manage_team(db, current_tenant_id(), employee, project['team_leader_id'])
+    return bool(employee and responsibility.capability(employee, 'ro') and
+                str(project.get('reporting_officer_id', '')) in responsibility.identifiers(employee))
 
 def can_update_project_status_or_progress(db, project):
     """
@@ -519,20 +474,12 @@ def can_update_project_status_or_progress(db, project):
     if employee_id not in identifier_values:
         identifier_values.append(employee_id)
 
-    return bool(project_member_ids(project).intersection(set(identifier_values)))
+    return bool(project_member_ids(project).intersection(set(identifier_values))) or can_manage_project_team(db, project)
 
 def project_scope_query(db):
     tenant_id = current_tenant_id()
 
-    tenant_filter = {
-        "$or": [
-            {"tenant_id": tenant_id},
-            {"tenant_id": str(tenant_id or "").strip()},
-            {"tenant_id": {"$exists": False}},
-            {"tenant_id": None},
-            {"tenant_id": ""},
-        ]
-    }
+    tenant_filter = {"tenant_id": tenant_id}
 
     q = {
         "$and": [
@@ -545,7 +492,7 @@ def project_scope_query(db):
         q["$and"].append({"_id": {"$exists": False}})
         return q
 
-    if is_admin_view_user():
+    if planning.org_access():
         return q
 
     employee = get_current_employee(db)
@@ -565,7 +512,7 @@ def project_scope_query(db):
             {"created_by_employee_id": {"$in": identifier_values}},
             {"created_by": {"$in": identifier_values}},
 
-            {"team_leader_id": {"$in": identifier_values}},
+            {"team_leader_id": {"$in": responsibility.leader_aliases(db, tenant_id, employee)}},
             {"reporting_officer_id": {"$in": identifier_values}},
 
             {"assigned_to_id": {"$in": identifier_values}},
@@ -864,20 +811,8 @@ def assignment_request_employee_ids(project, data, self_employee_id=""):
 
 
 def employee_is_assignable_by_current_user(db, employee, current_employee):
-    if is_admin_view_user():
-        return True
-
-    if not current_employee or not employee:
-        return False
-
-    scoped_query = project_assignable_employee_query(current_employee)
-
-    return bool(db.employees.find_one({
-        "$and": [
-            scoped_query,
-            {"_id": employee["_id"]},
-        ]
-    }, {"_id": 1}))
+    return bool(employee and any(p['_id'] == employee['_id'] for p in
+        responsibility.scoped_people(db, current_tenant_id(), current_employee)))
 
 
 def resolve_assignable_member_list(
@@ -985,113 +920,18 @@ def find_department_team_leader(db, tenant_id, department):
 
 
 def resolve_team_leader_for_project(db, tenant_id, data, creator_employee):
-    raw_team_leader_id = normalize_text(data.get("team_leader_id"))
-
-    # Keep backward compatibility if old frontend sends team_leader_id.
-    if raw_team_leader_id:
-        team_leader = resolve_employee(db, raw_team_leader_id, tenant_id)
-
-        if not team_leader:
-            raise ValueError("Selected Team Leader was not found")
-
-        if not employee_is_team_leader(team_leader):
-            raise ValueError("Selected Team Leader must have Team Leader capability")
-
-        return team_leader
-
-    project_department = normalize_text(
-        data.get("department")
-        or creator_employee.get("department")
-        if creator_employee
-        else ""
-    )
-
-    # First priority:
-    # If selected assigned members already have a mapped Team Leader,
-    # use that mapped Team Leader.
-    assigned_source = data.get("assigned_employee_ids") or data.get("assigned_members") or []
-
-    for employee_id in normalize_employee_id_list(assigned_source):
-        assigned_employee = resolve_employee(db, employee_id, tenant_id)
-
-        if not assigned_employee:
-            continue
-
-        mapped_tl_id = normalize_text(assigned_employee.get("team_leader_id"))
-
-        if mapped_tl_id:
-            mapped_tl = resolve_employee(db, mapped_tl_id, tenant_id)
-
-            if (
-                mapped_tl
-                and employee_is_team_leader(mapped_tl)
-                and (
-                    not project_department
-                    or same_department_value(mapped_tl.get("department"), project_department)
-                )
-            ):
-                return mapped_tl
-
-    # Second priority:
-    # If creator is a Team Leader of the selected department, use creator.
-    if (
-        creator_employee
-        and employee_is_team_leader(creator_employee)
-        and (
-            not project_department
-            or same_department_value(creator_employee.get("department"), project_department)
-        )
-    ):
-        return creator_employee
-
-    # Third priority:
-    # Pick the Team Leader assigned for the selected department.
-    department_team_leader = find_department_team_leader(db, tenant_id, project_department)
-
-    if department_team_leader:
-        return department_team_leader
-
-    return None
+    source = responsibility.resolve(db, tenant_id, data.get('team_leader_id'))
+    leader, _, _ = responsibility.effective(db, tenant_id, source['_id']) if source else (None, None, None)
+    if not leader or not responsibility.can_manage_team(db, tenant_id, creator_employee, source['_id']):
+        raise ValueError('Select an authorized active or delegated team.')
+    # Persist the stable team key; presentation supplies the effective leader.
+    return source
 
 def resolve_reporting_officer_for_project(db, tenant_id, data, creator_employee, team_leader=None):
-    raw_reporting_officer_id = normalize_text(data.get("reporting_officer_id"))
-
-    if raw_reporting_officer_id:
-        reporting_officer = resolve_employee(db, raw_reporting_officer_id, tenant_id)
-
-        if not reporting_officer:
-            raise ValueError("Selected Reporting Officer was not found")
-
-        if not employee_is_reporting_officer(reporting_officer):
-            raise ValueError("Selected Reporting Officer must have Reporting Officer capability")
-
-        return reporting_officer
-
-    # If project has a Team Leader, use the Team Leader's mapped Reporting Officer.
-    if team_leader:
-        mapped_ro_id = normalize_text(team_leader.get("reporting_officer_id"))
-
-        if mapped_ro_id:
-            reporting_officer = resolve_employee(db, mapped_ro_id, tenant_id)
-
-            if reporting_officer:
-                return reporting_officer
-
-    # If creator is Reporting Officer, use creator.
-    if creator_employee and employee_is_reporting_officer(creator_employee):
-        return creator_employee
-
-    # Fallback: creator's mapped Reporting Officer.
-    if creator_employee:
-        mapped_ro_id = normalize_text(creator_employee.get("reporting_officer_id"))
-
-        if mapped_ro_id:
-            reporting_officer = resolve_employee(db, mapped_ro_id, tenant_id)
-
-            if reporting_officer:
-                return reporting_officer
-
-    return None
+    officer = responsibility.resolve(db, tenant_id, (team_leader or {}).get('reporting_officer_id'))
+    if data.get('reporting_officer_id') and str(data['reporting_officer_id']) not in responsibility.identifiers(officer):
+        raise ValueError('Reporting Officer must match the selected team hierarchy.')
+    return officer if responsibility.capability(officer, 'ro') else None
 
 
 def find_project_employee(db, tenant_id, employee_id):
@@ -1187,7 +1027,7 @@ def build_project_team_tree(db, project, latest=None):
     reporting_officer = None
 
     if project.get("team_leader_id"):
-        team_leader = resolve_employee(db, project.get("team_leader_id"), tenant_id)
+        team_leader, succession_status, _ = responsibility.effective(db, tenant_id, project.get("team_leader_id"))
 
     if not team_leader and not project.get("team_leader_id") and project.get("team_leader_name"):
         team_leader = {
@@ -1575,6 +1415,13 @@ def latest_project_progress_map(db, tenant_id, project_ids):
 def project_card(project, latest=None, include_tree=True):
     db = get_db()
     latest = latest or {}
+    if not planning.org_access():
+        allowed = set(private_progress_scope(db)["employee_id"]["$in"])
+        author = str(latest.get("employee_id") or project.get("latest_progress_by") or "")
+        if author and author not in allowed:
+            latest = {}
+            project = {**project, "latest_progress_note": "", "latest_progress_by": "", "latest_progress_by_name": "", "latest_progress_by_avatar": ""}
+
 
     latest_progress = (
         latest.get("progress_percent")
@@ -1621,6 +1468,7 @@ def project_card(project, latest=None, include_tree=True):
 
     return {
         "_id": str(project["_id"]),
+        **{key: project.get(key) for key in ["project_type", "client_name", "function", "deliverables", "project_code", "planning_schema", "planning_version"]},
         "name": project_name(project),
         "project_name": project_name(project),
         "title": project_name(project),
@@ -1635,7 +1483,9 @@ def project_card(project, latest=None, include_tree=True):
         "reporting_officer_name": reporting_officer.get("employee_name", ""),
         "reporting_officer": reporting_officer,
 
-        "team_leader_id": team_leader.get("employee_id", ""),
+        "team_leader_id": str(project.get('team_leader_id') or ''),
+        "effective_team_leader_id": team_leader.get("employee_id", ""),
+        "succession_status": responsibility.effective(db, current_tenant_id(), project.get('team_leader_id'))[1],
         "team_leader_name": team_leader.get("employee_name", ""),
         "team_leader": team_leader,
 
@@ -1943,40 +1793,8 @@ def employee_option_payload(employee, relation="member"):
 
 
 def project_assignable_employee_query(current_emp):
-    tenant_id = current_tenant_id()
-    base = {
-        "tenant_id": tenant_id,
-        "is_deleted": {"$ne": True},
-        **active_employee_fields(),
-    }
-
-    if is_admin_view_user():
-        return base
-
-    if not current_emp:
-        return {**base, "_id": {"$exists": False}}
-
-    current_emp_id = str(current_emp["_id"])
-    identifier_values = employee_identifier_values(current_emp)
-
-    if current_emp_id not in identifier_values:
-        identifier_values.append(current_emp_id)
-
-    scope = [{"_id": current_emp["_id"]}]
-
-    if employee_is_team_leader(current_emp):
-        scope.append({"team_leader_id": {"$in": identifier_values}})
-
-    if employee_is_reporting_officer(current_emp):
-        scope.extend([
-            {"reporting_officer_id": {"$in": identifier_values}},
-            {"_id": current_emp["_id"]},
-        ])
-
-    return {
-        **base,
-        "$or": scope,
-    }
+    people = responsibility.scoped_people(get_db(), current_tenant_id(), current_emp)
+    return {'tenant_id': current_tenant_id(), **active_employee_fields(), '_id': {'$in': [p['_id'] for p in people]}}
 
 
 def capability_query_or(capability):
@@ -2012,48 +1830,10 @@ def capability_query_or(capability):
 
 
 def project_team_leader_query(current_emp):
-    tenant_id = current_tenant_id()
-    base = {
-        "tenant_id": tenant_id,
-        "is_deleted": {"$ne": True},
-        **active_employee_fields(),
-    }
-    capability_or = capability_query_or("team_leader")
-
-    if is_admin_view_user():
-        return {**base, "$or": capability_or}
-
-    if not current_emp:
-        return {**base, "_id": {"$exists": False}}
-
-    current_emp_id = str(current_emp["_id"])
-    identifier_values = employee_identifier_values(current_emp)
-
-    if current_emp_id not in identifier_values:
-        identifier_values.append(current_emp_id)
-
-    if employee_is_reporting_officer(current_emp):
-        return {
-            **base,
-            "$and": [
-                {"$or": capability_or},
-                {"$or": [
-                    {"reporting_officer_id": {"$in": identifier_values}},
-                    {"_id": current_emp["_id"]},
-                ]},
-            ],
-        }
-
-    if employee_is_team_leader(current_emp):
-        return {
-            **base,
-            "$and": [
-                {"$or": capability_or},
-                {"_id": current_emp["_id"]},
-            ],
-        }
-
-    return {**base, "_id": {"$exists": False}}
+    db, tenant_id = get_db(), current_tenant_id()
+    ids = [p['_id'] for p in db.employees.find({'tenant_id': tenant_id})
+           if responsibility.can_manage_team(db, tenant_id, current_emp, p['_id'])]
+    return {'tenant_id': tenant_id, '_id': {'$in': ids}}
 
 
 def project_reporting_officer_query(current_emp):
@@ -2137,7 +1917,7 @@ def fetch_project_options(db):
 # -----------------------------------------------------------------------------
 
 @projects_bp.get("/options")
-@tenant_module_required("projects")
+@tenant_project_required
 def project_options():
     db = get_db()
 
@@ -2178,7 +1958,7 @@ def project_options():
 
 
 @projects_bp.get("")
-@tenant_module_required("projects")
+@tenant_project_required
 def list_projects():
     db = get_db()
 
@@ -2264,7 +2044,7 @@ def list_projects():
 
 
 @projects_bp.post("")
-@tenant_module_required("projects")
+@tenant_project_required
 def create_project():
     db = get_db()
 
@@ -2279,7 +2059,11 @@ def create_project():
         return jsonify({"message": "Employee profile not found"}), 404
 
     data = request.get_json(silent=True) or {}
-    tenant_id = creator_employee.get("tenant_id") or current_tenant_id()
+    tenant_id = current_tenant_id()
+    try:
+        planning_fields = planning.validate_project(db, data)
+    except planning.PlanningError as exc:
+        return jsonify({"message": str(exc)}), exc.status
 
     name = normalize_text(
         data.get("name")
@@ -2419,6 +2203,9 @@ def create_project():
 
 
 
+    doc.update(planning_fields)
+    doc["planning_version"] = 1
+    doc["planning_history"] = [planning.event("project_configured", fields=planning_fields)]
     try:
         result = db.projects.insert_one(doc)
     except Exception as exc:
@@ -2489,7 +2276,7 @@ def create_project():
 
 
 @projects_bp.patch("/<project_id>")
-@tenant_module_required("projects")
+@tenant_project_required
 def update_project(project_id):
     db = get_db()
 
@@ -2506,46 +2293,31 @@ def update_project(project_id):
         }), 403
 
     data = request.get_json(silent=True) or {}
-    update = {}
-
-    for key in ["description", "department", "priority", "start_date", "due_date"]:
-        if key in data:
-            update[key] = normalize_text(data.get(key))
-
-    if any(key in data for key in ["name", "project_name", "title"]):
-        name = normalize_text(data.get("name") or data.get("project_name") or data.get("title"))
-
-        if not name:
-            return jsonify({"message": "Project name cannot be empty"}), 400
-
-        update["name"] = name
-        update["project_name"] = name
-        update["title"] = name
-
-    if "status" in data:
-        status = normalize_status(data.get("status"))
-
-        if status not in PROJECT_WRITE_STATUSES:
-            return jsonify({"message": "Project status must be active, on_hold, or completed"}), 400
-
-        update["status"] = status
-        update["completed_at"] = now_utc() if status == "completed" else ""
-
-    if "team_leader_id" in data:
-        team_leader = resolve_team_leader_for_project(db, project.get("tenant_id"), data, get_current_employee(db))
-        update["team_leader_id"] = str(team_leader["_id"]) if team_leader else ""
-        update["team_leader_name"] = employee_display_name(team_leader) if team_leader else ""
-
-    if "reporting_officer_id" in data:
-        reporting_officer = resolve_reporting_officer_for_project(
-            db,
-            project.get("tenant_id"),
-            data,
-            get_current_employee(db),
-            None,
-        )
-        update["reporting_officer_id"] = str(reporting_officer["_id"]) if reporting_officer else ""
-        update["reporting_officer_name"] = employee_display_name(reporting_officer) if reporting_officer else ""
+    try:
+        planning_fields = planning.validate_project(db, data, project)
+        planning.require(data.get("planning_version", 0) == project.get("planning_version", 0), "Project changed. Reload before saving", 409)
+        update = {**planning_fields}
+        for key in ["description", "priority"]:
+            if key in data:
+                update[key] = normalize_text(data[key])
+        name = normalize_text(data.get("name") or project_name(project))
+        planning.require(name, "Project name is required")
+        update.update({"name": name, "project_name": name, "title": name})
+        leader = responsibility.resolve(db, current_tenant_id(), data.get("team_leader_id") or project.get("team_leader_id"))
+        update.update({"team_leader_id": str(leader["_id"]), "team_leader_name": employee_display_name(leader)})
+        if "assigned_employee_ids" in data or "primary_assignee_id" in data:
+            primary = data.get("primary_assignee_id") or project.get("primary_assignee_id")
+            ids, members = resolve_member_list(db, current_tenant_id(), list(dict.fromkeys([*data.get("assigned_employee_ids", project.get("assigned_employee_ids", [])), primary])))
+            ids, members = move_primary_assignee_first(ids, members, primary)
+            update.update({"assigned_employee_ids": ids, "assigned_members": members, "primary_assignee_id": primary, "assigned_to_id": primary,
+                           "assigned_to_name": members[0]["name"], "primary_assignee_name": members[0]["name"]})
+        if "collaborator_ids" in data:
+            ids, members = resolve_member_list(db, current_tenant_id(), data["collaborator_ids"], "collaborator")
+            update.update({"collaborator_ids": ids, "collaborators": members})
+    except planning.PlanningError as exc:
+        return jsonify({"message": str(exc)}), exc.status
+    except ValueError as exc:
+        return jsonify({"message": str(exc)}), 400
 
     if not update:
         return jsonify({"message": "No project fields received for update"}), 400
@@ -2556,10 +2328,14 @@ def update_project(project_id):
         "updated_by_name": current_user_name(),
     })
 
-    db.projects.update_one(
-        {"_id": project["_id"]},
-        {"$set": update},
+    version_query = project.get("planning_version", {"$exists": False})
+    changed = db.projects.update_one(
+        {"_id": project["_id"], "tenant_id": current_tenant_id(), "planning_version": version_query},
+        {"$set": update, "$inc": {"planning_version": 1},
+         "$push": {"planning_history": planning.event("project_updated", fields=update)}},
     )
+    if not changed.matched_count:
+        return jsonify({"message": "Project changed. Reload before saving"}), 409
 
     updated = db.projects.find_one({"_id": project["_id"]})
 
@@ -2572,7 +2348,7 @@ def update_project(project_id):
 
 
 @projects_bp.patch("/<project_id>/assign")
-@tenant_module_required("projects")
+@tenant_project_required
 def assign_project(project_id):
     db = get_db()
 
@@ -2662,6 +2438,13 @@ def assign_project(project_id):
         )
     except ValueError as exc:
         return jsonify({"message": str(exc)}), 400
+
+    try:
+        planning.validate_existing_members(db, project, assigned_employee_ids)
+        for target in db.project_monthly_targets.find({"tenant_id": current_tenant_id(), "project_id": str(project["_id"])}):
+            planning.require(target["employee_id"] in set(assigned_employee_ids + project.get("collaborator_ids", []) + [project.get("team_leader_id")]), "An employee with monthly targets cannot be removed from the project")
+    except planning.PlanningError as exc:
+        return jsonify({"message": str(exc)}), exc.status
 
     primary_assignee_name = (
         assigned_members[0]["employee_name"]
@@ -2836,7 +2619,7 @@ def assign_project(project_id):
 
 
 @projects_bp.get("/<project_id>/assignment-history")
-@tenant_module_required("projects")
+@tenant_project_required
 def project_assignment_history(project_id):
     db = get_db()
 
@@ -2867,7 +2650,7 @@ def project_assignment_history(project_id):
 
 
 @projects_bp.patch("/<project_id>/collaborators")
-@tenant_module_required("projects")
+@tenant_project_required
 def update_project_collaborators(project_id):
     db = get_db()
 
@@ -2899,6 +2682,12 @@ def update_project_collaborators(project_id):
     except ValueError as exc:
         return jsonify({"message": str(exc)}), 400
 
+    try:
+        planning.validate_existing_members(db, project, collaborator_ids)
+        for target in db.project_monthly_targets.find({"tenant_id": current_tenant_id(), "project_id": str(project["_id"])}):
+            planning.require(target["employee_id"] in set(collaborator_ids + project.get("assigned_employee_ids", []) + [project.get("team_leader_id")]), "An employee with monthly targets cannot be removed from the project")
+    except planning.PlanningError as exc:
+        return jsonify({"message": str(exc)}), exc.status
     update = {
         "collaborator_ids": collaborator_ids,
         "collaborators": collaborators,
@@ -2923,7 +2712,7 @@ def update_project_collaborators(project_id):
 
 
 @projects_bp.patch("/<project_id>/status")
-@tenant_module_required("projects")
+@tenant_project_required
 def update_project_status(project_id):
     db = get_db()
 
@@ -3026,7 +2815,7 @@ def update_project_status(project_id):
 
 
 @projects_bp.delete("/<project_id>")
-@tenant_module_required("projects")
+@tenant_project_required
 def delete_project(project_id):
     db = get_db()
 
@@ -3037,10 +2826,13 @@ def delete_project(project_id):
     if error:
         return error
 
-    if not can_create_assign_or_collaborate_projects(db):
+    if not can_manage_project_team(db, project):
         return jsonify({
             "message": "Only Team Leaders and Reporting Officers can delete projects"
         }), 403
+
+    if db.project_monthly_targets.count_documents({"tenant_id": current_tenant_id(), "project_id": str(project["_id"])}):
+        return jsonify({"message": "Project has planning history. Mark it Completed instead of deleting it."}), 409
 
     db.projects.update_one(
         {"_id": project["_id"]},
@@ -3064,7 +2856,7 @@ def delete_project(project_id):
 # -----------------------------------------------------------------------------
 
 @projects_bp.get("/analytics")
-@tenant_module_required("projects")
+@tenant_project_required
 def project_analytics():
     db = get_db()
 
@@ -3145,7 +2937,7 @@ def project_analytics():
 
 
 @projects_bp.get("/my-progress")
-@tenant_module_required("projects")
+@tenant_project_required
 def my_project_progress():
     db = get_db()
 
@@ -3180,7 +2972,7 @@ def my_project_progress():
 
 
 @projects_bp.get("/<project_id>/progress")
-@tenant_module_required("projects")
+@tenant_project_required
 def list_project_progress(project_id):
     db = get_db()
 
@@ -3199,6 +2991,7 @@ def list_project_progress(project_id):
         .find({
             "tenant_id": tenant_id,
             "project_id": project_id_str,
+            **private_progress_scope(db),
             "is_deleted": {"$ne": True},
         })
         .sort([("date", -1), ("created_at", -1)])
@@ -3212,7 +3005,7 @@ def list_project_progress(project_id):
 
 
 @projects_bp.post("/<project_id>/progress")
-@tenant_module_required("projects")
+@tenant_project_required
 def add_project_progress(project_id):
     db = get_db()
 
@@ -3334,7 +3127,7 @@ def add_project_progress(project_id):
 
 
 @projects_bp.get("/<project_id>")
-@tenant_module_required("projects")
+@tenant_project_required
 def get_project_detail(project_id):
     db = get_db()
 
@@ -3359,6 +3152,7 @@ def get_project_detail(project_id):
     latest = db.project_progress.find_one({
         "tenant_id": tenant_id,
         "project_id": project_id_str,
+            **private_progress_scope(db),
         "is_deleted": {"$ne": True},
     }, sort=[("created_at", -1)])
 
@@ -3367,6 +3161,7 @@ def get_project_detail(project_id):
         .find({
             "tenant_id": tenant_id,
             "project_id": project_id_str,
+            **private_progress_scope(db),
             "is_deleted": {"$ne": True},
         })
         .sort("created_at", -1)

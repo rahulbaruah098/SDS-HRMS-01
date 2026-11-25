@@ -3,6 +3,7 @@ from datetime import datetime, date, timedelta
 import re
 from bson import ObjectId
 
+from app.services import team_responsibility as responsibility
 from app.extensions import get_db
 from app.utils.auth import roles_required
 from app.utils.serializers import clean_doc
@@ -551,54 +552,10 @@ def employee_is_reporting_officer(employee):
 
 
 def scoped_employee_ids(db):
-    roles = current_roles()
-
-    if roles.intersection(HR_ADMIN_ROLES):
+    if current_roles().intersection(HR_ADMIN_ROLES):
         return None
-
-    employee = current_employee(db)
-
-    if not employee:
-        return []
-
-    employee_id = str(employee["_id"])
-    identifier_values = employee_identifier_values(employee)
-
-    if employee_id not in identifier_values:
-        identifier_values.append(employee_id)
-
-    scope_or = []
-
-    if "team_leader" in roles or employee_is_team_leader(employee):
-        scope_or.append({"team_leader_id": {"$in": identifier_values}})
-
-    if "reporting_officer" in roles or "ro" in roles or employee_is_reporting_officer(employee):
-        scope_or.append({"reporting_officer_id": {"$in": identifier_values}})
-
-    if not scope_or:
-        return identifier_values
-
-    rows = list(
-        db.employees.find({
-            "tenant_id": employee.get("tenant_id") or current_tenant_id(),
-            "status": {"$ne": "Inactive"},
-            "is_deleted": {"$ne": True},
-            "$or": scope_or,
-        })
-    )
-
-    ids = []
-
-    for row in rows:
-        for value in employee_identifier_values(row):
-            if value not in ids:
-                ids.append(value)
-
-    for value in identifier_values:
-        if value not in ids:
-            ids.append(value)
-
-    return ids
+    return sorted({v for person in responsibility.scoped_people(db, current_tenant_id(), current_employee(db))
+                   for v in responsibility.identifiers(person)})
 
 
 def apply_employee_scope(db, q, employee_field="employee_id"):

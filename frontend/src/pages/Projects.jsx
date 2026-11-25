@@ -1734,7 +1734,7 @@ function openSaasBillingPage(setPage) {
   }
 }
 
-export default function Projects({ user: providedUser = {}, setPage } = {}) {
+export default function Projects({ user: providedUser = {}, setPage, onCreateProject } = {}) {
   const alerts = useCustomAlert();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -1890,7 +1890,7 @@ const createFormEmployees = useMemo(() => {
     return [];
   }
 
-  const filtered = filterEmployeesByDepartment(employees, form.department);
+  const filtered = employees;
 
   return uniqueEmployees(filtered)
     .map(normalizeEmployeeOption)
@@ -1907,7 +1907,7 @@ const createFormEmployees = useMemo(() => {
 
   const capabilityCanManage = isTeamLeaderOrReportingOfficer(user, dashboard);
 
-  const canManageProjectSetup = backendCanManage || capabilityCanManage || adminFullAccess;
+  const canManageProjectSetup = backendCanManage;
 
   const saasPlanType = getSaasPlanType(user);
   const saasStatus = getSaasStatus(user);
@@ -4594,10 +4594,10 @@ async function handleAssign(projectId, payload, feedbackScope = '') {
           </span>
         </button>
 
-        <button
+        {canManageProjectSetup && (<button
           type="button"
           className={`project-section-tab ${activeSection === 'create' ? 'is-active' : ''}`}
-          onClick={() => setActiveSection('create')}
+          onClick={() => onCreateProject ? onCreateProject() : setActiveSection('create')}
           aria-pressed={activeSection === 'create'}
         >
           <Sparkles size={18} />
@@ -4609,7 +4609,7 @@ async function handleAssign(projectId, payload, feedbackScope = '') {
                 : 'View project-creation access requirements'}
             </small>
           </span>
-        </button>
+        </button>)}
       </nav>
 
       {activeSection === 'analytics' ? (

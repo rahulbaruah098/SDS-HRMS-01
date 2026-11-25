@@ -1,0 +1,17 @@
+.yc-succession { margin: 1.5rem 0; padding: clamp(1rem, 2vw, 1.5rem); border: 1px solid var(--border, #e2e8f0); border-radius: 16px; background: var(--card-bg, #fff); color: var(--text, #172033); min-width: 0; }
+.yc-succession header,.yc-succession h2,.yc-succession button,.yc-succession-heading { display: flex; align-items: center; gap: .65rem; }
+.yc-succession header,.yc-succession-heading { justify-content: space-between; flex-wrap: wrap; }
+.yc-succession h2 { margin: 0; font-size: 1.15rem; }.yc-succession h3 { font-size: 1rem; margin: 0; overflow-wrap: anywhere; }
+.yc-succession p,.yc-succession dt,.yc-succession small { font-size: .875rem; color: var(--muted, #64748b); }
+.yc-succession-grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(100%,360px),1fr)); gap: 1rem; margin-top: 1rem; }
+.yc-succession article { min-width: 0; border: 1px solid var(--border,#e2e8f0); border-radius: 12px; padding: 1rem; }
+.yc-succession-heading span { font-size: .75rem; background: #eef2ff; color: #3730a3; padding: .3rem .6rem; border-radius: 20px; }
+.yc-succession-heading span[data-status="reassignment_required"] { background: #fff7ed; color: #9a3412; }
+.yc-succession dl { display: grid; grid-template-columns: 1fr 1.4fr; gap: .55rem; font-size: .875rem; }.yc-succession dd { margin: 0; overflow-wrap: anywhere; }
+.yc-succession details { margin-top: .9rem; font-size: .875rem; }.yc-succession summary { cursor: pointer; }.yc-succession li { margin: .35rem 0; overflow-wrap: anywhere; }
+.yc-succession-toggle { display: flex; gap: .5rem; align-items: center; font-size: .875rem; }
+.yc-succession-assignment { margin-top: 1rem; display: grid; gap: .65rem; }.yc-succession-assignment label { display: grid; gap: .4rem; font-size: .875rem; }
+.yc-succession select { width: 100%; min-width: 0; padding: .65rem; border: 1px solid var(--border,#cbd5e1); border-radius: 8px; background: var(--card-bg,#fff); color: inherit; }
+.yc-succession button { justify-content: center; border: 1px solid var(--border,#cbd5e1); background: var(--card-bg,#fff); color: inherit; border-radius: 8px; padding: .65rem .9rem; cursor: pointer; font: inherit; font-size: .875rem; }
+.yc-succession button:disabled { opacity: .5; cursor: default; }.yc-succession .yc-succession-error { color: #b45309; }
+@media(max-width:480px) { .yc-succession dl { grid-template-columns: 1fr; }.yc-succession dd { margin-bottom: .45rem; }.yc-succession header>button { width: 100%; } }

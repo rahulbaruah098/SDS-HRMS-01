@@ -5,6 +5,7 @@ same tenant, and validation never grants approval merely from a broad role.
 """
 from decimal import Decimal
 from bson import ObjectId
+from app.services import team_responsibility as responsibility
 from app.services.local_conveyance import (MODE_TWO, MODE_FOUR, MODE_PUBLIC,
     MAX_FARE, MAX_KM, _amount, _money, _positive_rate)
 
@@ -83,9 +84,16 @@ def resolve_approver(db, tenant, employee):
         if len(matches) != 1:
             raise ValueError(f'{level.replace("_", " ").title()} mapping is missing or ambiguous. Ask HR to correct the employee reporting hierarchy.')
         manager = matches[0]
+        source_team = str(manager['_id']) if level == 'team_leader' else ''
+        if level == 'team_leader':
+            manager, state, _ = responsibility.effective(db, tenant, manager['_id'])
+            if not manager:
+                raise ValueError('Team Leader vacancy requires HR/Admin reassignment.')
+        elif not responsibility.capability(manager, 'ro'):
+            raise ValueError('Reporting Officer is unavailable. Ask HR to correct the mapping.')
         if str(manager['_id']) == str(employee['_id']):
             raise ValueError('Self-approval is not allowed. HR must map a separate approver.')
-        return {'type': level, 'employee_ref_id': str(manager['_id']),
+        return {'type': level, 'source_team_leader_id': source_team, 'employee_ref_id': str(manager['_id']),
                 'name': manager.get('name') or manager.get('full_name') or manager.get('employee_name') or '',
                 'user_id': str(manager.get('user_id') or '')}
     raise ValueError('No Team Leader or Reporting Officer is mapped. Ask HR to update your reporting hierarchy before submission.')
@@ -186,8 +194,11 @@ def can_confirm_payment(bill, employee, roles, user_id=None):
         not is_direct_accounts_bill(bill) or not direct_claimant(bill, employee, user_id))
 
 
-def is_approver(bill, employee, roles):
+def is_approver(bill, employee, roles, db=None):
     assigned = bill.get('approval') or {}
+    if db is not None and assigned.get('type') == 'team_leader':
+        return responsibility.can_lead(db, bill.get('tenant_id'), employee,
+            assigned.get('source_team_leader_id') or assigned.get('employee_ref_id'), bill.get('employee_ref_id'))
     if not employee or str(employee.get('_id')) != assigned.get('employee_ref_id'):
         return False
     if str(employee.get('_id')) == str(bill.get('employee_ref_id')):
@@ -219,12 +230,12 @@ def can_mark_paid(roles, employee):
     return _has_manager_payment_permission(roles, employee)
 
 
-def can_read(bill, employee, roles):
+def can_read(bill, employee, roles, db=None):
     if employee and str(bill.get('employee_ref_id')) in ids(employee):
         return True
     if roles & (ACCOUNT_ROLES | OVERSIGHT_ROLES):
         return bill.get('status') not in {'draft', 'pending_verification'}
-    if employee and is_approver(bill, employee, roles):
+    if employee and is_approver(bill, employee, roles, db=db):
         return bill.get('status') not in {'draft', 'pending_verification'}
     return False
 

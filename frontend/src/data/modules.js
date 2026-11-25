@@ -187,8 +187,10 @@ export const EMPLOYEE_PORTAL_ROLES = [
 export const TEAM_ROLES = EMPLOYEE_PORTAL_ROLES;
 
 export const PROJECT_ROLES = [
+  'admin', 'hr', 'hr_admin', 'hr_manager',
   ...CAPABILITY_ROLES,
   BASE_EMPLOYEE_ROLE,
+  'managing_director',
 ];
 
 export const FINANCE_ROLES = [
@@ -1079,6 +1081,7 @@ export function canViewProjectTeamTree(user) {
   const roles = effectiveRoleList(user);
 
   return (
+    hasAnyRole(roles, ['admin', 'hr', 'hr_admin', 'hr_manager', 'managing_director']) ||
     roles.includes(BASE_EMPLOYEE_ROLE) ||
     roles.some(isCapabilityRole)
   );

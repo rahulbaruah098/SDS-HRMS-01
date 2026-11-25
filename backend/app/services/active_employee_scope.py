@@ -57,7 +57,14 @@ def employee_is_active(employee):
     if employee.get('is_active') is False or employee.get('active') is False:
         return False
     if str(employee.get('last_working_date') or '').strip():
-        return False
+        from app.services.notice_period_service import parse_day, local_today
+        try:
+            # A validated notice schedule includes its last working day in IST.
+            serving = employee.get('notice_status') in ('scheduled', 'serving') and employee.get('notice_start_date')
+            if not serving or parse_day(employee.get('last_working_day')) < local_today():
+                return False
+        except (ValueError, TypeError):
+            return False
     from app.services.notice_period_service import notice_exit_due
     if notice_exit_due(employee):
         return False

@@ -1,4 +1,4 @@
-"""HR/Admin handover preview API; no mutation operations."""
+"""HR/Admin handover preview and explicit team-succession appointments."""
 from bson import ObjectId
 from functools import wraps
 import jwt
@@ -84,3 +84,37 @@ def handover_preview():
         current_app.logger.exception('Handover preview failed')
         return jsonify({'message':'Unable to generate handover preview'}),500
     return jsonify(result),200
+
+
+@employee_handover_bp.get('/succession')
+@_read_only_authenticated
+def succession_list():
+    from app.services import team_responsibility as r
+    roles = set(g.current_user.get('roles') or [])
+    if not roles.intersection(_ALLOWED) or roles.intersection({'super_admin', 'superadmin'}):
+        return jsonify({'message': 'Tenant HR/Admin role required'}), 403
+    db, tenant = get_db(), g.tenant_id
+    rows = [r.describe(db, tenant, source) for source in r.sources(db, tenant)]
+    candidates = [{'id': str(p['_id']), 'name': p.get('name') or p.get('employee_name') or 'Employee',
+        'department': p.get('department', ''),
+        'reporting_officer_id': str((r.resolve(db, tenant, p.get('reporting_officer_id')) or {}).get('_id') or '')}
+        for p in db.employees.find({'tenant_id': tenant}) if r.capability(p, 'tl')]
+    return jsonify({'items': rows, 'candidates': candidates})
+
+
+@employee_handover_bp.post('/succession/appoint')
+@_read_only_authenticated
+def succession_appoint():
+    from app.services import team_responsibility as r
+    roles = set(g.current_user.get('roles') or [])
+    if not roles.intersection(_ALLOWED) or roles.intersection({'super_admin', 'superadmin'}):
+        return jsonify({'message': 'Tenant HR/Admin role required'}), 403
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or data.get('confirmation') != 'ASSIGN' or type(data.get('version')) is not int:
+        return jsonify({'message': 'Review the team and confirm ASSIGN with its current version'}), 400
+    try:
+        item = r.appoint(get_db(), g.tenant_id, data.get('team_id'), data.get('replacement_employee_id'),
+                         data['version'], str(g.current_user['_id']))
+        return jsonify({'item': item, 'message': 'Team responsibilities assigned'})
+    except ValueError as exc:
+        return jsonify({'message': str(exc)}), 409

@@ -118,6 +118,10 @@ def advanced_execute():
     db,tenant,source,target,_,target_doc,eligible=ctx
     if len(_discover(ctx)['items']) > 3000:
         return err('Large handover requires manual review',409)
+    from app.services import team_responsibility as responsibility
+    succession = db.team_successions.find_one({'tenant_id': tenant, 'source_employee_id': source})
+    if succession and any(kind in {'team_leader_id', 'project_team_leader'} for kind, _ in keys):
+        return err('Use Team Leader succession to assign this vacant team as one handover.', 409)
     display_name=str(target_doc.get('name') or target_doc.get('employee_name') or 'Employee')
     results=[]
     for kind,rec_id in keys:

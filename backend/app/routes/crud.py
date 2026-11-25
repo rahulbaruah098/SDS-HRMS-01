@@ -5,6 +5,7 @@ from pymongo.errors import DuplicateKeyError
 from werkzeug.security import generate_password_hash
 import re
 
+from app.services import team_responsibility as responsibility
 from app.extensions import get_db
 from app.utils.auth import current_user_required, audit
 from app.utils.serializers import clean_doc
@@ -493,6 +494,16 @@ def ensure_saas_collection_access(collection, action="read", db=None):
     """
 
     collection = normalize_key(collection)
+
+    if collection == "projects":
+        user = getattr(g, "current_user", {}) or {}
+        if saas_is_platform_superadmin(user) or is_super_admin():
+            return jsonify({"message": "Projects are available only to tenant users"}), 403
+        if not user.get("tenant_id"):
+            return jsonify({"message": "Company context is required"}), 403
+        if action != "read":
+            return jsonify({"message": "Use the dedicated Projects API for project changes"}), 403
+        return None
 
     if collection != "employees" or action != "create":
         return None
@@ -1841,15 +1852,8 @@ def normalize_employee_reporting_mapping(db, payload, tenant_id, existing=None):
 
 
 def can_create_assign_or_collaborate_projects():
-    db = get_db()
-    roles = current_user_roles()
-    employee = get_current_employee(db)
-
-    return bool(
-        roles.intersection(PROJECT_CREATOR_ROLES)
-        or employee_is_team_leader(employee)
-        or employee_is_reporting_officer(employee)
-    )
+    from app.routes.projects import can_create_assign_or_collaborate_projects as allowed
+    return allowed(get_db())
 
 
 def project_member_ids(project):
@@ -2436,80 +2440,14 @@ def apply_common_filters(collection, q):
 
 
 def project_scope_query(db, q):
-    roles = current_user_roles()
-
-    if roles.intersection(ADMIN_ROLES):
-        return q
-
-    employee = get_current_employee(db)
-
-    if not employee:
-        q["_id"] = {"$exists": False}
-        return q
-
-    employee_id = str(employee["_id"])
-    
-    identifier_values = employee_identifier_values(employee)
-
-    if employee_id not in identifier_values:
-        identifier_values.append(employee_id)
-
-    q["$or"] = [
-        {"created_by_employee_id": {"$in": identifier_values}},
-        {"team_leader_id": {"$in": identifier_values}},
-        {"reporting_officer_id": {"$in": identifier_values}},
-        {"assigned_to_id": {"$in": identifier_values}},
-        {"assigned_employee_ids": {"$in": identifier_values}},
-        {"assigned_members.employee_id": {"$in": identifier_values}},
-        {"collaborator_ids": {"$in": identifier_values}},
-        {"collaborators.employee_id": {"$in": identifier_values}},
-        {"latest_progress_by": {"$in": identifier_values}},
-    ]
-
-    return q
+    from app.routes.projects import project_scope_query as scoped
+    return {'$and': [q, scoped(db)]}
 
 
 def employee_scoped_ids_for_current_user(db):
-    roles = current_user_roles()
-
-    if roles.intersection(ADMIN_ROLES):
+    if current_user_roles().intersection(ADMIN_ROLES):
         return None
-
-    employee = get_current_employee(db)
-
-    if not employee:
-        return []
-
-    employee_id = str(employee["_id"])
-    identifier_values = employee_identifier_values(employee)
-
-    if employee_id not in identifier_values:
-        identifier_values.append(employee_id)
-
-    scope_or = []
-
-    if "team_leader" in roles or employee_is_team_leader(employee):
-        scope_or.append({"team_leader_id": {"$in": identifier_values}})
-
-    if "reporting_officer" in roles or employee_is_reporting_officer(employee):
-        scope_or.append({"reporting_officer_id": {"$in": identifier_values}})
-
-    if not scope_or:
-        return [employee_id]
-
-    rows = list(db.employees.find({
-        "tenant_id": employee.get("tenant_id") or current_tenant_id(),
-        **active_employee_fields(),
-        "is_deleted": {"$ne": True},
-        "$or": scope_or,
-    }, {"_id": 1}))
-
-    scoped_ids = [str(row["_id"]) for row in rows]
-
-    if employee_id not in scoped_ids:
-        scoped_ids.append(employee_id)
-
-    return scoped_ids
+    return [str(p['_id']) for p in responsibility.scoped_people(db, current_tenant_id(), get_current_employee(db))]
 
 
 def employee_owned_collection_scope(db, q, employee_field="employee_id"):
@@ -2565,30 +2503,15 @@ def payslip_scope_query(db, q):
 
 
 def expense_scope_query(db, q):
-    """Restrict non-privileged users to their own expense records."""
     roles = current_user_roles()
-
     if roles.intersection(PAYROLL_PRIVILEGED_READ_ROLES):
         return q
-
     employee = get_current_employee(db)
-
-    if not employee:
-        q["_id"] = {"$exists": False}
-        return q
-
-    identifiers = employee_identifier_values(employee)
-    canonical_id = normalize_text(employee.get("_id"))
-
-    if canonical_id and canonical_id not in identifiers:
-        identifiers.append(canonical_id)
-
-    if not identifiers:
-        q["_id"] = {"$exists": False}
-        return q
-
-    q["employee_id"] = {"$in": identifiers}
-    return q
+    own = sorted(responsibility.identifiers(employee))
+    members = responsibility.scoped_people(db, current_tenant_id(), employee, include_self=False)
+    scoped = sorted({v for person in members for v in responsibility.identifiers(person)})
+    return {'$and': [q, {'tenant_id': current_tenant_id(), '$or': [
+        {'employee_id': {'$in': own}}, {'employee_id': {'$in': scoped}, 'status': 'pending'}]}]}
 
 
 def expense_employee_snapshot(db, employee_reference):
@@ -2772,48 +2695,8 @@ def performance_review_scope_query(db, q):
 
 
 def leave_request_scope_query(db, q):
-    roles = current_user_roles()
-
-    if roles.intersection(ADMIN_ROLES):
-        return q
-
-    employee = get_current_employee(db)
-
-    if not employee:
-        q["_id"] = {"$exists": False}
-        return q
-
-    employee_id = str(employee["_id"])
-    identifier_values = employee_identifier_values(employee)
-
-    if employee_id not in identifier_values:
-        identifier_values.append(employee_id)
-
-    scope_or = [{"employee_id": {"$in": identifier_values}}]
-
-    if "team_leader" in roles or employee_is_team_leader(employee):
-        scope_or.append({
-            "team_leader_id": {"$in": identifier_values},
-            "approval_stage": "team_leader",
-        })
-
-    if "reporting_officer" in roles or employee_is_reporting_officer(employee):
-        scope_or.append({
-            "reporting_officer_id": {"$in": identifier_values},
-            "approval_stage": "reporting_officer",
-        })
-
-    if "$or" in q:
-        q = {
-            "$and": [
-                q,
-                {"$or": scope_or},
-            ]
-        }
-    else:
-        q["$or"] = scope_or
-
-    return q
+    from app.routes.workflow import leave_list_scope_query
+    return {'$and': [q, leave_list_scope_query(db)]}
 
 
 def notification_scope_query(q):
@@ -4094,6 +3977,9 @@ def employee_directory():
 @crud_bp.get("/<collection>")
 @current_user_required
 def list_collection(collection):
+    if normalize_key(collection) == "projects":
+        from app.routes import projects as dedicated_projects
+        return dedicated_projects.list_projects()
     collection = normalize_key(collection)
 
     if not collection_exists(collection):
@@ -4666,6 +4552,9 @@ def get_alumni_history(employee_id):
 @crud_bp.get("/<collection>/<item_id>")
 @current_user_required
 def get_collection_item(collection, item_id):
+    if normalize_key(collection) == "projects":
+        from app.routes import projects as dedicated_projects
+        return dedicated_projects.get_project_detail(item_id)
     collection = normalize_key(collection)
 
     if not collection_exists(collection):
@@ -4728,6 +4617,9 @@ def get_collection_item(collection, item_id):
 @crud_bp.post("/<collection>")
 @current_user_required
 def create_collection_item(collection):
+    if normalize_key(collection) == "projects":
+        from app.routes import projects as dedicated_projects
+        return dedicated_projects.create_project()
     collection = normalize_key(collection)
 
     if not collection_exists(collection):
@@ -4996,6 +4888,9 @@ def create_collection_item(collection):
 @crud_bp.patch("/<collection>/<item_id>")
 @current_user_required
 def update_collection_item(collection, item_id):
+    if normalize_key(collection) == "projects":
+        from app.routes import projects as dedicated_projects
+        return dedicated_projects.update_project(item_id)
     collection = normalize_key(collection)
 
     if not collection_exists(collection):
@@ -5541,6 +5436,9 @@ def update_collection_item(collection, item_id):
 @crud_bp.delete("/<collection>/<item_id>")
 @current_user_required
 def delete_collection_item(collection, item_id):
+    if normalize_key(collection) == "projects":
+        from app.routes import projects as dedicated_projects
+        return dedicated_projects.delete_project(item_id)
     collection = normalize_key(collection)
 
     if not collection_exists(collection):

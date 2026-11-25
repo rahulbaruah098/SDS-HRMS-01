@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import FaceCamera from './FaceCamera';
+import { api } from '../api/client';
 import {
   buildAttendancePayload,
   createHolidayWorkRequest,
@@ -807,6 +808,15 @@ async function submitAttendance(type) {
 
   try {
     setLoadingType(type);
+    if (type === 'check-out') {
+      const readiness = await api('/attendance/checkout-readiness');
+      if (!readiness.checkout_allowed) {
+        sessionStorage.setItem('yourcomate-project-tab', 'daily');
+        alerts.warning(readiness.message, 'Daily work reports required');
+        if (typeof onNavigate === 'function') onNavigate('projects');
+        return false;
+      }
+    }
     const identity = await identityFields(type);
     if (!identity) return false;
     alerts.info('Capturing GPS location. Please wait...', 'GPS Capture');

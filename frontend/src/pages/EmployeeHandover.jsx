@@ -1,3 +1,4 @@
+import TeamSuccessionPanel from '../components/TeamSuccessionPanel';
 import React, { useEffect, useMemo, useState } from 'react';
 import { ArrowLeft, ArrowRight, CheckCircle2, ClipboardCheck, FolderKanban, History, Info, Loader2, RefreshCw, ShieldCheck, UserRoundCheck, Users, AlertTriangle, ChevronRight } from 'lucide-react';
 import { api, getActiveEmployees, getAlumniEmployees } from '../api/client';
@@ -124,6 +125,7 @@ export default function EmployeeHandover({ setPage }) {
   const selectAll = () => setSelected(candidates.map(keyFor));
 
   return <main className="yc-handover">
+    <TeamSuccessionPanel />
     <header className="yc-handover-header">
       <div className="yc-handover-title-wrap">
         <div className="yc-handover-breadcrumb">Employee Management <ChevronRight size={13} aria-hidden="true" /> <span>Work handover</span></div>

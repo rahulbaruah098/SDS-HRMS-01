@@ -3,6 +3,7 @@ from bson import ObjectId
 from datetime import datetime, date, timedelta
 import re
 
+from app.services import team_responsibility as responsibility
 from app.extensions import get_db
 from app.utils.auth import current_user_required
 from app.utils.serializers import clean_doc
@@ -605,34 +606,8 @@ def employee_identifier_values(employee):
 
 
 def employee_mapping_query(field_name, employee, tenant_id):
-    identifier_values = employee_identifier_values(employee)
-
-    tenant_text = normalize_text(tenant_id)
-    tenant_values = list(dict.fromkeys([
-        tenant_text,
-        tenant_text.lower(),
-        tenant_text.upper(),
-    ]))
-
-    return {
-        "$and": [
-            {
-                "$or": [
-                    {"tenant_id": {"$in": tenant_values}},
-                    {"tenant_id": {"$exists": False}},
-                    {"tenant_id": None},
-                    {"tenant_id": ""},
-                ]
-            },
-            {
-                field_name: {"$in": identifier_values},
-            },
-            {
-                **active_employee_fields(),
-                "is_deleted": {"$ne": True},
-            },
-        ]
-    }
+    values = responsibility.leader_aliases(get_db(), tenant_id, employee) if field_name == 'team_leader_id' else list(responsibility.identifiers(employee))
+    return {'tenant_id': tenant_id, **active_employee_fields(), field_name: {'$in': values}}
 
 def employee_state(employee):
     employee = employee or {}
@@ -1059,33 +1034,8 @@ def employee_snapshot(employee, roles=None):
 
 
 def scoped_employee_ids_for_manager(db, tenant_id, emp_id, roles, employee=None):
-    scope_or = []
-    employee = employee or {}
-
-    identifier_values = employee_identifier_values(employee)
-
-    if emp_id and emp_id not in identifier_values:
-        identifier_values.append(emp_id)
-
-    if is_team_leader_capability(employee, roles):
-        scope_or.append({"team_leader_id": {"$in": identifier_values}})
-
-    if is_reporting_officer_capability(employee, roles):
-        scope_or.append({"reporting_officer_id": {"$in": identifier_values}})
-
-    if not scope_or:
-        return []
-
-    rows = list(
-        db.employees.find({
-            "tenant_id": tenant_id,
-            **active_employee_fields(),
-            "is_deleted": {"$ne": True},
-            "$or": scope_or,
-        })
-    )
-
-    return [str(row["_id"]) for row in rows]
+    actor = employee or responsibility.resolve(db, tenant_id, emp_id)
+    return [str(p['_id']) for p in responsibility.scoped_people(db, tenant_id, actor)]
 
 
 def pending_leave_scope_for_employee_capability(tenant_id, emp_id, employee, roles):
@@ -1095,9 +1045,9 @@ def pending_leave_scope_for_employee_capability(tenant_id, emp_id, employee, rol
     if emp_id and emp_id not in identifier_values:
         identifier_values.append(emp_id)
 
-    if is_team_leader_capability(employee, roles):
+    if responsibility.leader_aliases(get_db(), tenant_id, employee):
         stage_or.append({
-            "team_leader_id": {"$in": identifier_values},
+            "team_leader_id": {"$in": responsibility.leader_aliases(get_db(), tenant_id, employee)},
             "approval_stage": "team_leader",
         })
 
@@ -1125,9 +1075,9 @@ def pending_attendance_mode_scope_for_employee_capability(tenant_id, emp_id, emp
     if emp_id and emp_id not in identifier_values:
         identifier_values.append(emp_id)
 
-    if is_team_leader_capability(employee, roles):
+    if responsibility.leader_aliases(get_db(), tenant_id, employee):
         stage_or.append({
-            "team_leader_id": {"$in": identifier_values},
+            "team_leader_id": {"$in": responsibility.leader_aliases(get_db(), tenant_id, employee)},
             "approval_stage": "team_leader",
         })
 
@@ -1247,7 +1197,7 @@ def build_project_team_tree(db, tenant_id, project, latest=None):
     latest = latest or {}
 
     reporting_officer = employee_by_id(db, tenant_id, project.get("reporting_officer_id"))
-    team_leader = employee_by_id(db, tenant_id, project.get("team_leader_id"))
+    team_leader, _, _ = responsibility.effective(db, tenant_id, project.get('team_leader_id'))
 
     if not reporting_officer and team_leader and team_leader.get("reporting_officer_id"):
         reporting_officer = employee_by_id(db, tenant_id, team_leader.get("reporting_officer_id"))
@@ -1370,7 +1320,7 @@ def build_employee_team_hierarchy_tree(db, tenant_id, employee, roles, team_memb
         reporting_officer = employee_by_id(db, tenant_id, employee.get("reporting_officer_id"))
 
     if employee.get("team_leader_id"):
-        team_leader = employee_by_id(db, tenant_id, employee.get("team_leader_id"))
+        team_leader, _, _ = responsibility.effective(db, tenant_id, employee.get('team_leader_id'))
 
     reporting_officer_payload = (
         employee_member_payload(reporting_officer, "reporting_officer")
@@ -1471,94 +1421,13 @@ def completed_project_query(tenant_id, extra=None):
 
 
 def project_scope_for_employee(tenant_id, emp_id, employee=None):
-    employee = employee or {}
-    identifier_values = employee_identifier_values(employee)
-
-    if emp_id and emp_id not in identifier_values:
-        identifier_values.append(emp_id)
-
-    tenant_text = normalize_text(tenant_id)
-    tenant_values = list(dict.fromkeys([
-        tenant_text,
-        tenant_text.lower(),
-        tenant_text.upper(),
-    ]))
-
-    return {
-        "$and": [
-            {
-                "$or": [
-                    {"tenant_id": {"$in": tenant_values}},
-                    {"tenant_id": {"$exists": False}},
-                    {"tenant_id": None},
-                    {"tenant_id": ""},
-                ]
-            },
-            {
-                "is_deleted": {"$ne": True},
-                "$or": [
-                    {"created_by_employee_id": {"$in": identifier_values}},
-                    {"created_by": {"$in": identifier_values}},
-
-                    {"team_leader_id": {"$in": identifier_values}},
-                    {"reporting_officer_id": {"$in": identifier_values}},
-
-                    {"assigned_to_id": {"$in": identifier_values}},
-                    {"assigned_employee_ids": {"$in": identifier_values}},
-                    {"assigned_members.employee_id": {"$in": identifier_values}},
-                    {"assigned_members.user_id": {"$in": identifier_values}},
-                    {"assigned_members.employee_code": {"$in": identifier_values}},
-                    {"assigned_members.emp_code": {"$in": identifier_values}},
-                    {"assigned_members.email": {"$in": identifier_values}},
-
-                    {"collaborator_ids": {"$in": identifier_values}},
-                    {"collaborators.employee_id": {"$in": identifier_values}},
-                    {"collaborators.user_id": {"$in": identifier_values}},
-                    {"collaborators.employee_code": {"$in": identifier_values}},
-                    {"collaborators.emp_code": {"$in": identifier_values}},
-                    {"collaborators.email": {"$in": identifier_values}},
-
-                    {"latest_progress_by": {"$in": identifier_values}},
-                ],
-            },
-        ]
-    }
+    from app.routes.projects import project_scope_query
+    return project_scope_query(get_db())
 
 
 def project_scope_for_team_leader(tenant_id, emp_id, employee=None):
-    employee = employee or {}
-    identifier_values = employee_identifier_values(employee)
-
-    if emp_id and emp_id not in identifier_values:
-        identifier_values.append(emp_id)
-
-    tenant_text = normalize_text(tenant_id)
-    tenant_values = list(dict.fromkeys([
-        tenant_text,
-        tenant_text.lower(),
-        tenant_text.upper(),
-    ]))
-
-    return {
-        "$and": [
-            {
-                "$or": [
-                    {"tenant_id": {"$in": tenant_values}},
-                    {"tenant_id": {"$exists": False}},
-                    {"tenant_id": None},
-                    {"tenant_id": ""},
-                ]
-            },
-            {
-                "is_deleted": {"$ne": True},
-                "$or": [
-                    {"created_by_employee_id": {"$in": identifier_values}},
-                    {"created_by": {"$in": identifier_values}},
-                    {"team_leader_id": {"$in": identifier_values}},
-                ],
-            },
-        ]
-    }
+    from app.routes.projects import project_scope_query
+    return project_scope_query(get_db())
 
 
 def project_scope_for_reporting_officer(tenant_id, team_leader_ids, reporting_officer_id=None):

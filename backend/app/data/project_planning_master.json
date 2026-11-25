@@ -1,0 +1,1681 @@
+{
+  "functions": [
+    "Administration & Procurement",
+    "Agriculture & Livestock",
+    "All Departments",
+    "Business Development & Partnerships",
+    "Communications & Knowledge",
+    "Enterprise & Market Development",
+    "Finance & Accounts",
+    "Human Resources",
+    "IT & HRMS",
+    "MIS & Data",
+    "Management & Quality Assurance",
+    "Project Implementation",
+    "Research & Studies"
+  ],
+  "priorities": [
+    "High",
+    "Medium",
+    "Low"
+  ],
+  "task_statuses": [
+    "Not Started",
+    "In Progress",
+    "Completed",
+    "Blocked",
+    "Deferred"
+  ],
+  "approval_statuses": [
+    "Draft",
+    "Submitted",
+    "Approved",
+    "Revision Required"
+  ],
+  "deliverable_statuses": [
+    "Not Started",
+    "In Progress",
+    "Completed",
+    "Delayed"
+  ],
+  "units": [
+    "Count",
+    "Households",
+    "Surveys",
+    "Villages",
+    "FGDs",
+    "Reports",
+    "Documents",
+    "Meetings",
+    "Trainings",
+    "Participants",
+    "Days",
+    "Other"
+  ],
+  "tasks": [
+    {
+      "code": "SDS-0001",
+      "function": "Research & Studies",
+      "activity": "Study Design",
+      "task": "Review ToR and objectives",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0002",
+      "function": "Research & Studies",
+      "activity": "Study Design",
+      "task": "Prepare research framework",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0003",
+      "function": "Research & Studies",
+      "activity": "Study Design",
+      "task": "Develop study methodology",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0004",
+      "function": "Research & Studies",
+      "activity": "Study Design",
+      "task": "Prepare work plan",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0005",
+      "function": "Research & Studies",
+      "activity": "Sampling Design",
+      "task": "Define sampling population",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0006",
+      "function": "Research & Studies",
+      "activity": "Sampling Design",
+      "task": "Prepare sampling frame",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0007",
+      "function": "Research & Studies",
+      "activity": "Sampling Design",
+      "task": "Calculate sample size",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0008",
+      "function": "Research & Studies",
+      "activity": "Sampling Design",
+      "task": "Develop sampling strategy",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0009",
+      "function": "Research & Studies",
+      "activity": "Sampling Design",
+      "task": "Validate sample allocation",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0010",
+      "function": "Research & Studies",
+      "activity": "Research Tools",
+      "task": "Develop questionnaire",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0011",
+      "function": "Research & Studies",
+      "activity": "Research Tools",
+      "task": "Prepare FGD guide",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0012",
+      "function": "Research & Studies",
+      "activity": "Research Tools",
+      "task": "Prepare KII guide",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0013",
+      "function": "Research & Studies",
+      "activity": "Research Tools",
+      "task": "Pilot and revise tools",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0014",
+      "function": "Research & Studies",
+      "activity": "Research Tools",
+      "task": "Configure digital survey form",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0015",
+      "function": "Research & Studies",
+      "activity": "Field Research",
+      "task": "Train enumerators",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0016",
+      "function": "Research & Studies",
+      "activity": "Field Research",
+      "task": "Conduct household interviews",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0017",
+      "function": "Research & Studies",
+      "activity": "Field Research",
+      "task": "Conduct key informant interviews",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0018",
+      "function": "Research & Studies",
+      "activity": "Field Research",
+      "task": "Facilitate focus group discussion",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0019",
+      "function": "Research & Studies",
+      "activity": "Field Research",
+      "task": "Supervise field survey",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0020",
+      "function": "Research & Studies",
+      "activity": "Data Processing",
+      "task": "Check survey completeness",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0021",
+      "function": "Research & Studies",
+      "activity": "Data Processing",
+      "task": "Clean and code data",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0022",
+      "function": "Research & Studies",
+      "activity": "Data Processing",
+      "task": "Validate datasets",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0023",
+      "function": "Research & Studies",
+      "activity": "Data Processing",
+      "task": "Prepare analysis tables",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0024",
+      "function": "Research & Studies",
+      "activity": "Analysis & Reporting",
+      "task": "Conduct quantitative analysis",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0025",
+      "function": "Research & Studies",
+      "activity": "Analysis & Reporting",
+      "task": "Analyse qualitative findings",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0026",
+      "function": "Research & Studies",
+      "activity": "Analysis & Reporting",
+      "task": "Draft inception report",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0027",
+      "function": "Research & Studies",
+      "activity": "Analysis & Reporting",
+      "task": "Draft findings and recommendations",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0028",
+      "function": "Research & Studies",
+      "activity": "Analysis & Reporting",
+      "task": "Prepare final research report",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0029",
+      "function": "Research & Studies",
+      "activity": "Analysis & Reporting",
+      "task": "Present study findings",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0030",
+      "function": "Project Implementation",
+      "activity": "Project Initiation",
+      "task": "Review contract and deliverables",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0031",
+      "function": "Project Implementation",
+      "activity": "Project Initiation",
+      "task": "Prepare implementation plan",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0032",
+      "function": "Project Implementation",
+      "activity": "Project Initiation",
+      "task": "Conduct inception meeting",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0033",
+      "function": "Project Implementation",
+      "activity": "Project Initiation",
+      "task": "Assign team responsibilities",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0034",
+      "function": "Project Implementation",
+      "activity": "Field Mobilisation",
+      "task": "Identify target villages",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0035",
+      "function": "Project Implementation",
+      "activity": "Field Mobilisation",
+      "task": "Mobilise community participants",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0036",
+      "function": "Project Implementation",
+      "activity": "Field Mobilisation",
+      "task": "Facilitate village meeting",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0037",
+      "function": "Project Implementation",
+      "activity": "Field Mobilisation",
+      "task": "Identify eligible households",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0038",
+      "function": "Project Implementation",
+      "activity": "Livelihood Support",
+      "task": "Assess household livelihood needs",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0039",
+      "function": "Project Implementation",
+      "activity": "Livelihood Support",
+      "task": "Prepare household livelihood plan",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0040",
+      "function": "Project Implementation",
+      "activity": "Livelihood Support",
+      "task": "Coordinate asset distribution",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0041",
+      "function": "Project Implementation",
+      "activity": "Livelihood Support",
+      "task": "Provide technical handholding",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0042",
+      "function": "Project Implementation",
+      "activity": "Livelihood Support",
+      "task": "Track livelihood outcomes",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0043",
+      "function": "Project Implementation",
+      "activity": "Capacity Building",
+      "task": "Assess training needs",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0044",
+      "function": "Project Implementation",
+      "activity": "Capacity Building",
+      "task": "Prepare training curriculum",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0045",
+      "function": "Project Implementation",
+      "activity": "Capacity Building",
+      "task": "Conduct training session",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0046",
+      "function": "Project Implementation",
+      "activity": "Capacity Building",
+      "task": "Assess learning outcomes",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0047",
+      "function": "Project Implementation",
+      "activity": "Field Monitoring",
+      "task": "Conduct monitoring visit",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0048",
+      "function": "Project Implementation",
+      "activity": "Field Monitoring",
+      "task": "Verify field progress",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0049",
+      "function": "Project Implementation",
+      "activity": "Field Monitoring",
+      "task": "Document implementation gaps",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0050",
+      "function": "Project Implementation",
+      "activity": "Field Monitoring",
+      "task": "Follow up corrective actions",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0051",
+      "function": "Project Implementation",
+      "activity": "Project Reporting",
+      "task": "Compile field progress",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0052",
+      "function": "Project Implementation",
+      "activity": "Project Reporting",
+      "task": "Prepare monthly progress report",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0053",
+      "function": "Project Implementation",
+      "activity": "Project Reporting",
+      "task": "Prepare donor utilisation report",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0054",
+      "function": "Project Implementation",
+      "activity": "Project Reporting",
+      "task": "Submit deliverable to client",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0055",
+      "function": "Agriculture & Livestock",
+      "activity": "Technical Assessment",
+      "task": "Assess farming practices",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0056",
+      "function": "Agriculture & Livestock",
+      "activity": "Technical Assessment",
+      "task": "Assess livestock production systems",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0057",
+      "function": "Agriculture & Livestock",
+      "activity": "Technical Assessment",
+      "task": "Identify input and service gaps",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0058",
+      "function": "Agriculture & Livestock",
+      "activity": "Production Support",
+      "task": "Prepare seasonal crop plan",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0059",
+      "function": "Agriculture & Livestock",
+      "activity": "Production Support",
+      "task": "Facilitate input access",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0060",
+      "function": "Agriculture & Livestock",
+      "activity": "Production Support",
+      "task": "Coordinate veterinary services",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0061",
+      "function": "Agriculture & Livestock",
+      "activity": "Production Support",
+      "task": "Support improved husbandry practices",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0062",
+      "function": "Agriculture & Livestock",
+      "activity": "Value Chain Development",
+      "task": "Map value chain actors",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0063",
+      "function": "Agriculture & Livestock",
+      "activity": "Value Chain Development",
+      "task": "Assess market demand",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0064",
+      "function": "Agriculture & Livestock",
+      "activity": "Value Chain Development",
+      "task": "Identify aggregation opportunities",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0065",
+      "function": "Agriculture & Livestock",
+      "activity": "Value Chain Development",
+      "task": "Develop business linkage plan",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0066",
+      "function": "Agriculture & Livestock",
+      "activity": "Producer Institutions",
+      "task": "Facilitate FPO/SHG meeting",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0067",
+      "function": "Agriculture & Livestock",
+      "activity": "Producer Institutions",
+      "task": "Support member mobilisation",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0068",
+      "function": "Agriculture & Livestock",
+      "activity": "Producer Institutions",
+      "task": "Review governance compliance",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0069",
+      "function": "Agriculture & Livestock",
+      "activity": "Producer Institutions",
+      "task": "Prepare producer business plan",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0070",
+      "function": "Enterprise & Market Development",
+      "activity": "Enterprise Assessment",
+      "task": "Identify enterprise opportunities",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0071",
+      "function": "Enterprise & Market Development",
+      "activity": "Enterprise Assessment",
+      "task": "Assess enterprise viability",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0072",
+      "function": "Enterprise & Market Development",
+      "activity": "Enterprise Assessment",
+      "task": "Prepare enterprise profile",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0073",
+      "function": "Enterprise & Market Development",
+      "activity": "Business Planning",
+      "task": "Prepare cost and revenue estimates",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0074",
+      "function": "Enterprise & Market Development",
+      "activity": "Business Planning",
+      "task": "Develop business model",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0075",
+      "function": "Enterprise & Market Development",
+      "activity": "Business Planning",
+      "task": "Prepare business plan",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0076",
+      "function": "Enterprise & Market Development",
+      "activity": "Product Development",
+      "task": "Assess product quality",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0077",
+      "function": "Enterprise & Market Development",
+      "activity": "Product Development",
+      "task": "Review packaging and labelling",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0078",
+      "function": "Enterprise & Market Development",
+      "activity": "Product Development",
+      "task": "Develop SKU and pricing plan",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0079",
+      "function": "Enterprise & Market Development",
+      "activity": "Market Linkage",
+      "task": "Identify potential buyers",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0080",
+      "function": "Enterprise & Market Development",
+      "activity": "Market Linkage",
+      "task": "Conduct buyer meetings",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0081",
+      "function": "Enterprise & Market Development",
+      "activity": "Market Linkage",
+      "task": "Negotiate supply terms",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0082",
+      "function": "Enterprise & Market Development",
+      "activity": "Market Linkage",
+      "task": "Coordinate trial sales",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0083",
+      "function": "Enterprise & Market Development",
+      "activity": "Enterprise Monitoring",
+      "task": "Review sales and margins",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0084",
+      "function": "Enterprise & Market Development",
+      "activity": "Enterprise Monitoring",
+      "task": "Track inventory and orders",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0085",
+      "function": "Enterprise & Market Development",
+      "activity": "Enterprise Monitoring",
+      "task": "Assess enterprise performance",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0086",
+      "function": "MIS & Data",
+      "activity": "Data Collection Systems",
+      "task": "Design data capture format",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0087",
+      "function": "MIS & Data",
+      "activity": "Data Collection Systems",
+      "task": "Configure MIS forms",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0088",
+      "function": "MIS & Data",
+      "activity": "Data Collection Systems",
+      "task": "Test data entry workflow",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0089",
+      "function": "MIS & Data",
+      "activity": "Data Management",
+      "task": "Enter and upload data",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0090",
+      "function": "MIS & Data",
+      "activity": "Data Management",
+      "task": "Clean data records",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0091",
+      "function": "MIS & Data",
+      "activity": "Data Management",
+      "task": "Update master database",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0092",
+      "function": "MIS & Data",
+      "activity": "Data Quality",
+      "task": "Verify records",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0093",
+      "function": "MIS & Data",
+      "activity": "Data Quality",
+      "task": "Conduct consistency checks",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0094",
+      "function": "MIS & Data",
+      "activity": "Data Quality",
+      "task": "Resolve data discrepancies",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0095",
+      "function": "MIS & Data",
+      "activity": "Analytics & Dashboards",
+      "task": "Prepare summary tables",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0096",
+      "function": "MIS & Data",
+      "activity": "Analytics & Dashboards",
+      "task": "Update project dashboard",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0097",
+      "function": "MIS & Data",
+      "activity": "Analytics & Dashboards",
+      "task": "Analyse KPI trends",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0098",
+      "function": "MIS & Data",
+      "activity": "Analytics & Dashboards",
+      "task": "Generate MIS report",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0099",
+      "function": "IT & HRMS",
+      "activity": "Requirement Analysis",
+      "task": "Gather user requirements",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0100",
+      "function": "IT & HRMS",
+      "activity": "Requirement Analysis",
+      "task": "Prepare functional specifications",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0101",
+      "function": "IT & HRMS",
+      "activity": "UI/UX Design",
+      "task": "Design screens",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0102",
+      "function": "IT & HRMS",
+      "activity": "UI/UX Design",
+      "task": "Review UI/UX",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0103",
+      "function": "IT & HRMS",
+      "activity": "Development",
+      "task": "Develop frontend module",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0104",
+      "function": "IT & HRMS",
+      "activity": "Development",
+      "task": "Develop backend module",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0105",
+      "function": "IT & HRMS",
+      "activity": "Development",
+      "task": "Integrate API",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0106",
+      "function": "IT & HRMS",
+      "activity": "Testing",
+      "task": "Conduct functional testing",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0107",
+      "function": "IT & HRMS",
+      "activity": "Testing",
+      "task": "Log and fix defects",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0108",
+      "function": "IT & HRMS",
+      "activity": "Testing",
+      "task": "Conduct user acceptance testing",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0109",
+      "function": "IT & HRMS",
+      "activity": "Deployment & Support",
+      "task": "Deploy application",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0110",
+      "function": "IT & HRMS",
+      "activity": "Deployment & Support",
+      "task": "Prepare user documentation",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0111",
+      "function": "IT & HRMS",
+      "activity": "Deployment & Support",
+      "task": "Resolve user support tickets",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0112",
+      "function": "IT & HRMS",
+      "activity": "Information Security",
+      "task": "Review user permissions",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0113",
+      "function": "IT & HRMS",
+      "activity": "Information Security",
+      "task": "Back up critical data",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0114",
+      "function": "IT & HRMS",
+      "activity": "Information Security",
+      "task": "Check system access controls",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0115",
+      "function": "Human Resources",
+      "activity": "Recruitment",
+      "task": "Prepare job description",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0116",
+      "function": "Human Resources",
+      "activity": "Recruitment",
+      "task": "Publish vacancy",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0117",
+      "function": "Human Resources",
+      "activity": "Recruitment",
+      "task": "Screen applications",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0118",
+      "function": "Human Resources",
+      "activity": "Recruitment",
+      "task": "Coordinate assessment and interview",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0119",
+      "function": "Human Resources",
+      "activity": "Recruitment",
+      "task": "Complete joining formalities",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0120",
+      "function": "Human Resources",
+      "activity": "Employee Administration",
+      "task": "Update employee records",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0121",
+      "function": "Human Resources",
+      "activity": "Employee Administration",
+      "task": "Track attendance and leave",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0122",
+      "function": "Human Resources",
+      "activity": "Employee Administration",
+      "task": "Maintain personnel documentation",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0123",
+      "function": "Human Resources",
+      "activity": "Performance Management",
+      "task": "Coordinate monthly plans",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0124",
+      "function": "Human Resources",
+      "activity": "Performance Management",
+      "task": "Review sprint completion",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0125",
+      "function": "Human Resources",
+      "activity": "Performance Management",
+      "task": "Support performance feedback",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0126",
+      "function": "Human Resources",
+      "activity": "Learning & Development",
+      "task": "Conduct training needs assessment",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0127",
+      "function": "Human Resources",
+      "activity": "Learning & Development",
+      "task": "Prepare staff development plan",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0128",
+      "function": "Human Resources",
+      "activity": "Learning & Development",
+      "task": "Coordinate employee training",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0129",
+      "function": "Human Resources",
+      "activity": "HR Compliance",
+      "task": "Review statutory HR records",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0130",
+      "function": "Human Resources",
+      "activity": "HR Compliance",
+      "task": "Prepare HR compliance report",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0131",
+      "function": "Finance & Accounts",
+      "activity": "Accounting",
+      "task": "Record vouchers and transactions",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0132",
+      "function": "Finance & Accounts",
+      "activity": "Accounting",
+      "task": "Reconcile bank accounts",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0133",
+      "function": "Finance & Accounts",
+      "activity": "Accounting",
+      "task": "Review ledger entries",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0134",
+      "function": "Finance & Accounts",
+      "activity": "Budgeting",
+      "task": "Prepare project budget",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0135",
+      "function": "Finance & Accounts",
+      "activity": "Budgeting",
+      "task": "Review budget utilisation",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0136",
+      "function": "Finance & Accounts",
+      "activity": "Budgeting",
+      "task": "Prepare budget variance report",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0137",
+      "function": "Finance & Accounts",
+      "activity": "Payments & Claims",
+      "task": "Verify bills and claims",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0138",
+      "function": "Finance & Accounts",
+      "activity": "Payments & Claims",
+      "task": "Process vendor payments",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0139",
+      "function": "Finance & Accounts",
+      "activity": "Payments & Claims",
+      "task": "Review staff advances",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0140",
+      "function": "Finance & Accounts",
+      "activity": "Financial Reporting",
+      "task": "Prepare financial statement",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0141",
+      "function": "Finance & Accounts",
+      "activity": "Financial Reporting",
+      "task": "Prepare donor financial report",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0142",
+      "function": "Finance & Accounts",
+      "activity": "Financial Reporting",
+      "task": "Review project expenditure",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0143",
+      "function": "Finance & Accounts",
+      "activity": "Statutory Compliance",
+      "task": "Prepare tax compliance records",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0144",
+      "function": "Finance & Accounts",
+      "activity": "Statutory Compliance",
+      "task": "Coordinate statutory filing",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0145",
+      "function": "Finance & Accounts",
+      "activity": "Statutory Compliance",
+      "task": "Support audit documentation",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0146",
+      "function": "Administration & Procurement",
+      "activity": "Office Administration",
+      "task": "Manage office facilities",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0147",
+      "function": "Administration & Procurement",
+      "activity": "Office Administration",
+      "task": "Coordinate office supplies",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0148",
+      "function": "Administration & Procurement",
+      "activity": "Office Administration",
+      "task": "Maintain asset register",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0149",
+      "function": "Administration & Procurement",
+      "activity": "Procurement",
+      "task": "Prepare procurement request",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0150",
+      "function": "Administration & Procurement",
+      "activity": "Procurement",
+      "task": "Obtain and compare quotations",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0151",
+      "function": "Administration & Procurement",
+      "activity": "Procurement",
+      "task": "Issue purchase order",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0152",
+      "function": "Administration & Procurement",
+      "activity": "Procurement",
+      "task": "Verify goods and services received",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0153",
+      "function": "Administration & Procurement",
+      "activity": "Travel & Logistics",
+      "task": "Prepare field travel plan",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0154",
+      "function": "Administration & Procurement",
+      "activity": "Travel & Logistics",
+      "task": "Arrange travel and accommodation",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0155",
+      "function": "Administration & Procurement",
+      "activity": "Travel & Logistics",
+      "task": "Reconcile travel logistics",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0156",
+      "function": "Administration & Procurement",
+      "activity": "Records Management",
+      "task": "Maintain contracts and files",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0157",
+      "function": "Administration & Procurement",
+      "activity": "Records Management",
+      "task": "Archive organisational records",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0158",
+      "function": "Business Development & Partnerships",
+      "activity": "Opportunity Identification",
+      "task": "Identify tenders and EoIs",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0159",
+      "function": "Business Development & Partnerships",
+      "activity": "Opportunity Identification",
+      "task": "Screen opportunity fit",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0160",
+      "function": "Business Development & Partnerships",
+      "activity": "Opportunity Identification",
+      "task": "Maintain opportunity pipeline",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0161",
+      "function": "Business Development & Partnerships",
+      "activity": "Proposal Development",
+      "task": "Review ToR and eligibility",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0162",
+      "function": "Business Development & Partnerships",
+      "activity": "Proposal Development",
+      "task": "Develop technical proposal",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0163",
+      "function": "Business Development & Partnerships",
+      "activity": "Proposal Development",
+      "task": "Prepare financial proposal",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0164",
+      "function": "Business Development & Partnerships",
+      "activity": "Proposal Development",
+      "task": "Coordinate proposal submission",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0165",
+      "function": "Business Development & Partnerships",
+      "activity": "Client Engagement",
+      "task": "Conduct client meeting",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0166",
+      "function": "Business Development & Partnerships",
+      "activity": "Client Engagement",
+      "task": "Prepare meeting minutes",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0167",
+      "function": "Business Development & Partnerships",
+      "activity": "Client Engagement",
+      "task": "Follow up client feedback",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0168",
+      "function": "Business Development & Partnerships",
+      "activity": "Partnerships",
+      "task": "Identify potential partners",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0169",
+      "function": "Business Development & Partnerships",
+      "activity": "Partnerships",
+      "task": "Develop partnership concept note",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0170",
+      "function": "Business Development & Partnerships",
+      "activity": "Partnerships",
+      "task": "Coordinate MoU and collaboration",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0171",
+      "function": "Communications & Knowledge",
+      "activity": "Knowledge Products",
+      "task": "Prepare case study",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0172",
+      "function": "Communications & Knowledge",
+      "activity": "Knowledge Products",
+      "task": "Develop learning note",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0173",
+      "function": "Communications & Knowledge",
+      "activity": "Knowledge Products",
+      "task": "Document good practices",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0174",
+      "function": "Communications & Knowledge",
+      "activity": "External Communications",
+      "task": "Draft website content",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0175",
+      "function": "Communications & Knowledge",
+      "activity": "External Communications",
+      "task": "Prepare social media post",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0176",
+      "function": "Communications & Knowledge",
+      "activity": "External Communications",
+      "task": "Prepare newsletter",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0177",
+      "function": "Communications & Knowledge",
+      "activity": "Publications",
+      "task": "Draft annual report content",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0178",
+      "function": "Communications & Knowledge",
+      "activity": "Publications",
+      "task": "Edit publication",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0179",
+      "function": "Communications & Knowledge",
+      "activity": "Publications",
+      "task": "Coordinate design and publication",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0180",
+      "function": "Communications & Knowledge",
+      "activity": "Events",
+      "task": "Prepare event agenda",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0181",
+      "function": "Communications & Knowledge",
+      "activity": "Events",
+      "task": "Coordinate speakers and participants",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0182",
+      "function": "Communications & Knowledge",
+      "activity": "Events",
+      "task": "Document event proceedings",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0183",
+      "function": "Management & Quality Assurance",
+      "activity": "Strategic Planning",
+      "task": "Review organisational priorities",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0184",
+      "function": "Management & Quality Assurance",
+      "activity": "Strategic Planning",
+      "task": "Prepare departmental work plan",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0185",
+      "function": "Management & Quality Assurance",
+      "activity": "Strategic Planning",
+      "task": "Review organisational KPIs",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0186",
+      "function": "Management & Quality Assurance",
+      "activity": "Team Management",
+      "task": "Conduct team review meeting",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0187",
+      "function": "Management & Quality Assurance",
+      "activity": "Team Management",
+      "task": "Review workload allocation",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0188",
+      "function": "Management & Quality Assurance",
+      "activity": "Team Management",
+      "task": "Resolve operational bottlenecks",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0189",
+      "function": "Management & Quality Assurance",
+      "activity": "Quality Assurance",
+      "task": "Review technical deliverable",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0190",
+      "function": "Management & Quality Assurance",
+      "activity": "Quality Assurance",
+      "task": "Provide quality feedback",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0191",
+      "function": "Management & Quality Assurance",
+      "activity": "Quality Assurance",
+      "task": "Approve corrected deliverable",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0192",
+      "function": "Management & Quality Assurance",
+      "activity": "Risk & Compliance",
+      "task": "Update project risk register",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0193",
+      "function": "Management & Quality Assurance",
+      "activity": "Risk & Compliance",
+      "task": "Review contractual compliance",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0194",
+      "function": "Management & Quality Assurance",
+      "activity": "Risk & Compliance",
+      "task": "Follow up mitigation actions",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0195",
+      "function": "All Departments",
+      "activity": "Coordination & Meetings",
+      "task": "Attend project review meeting",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0196",
+      "function": "All Departments",
+      "activity": "Coordination & Meetings",
+      "task": "Coordinate with internal team",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0197",
+      "function": "All Departments",
+      "activity": "Coordination & Meetings",
+      "task": "Conduct stakeholder follow-up",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0198",
+      "function": "All Departments",
+      "activity": "Planning & Reporting",
+      "task": "Prepare monthly work plan",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0199",
+      "function": "All Departments",
+      "activity": "Planning & Reporting",
+      "task": "Prepare weekly sprint plan",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0200",
+      "function": "All Departments",
+      "activity": "Planning & Reporting",
+      "task": "Update task progress",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0201",
+      "function": "All Departments",
+      "activity": "Planning & Reporting",
+      "task": "Submit monthly work summary",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0202",
+      "function": "All Departments",
+      "activity": "Additional Work",
+      "task": "Record unplanned assignment",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    },
+    {
+      "code": "SDS-0203",
+      "function": "All Departments",
+      "activity": "Additional Work",
+      "task": "Complete urgent management request",
+      "status": "Active",
+      "guidance": "Specify measurable output, quantity and deadline in plan"
+    }
+  ]
+}

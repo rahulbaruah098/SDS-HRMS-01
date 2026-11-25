@@ -1122,7 +1122,7 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
           ? 'Billing & Subscription'
           : page === 'employee_handover'
             ? 'Employee Work Handover'
-            : modules.find((module) => module[0] === page)?.[1] ||
+            : modules.find((module) => module[0] === (page === 'my_visits' ? 'team_field_attendance' : page))?.[1] ||
               'Access Restricted';
 
   const canOpenTenantBilling =

@@ -76,48 +76,8 @@ def default_tenant_id():
 
 
 def employee_login_is_alumni(employee):
-    """Reject departed accounts without treating a scheduled exit as departed."""
-    if not employee:
-        return False
-
-    def normalized(value):
-        return str(value or "").strip().lower()
-
-    def enabled(value):
-        return value is True or normalized(value) in {
-            "true", "yes", "1", "on"
-        }
-
-    if enabled(employee.get("is_alumni")):
-        return True
-
-    # Overdue notice employees must not retain access while the
-    # scheduled Alumni reconciliation has not yet executed.
-    if current_app.config.get("NOTICE_PERIOD_ENABLED", False):
-        from app.services.notice_period_service import notice_exit_due
-        if notice_exit_due(employee):
-            return True
-
-    blocked_statuses = {
-        "resigned",
-        "resign",
-        "alumni",
-        "left",
-        "terminated",
-        "retired",
-        "ex-employee",
-        "ex_employee",
-        "inactive",
-    }
-
-    return any(
-        normalized(employee.get(field)) in blocked_statuses
-        for field in (
-            "status",
-            "employment_status",
-            "employee_status",
-        )
-    )
+    from app.services.active_employee_scope import employee_is_active
+    return bool(employee and not employee_is_active(employee))
 
 
 
@@ -132,7 +92,6 @@ def find_employee_for_user(db, user):
     employee = db.employees.find_one({
         "tenant_id": tenant_id,
         "user_id": str(user["_id"]),
-        "is_deleted": {"$ne": True},
     })
 
     if employee:
@@ -371,7 +330,8 @@ def current_user_required(fn):
 
         linked_employee = find_employee_for_user(db, user)
 
-        if employee_login_is_alumni(linked_employee):
+        from app.services.active_employee_scope import employee_is_active
+        if linked_employee and not employee_is_active(linked_employee):
             return jsonify({
                 "message": "This employee account is no longer active."
             }), 401
@@ -381,6 +341,16 @@ def current_user_required(fn):
         g.current_user = user
         g.tenant_id = tenant_id
 
+        # Appointments and decisions use the same tenant lease across web/mobile.
+        from app.services.team_responsibility import mutation_guard, ResponsibilityBusy
+        guarded = request.method in {"POST", "PATCH", "PUT", "DELETE"} and any(
+            part in request.path for part in ("/decision", "/review", "/action", "/advanced/execute"))
+        if guarded:
+            try:
+                with mutation_guard(db, tenant_id):
+                    return fn(*args, **kwargs)
+            except ResponsibilityBusy as exc:
+                return jsonify({"message": str(exc), "code": "RESPONSIBILITY_BUSY"}), 409
         return fn(*args, **kwargs)
 
     return wrapper

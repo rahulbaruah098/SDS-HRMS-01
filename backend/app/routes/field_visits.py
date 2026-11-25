@@ -14,6 +14,7 @@ from bson import ObjectId
 from flask import Blueprint, current_app, g, jsonify, request, send_from_directory
 from werkzeug.utils import secure_filename
 
+from app.services import team_responsibility as responsibility
 from app.extensions import get_db
 from app.middleware.tenant_guard import tenant_module_required
 from app.utils.auth import audit
@@ -245,48 +246,11 @@ def employee_identity_values(employee):
 
 
 def team_employee_ids(db, employee):
-    """Return tenant-scoped employee identifiers visible to the current user."""
-    roles = current_user_roles()
-    tenant_id = current_tenant_id()
-
-    if roles.intersection(FULL_TENANT_ROLES):
-        employees = db.employees.find({
-            "tenant_id": tenant_id,
-            "is_deleted": {"$ne": True},
-        })
-        values = set()
-        for item in employees:
-            values.update(employee_identity_values(item))
-        return values
-
-    own_values = employee_identity_values(employee)
-    manager_values = list(own_values)
-    manager_name = employee_name(employee)
-
-    reporting_conditions = [
-        {"reporting_officer_id": {"$in": manager_values}},
-        {"reporting_manager_id": {"$in": manager_values}},
-        {"team_leader_id": {"$in": manager_values}},
-        {"manager_id": {"$in": manager_values}},
-    ]
-    if manager_name:
-        reporting_conditions.extend([
-            {"reporting_officer": manager_name},
-            {"reporting_manager": manager_name},
-            {"team_leader": manager_name},
-            {"manager": manager_name},
-        ])
-
-    employees = db.employees.find({
-        "tenant_id": tenant_id,
-        "is_deleted": {"$ne": True},
-        "$or": reporting_conditions,
-    })
-
-    values = set(own_values)
-    for item in employees:
-        values.update(employee_identity_values(item))
-    return values
+    if current_user_roles().intersection({'admin', 'hr', 'hr_admin', 'hr_manager'}):
+        people = db.employees.find({'tenant_id': current_tenant_id(), 'is_deleted': {'$ne': True}})
+    else:
+        people = responsibility.scoped_people(db, current_tenant_id(), employee)
+    return {v for p in people for v in employee_identity_values(p)}
 
 
 def parse_location(payload):
@@ -634,6 +598,8 @@ def reschedule_visit(visit_id):
         return jsonify({"message": "Only the visit owner can reschedule this visit"}), 403
     if visit.get("status") != "scheduled":
         return jsonify({"message": "Only scheduled visits can be rescheduled"}), 409
+    if visit.get("unplanned_request_id"):
+        return jsonify({"message": "This date was approved in Projects. Request new authorization for another date."}), 409
 
     payload = request.get_json(silent=True) or {}
     new_date = normalize_text(payload.get("date") or payload.get("scheduled_date"))
@@ -645,6 +611,7 @@ def reschedule_visit(visit_id):
     now = now_utc()
     changed = db.field_visits.update_one({
         "_id": visit["_id"], "tenant_id": current_tenant_id(), "status": "scheduled",
+        "unplanned_request_id": visit.get("unplanned_request_id"),
     }, {"$set": {
         "rescheduled_from": visit.get("scheduled_date"),
         "scheduled_date": new_date,
@@ -709,6 +676,22 @@ def transition_visit(visit_id, expected_status, next_status, location_field, tim
         return error
     if not employee or not is_visit_owner(visit, employee):
         return jsonify({"message": "Only the visit owner can update its progress"}), 403
+    # Only linked unplanned-work visits require the planning authorization.
+    # Standalone My Visit workflows remain independent.
+    association = visit.get("unplanned_request_id")
+    if association:
+        approved = db.project_unplanned_work.find_one({
+            "_id": safe_object_id(association), "tenant_id": current_tenant_id(),
+            "employee_id": str(employee["_id"]), "workflow_version": 3,
+            "approval_status": "approved", "approved_at": {"$exists": True},
+            "work_mode": "field", "visit_id": str(visit["_id"]), "date": visit.get("scheduled_date"),
+        })
+        if not approved:
+            return jsonify({"message": "This linked fieldwork must be approved before execution", "code": "UNPLANNED_APPROVAL_REQUIRED"}), 409
+        if next_status == "started":
+            from app.routes.attendance import today_local
+            if visit.get("scheduled_date") != today_local().isoformat():
+                return jsonify({"message": "Start this visit on its approved activity date"}), 409
     if visit.get("status") != expected_status:
         return jsonify({
             "message": f"Visit must be {expected_status} before it can be marked {next_status}"
@@ -756,6 +739,7 @@ def transition_visit(visit_id, expected_status, next_status, location_field, tim
     changed = db.field_visits.update_one({
         "_id": visit["_id"], "tenant_id": current_tenant_id(),
         "status": expected_status, "is_deleted": {"$ne": True},
+        "unplanned_request_id": association,
     }, {"$set": updates})
     if not changed.matched_count:
         return jsonify({"message": "Visit changed. Refresh and try again.", "code": "VISIT_STATE_CHANGED"}), 409

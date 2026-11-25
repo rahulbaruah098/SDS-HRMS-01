@@ -22,6 +22,7 @@ from .routes.field_visits import field_visits_bp
 from .routes.local_conveyance import lc_bp
 from .routes.workflow import workflow_bp
 from .routes.projects import projects_bp
+from .routes.project_planning import planning_bp
 from .routes.grievances import grievances_bp
 from .routes.it_support import it_support_bp
 from .routes.policies import policies_bp
@@ -238,6 +239,7 @@ def create_app():
     # project detail, project assignment, daily progress submission,
     # project progress history, and project analytics.
     # Keep this before generic CRUD so project-specific routes are preferred.
+    app.register_blueprint(planning_bp, url_prefix="/api/v1/projects/planning")
     app.register_blueprint(projects_bp, url_prefix="/api/v1/projects")
 
     # Grievance module APIs:
@@ -542,4 +544,6 @@ def create_app():
             "message": "Internal server error",
         }), 500
 
+    from app.services.team_responsibility import start_worker
+    start_worker(app)
     return app

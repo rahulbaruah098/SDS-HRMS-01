@@ -7,6 +7,7 @@ from flask import Blueprint, current_app, jsonify, request, send_file
 from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
+from app.services import team_responsibility as responsibility
 from app.extensions import get_db
 from app.middleware.tenant_guard import tenant_module_required
 from app.routes.field_visits import (get_current_employee, current_tenant_id,
@@ -61,7 +62,7 @@ def _serialize_with_actions(db, bill):
     visible['capabilities'] = {
         'can_submit': _owner(bill, employee) and bill.get('status') in {'draft', 'rejected', 'pending_verification'},
         'can_correct': _owner(bill, employee) and bill.get('status') == 'rejected',
-        'can_manager_validate': is_approver(bill, employee, roles) and bill.get('status') == 'pending_manager',
+        'can_manager_validate': is_approver(bill, employee, roles, db=db) and bill.get('status') == 'pending_manager',
         'can_accounts_verify': can_verify_accounts(bill, employee, roles, current_user_id()) and bill.get('status') == 'pending_accounts',
         'can_mark_paid': (can_confirm_payment(bill, employee, roles, current_user_id())
                           and bill.get('status') == 'verified'
@@ -242,7 +243,11 @@ def list_bills():
         elif employee and (roles & MANAGER_ROLES or
                             str(employee.get('is_team_leader') or '').lower() in ('true','yes','1') or
                             str(employee.get('is_reporting_officer') or '').lower() in ('true','yes','1')):
-            query['approval.employee_ref_id'] = str(employee['_id'])
+            refs = responsibility.leader_aliases(db, current_tenant_id(), employee)
+            query['$or'] = [{'approval.employee_ref_id': str(employee['_id'])},
+                {'status': 'pending_manager', 'approval.type': 'team_leader', '$or': [
+                    {'approval.source_team_leader_id': {'$in': refs}},
+                    {'approval.employee_ref_id': {'$in': refs}}]}]
             query['status'] = {'$in': sorted(REVIEW_STATES)}
         else:
             return _error('No review access', 403)
@@ -260,7 +265,7 @@ def list_bills():
     except ValueError as exc:
         return _error(str(exc))
     bills = list(db.local_conveyance_bills.find(query).sort('created_at', -1).limit(150))
-    bills = [b for b in bills if can_read(b, employee, roles)]
+    bills = [b for b in bills if can_read(b, employee, roles, db=db)]
     return jsonify({'items': clean_doc(bills), 'count': len(bills)})
 
 
@@ -285,7 +290,20 @@ def lc_pending_dashboard_approvals():
     if not (roles & reviewer_roles):
         if not employee:
             return jsonify({'items': [], 'count': 0})
-        query['approval.employee_ref_id'] = str(employee['_id'])
+        refs = responsibility.leader_aliases(
+            db, current_tenant_id(), employee
+        )
+        query['$or'] = [
+            {'approval.employee_ref_id': str(employee['_id'])},
+            {
+                'status': 'pending_manager',
+                'approval.type': 'team_leader',
+                '$or': [
+                    {'approval.source_team_leader_id': {'$in': refs}},
+                    {'approval.employee_ref_id': {'$in': refs}},
+                ],
+            },
+        ]
 
     output = []
     # One employee/role lookup and a small Mongo projection per request.
@@ -298,11 +316,11 @@ def lc_pending_dashboard_approvals():
         'created_by': 1, 'updated_at': 1,
     }
     for bill in db.local_conveyance_bills.find(query, fields).sort('updated_at', -1).limit(400):
-        if not can_read(bill, employee, roles):
+        if not can_read(bill, employee, roles, db=db):
             continue
         state = bill.get('status')
         action = ''
-        if state == 'pending_manager' and is_approver(bill, employee, roles):
+        if state == 'pending_manager' and is_approver(bill, employee, roles, db=db):
             action = 'manager_validate'
         elif (state == 'pending_accounts' and
               can_verify_accounts(bill, employee, roles, user_id)):
@@ -585,7 +603,7 @@ def bill_detail(reference):
     bill = _bill(db, reference)
     if not bill:
         return _error('LC bill not found', 404)
-    if not can_read(bill, get_current_employee(db), current_user_roles()):
+    if not can_read(bill, get_current_employee(db), current_user_roles(), db=db):
         return _error('Not authorised to view this LC bill', 403)
     return jsonify({'item': _serialize_with_actions(db, bill)})
 
@@ -597,7 +615,7 @@ def download_bill(reference):
     bill = _bill(db, reference)
     if not bill:
         return _error('LC bill not found', 404)
-    if not can_read(bill, get_current_employee(db), current_user_roles()):
+    if not can_read(bill, get_current_employee(db), current_user_roles(), db=db):
         return _error('Not authorised to view this LC bill', 403)
     try:
         rendered = render_lc_bill_pdf(bill)
@@ -649,7 +667,7 @@ def bill_action(reference):
     remarks = str(data.get('remarks') or '').strip()[:1000]
     state = bill.get('status')
     owner = _owner(bill, employee)
-    manager = is_approver(bill, employee, roles)
+    manager = is_approver(bill, employee, roles, db=db)
     accounts = can_verify_accounts(bill, employee, roles, current_user_id())
     payer = can_confirm_payment(bill, employee, roles, current_user_id())
     changes = {'updated_at': datetime.utcnow()}

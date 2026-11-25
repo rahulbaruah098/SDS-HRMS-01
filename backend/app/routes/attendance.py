@@ -5,8 +5,10 @@ from flask import Blueprint, request, jsonify, g
 from datetime import datetime, time, date, timedelta, timezone
 from bson import ObjectId
 
+from app.services import team_responsibility as responsibility
 from app.extensions import get_db
 from app.services import face_attendance
+from app.services import project_planning as project_work
 from pymongo.errors import DuplicateKeyError
 from app.utils.auth import current_user_required, roles_required, audit
 from app.middleware.tenant_guard import tenant_module_required
@@ -1453,43 +1455,10 @@ def employee_snapshot(employee):
 
 
 def scoped_employee_ids_for_manager(db):
-    roles = current_user_roles()
-
-    if roles.intersection(FULL_TENANT_REPORT_ROLES):
+    actor = emp(db)
+    if current_user_roles().intersection(FULL_TENANT_REPORT_ROLES):
         return None
-
-    current_emp = emp(db)
-
-    if not current_emp:
-        return []
-
-    current_emp_id = str(current_emp["_id"])
-    identifier_values = employee_identifier_values(current_emp)
-
-    if current_emp_id not in identifier_values:
-        identifier_values.append(current_emp_id)
-
-    scope_or = []
-
-    if roles.intersection(TEAM_SCOPE_ROLES) or employee_is_team_leader(current_emp):
-        scope_or.append({"team_leader_id": {"$in": identifier_values}})
-
-    if roles.intersection(REPORTING_SCOPE_ROLES) or employee_is_reporting_officer(current_emp):
-        scope_or.append({"reporting_officer_id": {"$in": identifier_values}})
-
-    if not scope_or:
-        return []
-
-    rows = list(
-        db.employees.find({
-            "tenant_id": current_emp.get("tenant_id") or current_tenant_id(),
-            "status": {"$ne": "Inactive"},
-            "is_deleted": {"$ne": True},
-            "$or": scope_or,
-        })
-    )
-
-    return [str(row["_id"]) for row in rows]
+    return [str(p['_id']) for p in responsibility.scoped_people(db, current_tenant_id(), actor)]
 
 
 def manager_scope_query(db):
@@ -2099,9 +2068,10 @@ def approval_target_user_ids(db, employee):
     tenant_id = employee.get("tenant_id") or current_tenant_id()
     user_ids = []
 
+    effective_leader, _, _ = responsibility.effective(db, tenant_id, employee.get('team_leader_id'))
     team_leader_user_id = employee_user_id(
         db,
-        employee.get("team_leader_id"),
+        str(effective_leader['_id']) if effective_leader else '',
         tenant_id,
     )
 
@@ -2136,7 +2106,8 @@ def next_approval_stage_after_team_leader(request_doc):
     reporting_officer_id = normalize_text(request_doc.get("reporting_officer_id"))
 
     if reporting_officer_id and reporting_officer_id != team_leader_id:
-        return "reporting_officer", "Reporting Officer"
+        stage = responsibility.collision_next_stage(get_db(), current_tenant_id(), team_leader_id, reporting_officer_id, 'reporting_officer')
+        return stage, 'HR' if stage == 'hr' else 'Reporting Officer'
 
     return "approved", "Approved"
 
@@ -2287,7 +2258,15 @@ def compoff_claim_window_details(db, employee, compoff):
 
 def can_decide_mode_request(db, request_doc):
     roles = current_user_roles()
+    reviewer = emp(db)
+    if request_doc.get('tenant_id') != current_tenant_id() or str(request_doc.get('employee_id')) in responsibility.identifiers(reviewer):
+        return False
+    if request_doc.get('approval_stage') == 'team_leader':
+        return responsibility.can_lead(db, current_tenant_id(), reviewer, request_doc.get('team_leader_id'), request_doc.get('employee_id'))
 
+    history = request_doc.get('approval_history') or []
+    if any(str(h.get('decided_by')) == str(g.current_user['_id']) and h.get('status') == 'approved' for h in history):
+        return False
     if roles.intersection(FULL_TENANT_REPORT_ROLES):
         return True
 
@@ -2581,6 +2560,19 @@ def attendance_working_calendar():
         "working_dates": working_dates,
         "non_working_dates": non_working_dates,
     })
+
+
+@attendance_bp.get("/checkout-readiness")
+@tenant_module_required("attendance")
+def project_checkout_readiness():
+    db = get_db()
+    employee = emp(db)
+    if not employee:
+        return jsonify({"message": "Employee profile not found"}), 404
+    try:
+        return jsonify(project_work.checkout_readiness(db, employee, request.args.get("date") or today_local().isoformat()))
+    except project_work.PlanningError as exc:
+        return jsonify({"message": str(exc)}), exc.status
 
 
 @attendance_bp.get("/status")
@@ -3097,14 +3089,24 @@ def check_out():
             "client_attendance_ids": client_attendance_id,
         }
 
-    method = face_attendance.consume(db, e, data, "check-out")
-    if method:
-        set_data["check_out_identity_method"] = method
-    changed = db.attendance_logs.update_one(
-        {"_id": rec["_id"], "tenant_id": tenant_id, "employee_id": str(e["_id"]),
-         "check_out": {"$in": [None, "", False]}, "is_deleted": {"$ne": True}},
-        update_doc,
-    )
+    try:
+        readiness, planning_token = project_work.seal_checkout_day(db, e, today)
+    except project_work.PlanningError as exc:
+        return jsonify({"message": str(exc), "code": exc.code}), exc.status
+    if not readiness["checkout_allowed"]:
+        return jsonify(readiness), 409
+    try:
+        method = face_attendance.consume(db, e, data, "check-out")
+        if method:
+            set_data["check_out_identity_method"] = method
+        changed = db.attendance_logs.update_one(
+            {"_id": rec["_id"], "tenant_id": tenant_id, "employee_id": str(e["_id"]),
+             "check_out": {"$in": [None, "", False]}, "is_deleted": {"$ne": True}},
+            update_doc,
+        )
+    except Exception:
+        project_work.release_checkout_day(db, e, today, planning_token)
+        raise
     if changed.matched_count == 0:
         latest = db.attendance_logs.find_one({"_id":rec["_id"], "tenant_id":tenant_id, "is_deleted":{"$ne":True}})
         if latest and latest.get("check_out") and (created_offline or client_id_matches(latest, client_attendance_id)):
@@ -4221,10 +4223,10 @@ def list_holiday_work_requests():
         reviewer_identifier_values = employee_identifier_values(reviewer) if reviewer else []
         pending_scope = []
 
-        if reviewer and ("team_leader" in roles or employee_is_team_leader(reviewer)):
+        if reviewer and responsibility.leader_aliases(db, current_tenant_id(), reviewer):
             pending_scope.append({
                 "approval_stage": "team_leader",
-                "team_leader_id": {"$in": reviewer_identifier_values},
+                "team_leader_id": {"$in": responsibility.leader_aliases(db, current_tenant_id(), reviewer)},
             })
 
         if reviewer and ("reporting_officer" in roles or "ro" in roles or employee_is_reporting_officer(reviewer)):
@@ -4337,9 +4339,9 @@ def decide_holiday_work_request(request_id):
 
                 notify_users(
                     db,
-                    [reporting_user_id],
+                    users_for_roles(db, FULL_TENANT_REPORT_ROLES, current_tenant_id()) if next_stage == 'hr' else [reporting_user_id],
                     "Holiday Work Request",
-                    f"{request_doc.get('employee_name', 'Employee')} holiday work request is pending for Reporting Officer approval.",
+                    f"{request_doc.get('employee_name', 'Employee')} holiday work request is pending for {next_stage_label} approval.",
                     {
                         "request_id": str(request_obj_id),
                         "employee_id": request_doc.get("employee_id"),
@@ -4359,7 +4361,7 @@ def decide_holiday_work_request(request_id):
             })
 
     db.holiday_work_requests.update_one(
-        {"_id": request_obj_id},
+        {'_id': request_obj_id, 'tenant_id': current_tenant_id(), 'status': 'pending', 'approval_stage': request_doc.get('approval_stage')},
         {"$set": set_data, "$push": {"approval_history": history_entry}},
     )
 
@@ -4607,11 +4609,11 @@ def list_mode_requests():
             if reviewer_id not in reviewer_identifier_values:
                 reviewer_identifier_values.append(reviewer_id)
 
-            if "team_leader" in roles or employee_is_team_leader(reviewer):
+            if responsibility.leader_aliases(db, current_tenant_id(), reviewer):
                 q.setdefault("$or", [])
                 q["$or"].append({
                     "approval_stage": "team_leader",
-                    "team_leader_id": {"$in": reviewer_identifier_values},
+                    "team_leader_id": {"$in": responsibility.leader_aliases(db, current_tenant_id(), reviewer)},
                 })
 
             if "reporting_officer" in roles or "ro" in roles or employee_is_reporting_officer(reviewer):
@@ -4761,9 +4763,9 @@ def decide_mode_request(request_id):
 
                 notify_users(
                     db,
-                    [reporting_user_id],
+                    users_for_roles(db, FULL_TENANT_REPORT_ROLES, current_tenant_id()) if next_stage == 'hr' else [reporting_user_id],
                     "Attendance Mode Request",
-                    f"{request_doc.get('employee_name', 'Employee')} request is pending for Reporting Officer approval.",
+                    f"{request_doc.get('employee_name', 'Employee')} request is pending for {next_stage_label} approval.",
                     {
                         "request_id": str(request_obj_id),
                         "employee_id": request_doc.get("employee_id"),
@@ -4784,7 +4786,7 @@ def decide_mode_request(request_id):
             })
 
     db.attendance_mode_requests.update_one(
-        {"_id": request_obj_id},
+        {'_id': request_obj_id, 'tenant_id': current_tenant_id(), 'status': 'pending', 'approval_stage': request_doc.get('approval_stage')},
         {
             "$set": set_data,
             "$push": {

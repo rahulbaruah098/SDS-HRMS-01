@@ -55,7 +55,7 @@ import Leave from './pages/Leave';
 import ApplyLeave from './pages/ApplyLeave';
 import LeaveBalances from './pages/LeaveBalances.jsx';
 import CompOffCredits from './pages/CompOffCredits.jsx';
-import Projects from './pages/Projects';
+import Projects from './pages/ProjectWorkspace';
 import Policies from './pages/Policies.jsx';
 import Notifications from './pages/Notifications';
 import ApplicationStatus from './pages/ApplicationStatus';
@@ -502,6 +502,8 @@ const PAGE_ALIASES = {
   'employee-policy': 'policies',
   'employee-policies': 'policies',
 
+  sprint_planning: 'projects',
+  sprint: 'projects',
   project: 'projects',
   projects: 'projects',
   project_management: 'projects',

@@ -5,6 +5,7 @@ import os
 import time
 from functools import wraps
 
+from app.services import team_responsibility as responsibility
 from app.extensions import get_db
 from app.utils.auth import roles_required, current_user_required, audit
 from app.utils.serializers import clean_doc
@@ -1712,49 +1713,12 @@ def notification_scope_for_current_user(extra=None):
 
 
 def can_manage_employee_record(db, employee_id):
-    roles = current_user_roles()
-
-    if roles.intersection(ADMIN_HR_ROLES):
-        return True
-
-    reviewer_emp = current_employee(db)
-
-    if not reviewer_emp:
+    employee = responsibility.resolve(db, current_tenant_id(), employee_id)
+    actor = current_employee(db)
+    if not employee or not actor or employee['_id'] == actor['_id']:
         return False
-
-    reviewer_emp_id = str(reviewer_emp["_id"])
-    reviewer_identifier_values = employee_identifier_values(reviewer_emp)
-
-    if reviewer_emp_id not in reviewer_identifier_values:
-        reviewer_identifier_values.append(reviewer_emp_id)
-
-    employee_obj_id = safe_object_id(employee_id)
-
-    if not employee_obj_id:
-        return False
-
-    employee = db.employees.find_one({
-        "_id": employee_obj_id,
-        "tenant_id": current_tenant_id(),
-        "is_deleted": {"$ne": True},
-    })
-
-    if not employee:
-        return False
-
-    if (
-        ("team_leader" in roles or employee_is_team_leader(reviewer_emp))
-        and employee.get("team_leader_id") in reviewer_identifier_values
-    ):
-        return True
-
-    if (
-        ("reporting_officer" in roles or employee_is_reporting_officer(reviewer_emp))
-        and employee.get("reporting_officer_id") in reviewer_identifier_values
-    ):
-        return True
-
-    return False
+    return any(person['_id'] == employee['_id'] for person in
+               responsibility.scoped_people(db, current_tenant_id(), actor, include_self=False))
 
 # -----------------------------------------------------------------------------
 # Live status helpers
@@ -2133,7 +2097,7 @@ def next_leave_stage(employee, current_stage, leave_doc=None):
 
     if current_stage == "team_leader":
         if reporting_officer_id and reporting_officer_id != team_leader_id:
-            return "reporting_officer"
+            return responsibility.collision_next_stage(get_db(), current_tenant_id(), team_leader_id, reporting_officer_id, 'reporting_officer')
 
         return "final"
 
@@ -2151,6 +2115,13 @@ def next_leave_stage(employee, current_stage, leave_doc=None):
 
 def reviewer_can_decide_leave(db, leave_doc):
     roles = current_user_roles()
+    actor = current_employee(db)
+    if leave_doc.get('tenant_id') != current_tenant_id() or str(leave_doc.get('employee_id')) in responsibility.identifiers(actor):
+        return False
+    if leave_doc.get('approval_stage') == 'team_leader':
+        return responsibility.can_lead(db, current_tenant_id(), actor, leave_doc.get('team_leader_id'), leave_doc.get('employee_id'))
+    if leave_doc.get('approval_stage') == 'reporting_officer' and str(g.current_user['_id']) == str(leave_doc.get('team_leader_decision_by')):
+        return False
     stage = leave_doc.get("approval_stage") or "hr"
 
     if stage == "admin":
@@ -2223,9 +2194,9 @@ def scoped_leave_query(db, leave_obj_id):
 
     scope_or = [{"employee_id": {"$in": reviewer_identifier_values}}]
 
-    if "team_leader" in roles or employee_is_team_leader(reviewer_emp):
+    if responsibility.leader_aliases(db, current_tenant_id(), reviewer_emp):
         scope_or.append({
-            "team_leader_id": {"$in": reviewer_identifier_values},
+            "team_leader_id": {"$in": responsibility.leader_aliases(db, current_tenant_id(), reviewer_emp)},
             "approval_stage": "team_leader",
         })
 
@@ -2781,7 +2752,11 @@ def notify_next_leave_approvers(db, employee, leave_doc, stage):
     reporting_officer_id = normalize_text(leave_doc.get("reporting_officer_id")) or normalize_text(employee.get("reporting_officer_id"))
 
     if stage == "team_leader":
-        user_ids.append(employee_user_id(db, team_leader_id, tenant_id))
+        acting, _, _ = responsibility.effective(db, tenant_id, team_leader_id)
+        if acting:
+            user_ids.append(employee_user_id(db, str(acting['_id']), tenant_id))
+        else:
+            user_ids.extend(users_for_roles(db, ADMIN_HR_ROLES, tenant_id=tenant_id))
     elif stage == "reporting_officer":
         user_ids.append(employee_user_id(db, reporting_officer_id, tenant_id))
     elif stage == "admin":
@@ -3431,9 +3406,9 @@ def leave_list_scope_query(db):
 
     scope_or = [{"employee_id": {"$in": identifier_values}}]
 
-    if "team_leader" in roles or employee_is_team_leader(employee):
+    if responsibility.leader_aliases(db, current_tenant_id(), employee):
         scope_or.append({
-            "team_leader_id": {"$in": identifier_values},
+            "team_leader_id": {"$in": responsibility.leader_aliases(db, current_tenant_id(), employee)},
             "approval_stage": "team_leader",
         })
 
@@ -4392,6 +4367,9 @@ def team_approvals():
 
     if is_team_leader:
         add_team_leader_scope()
+    delegated = responsibility.leader_aliases(db, tenant_id, employee)
+    if delegated and status_filter in ['', 'pending', 'all']:
+        approval_or.append(responsibility.pending_scope(db, tenant_id, employee))
 
     if is_reporting_officer:
         add_reporting_officer_scope()
@@ -5801,7 +5779,7 @@ def leave_decision(req_id):
         }
 
         db.leave_requests.update_one(
-            {"_id": leave_obj_id},
+            {"_id": leave_obj_id, "tenant_id": current_tenant_id(), "status": existing['status'], "approval_stage": existing.get('approval_stage')},
             {
                 "$set": update_set,
                 "$push": {
@@ -5866,7 +5844,7 @@ def leave_decision(req_id):
         }
 
         db.leave_requests.update_one(
-            {"_id": leave_obj_id},
+            {"_id": leave_obj_id, "tenant_id": current_tenant_id(), "status": existing['status'], "approval_stage": existing.get('approval_stage')},
             {
                 "$set": update_set,
                 "$push": {
@@ -6081,11 +6059,16 @@ def expense_decision(expense_id):
         if status == "paid":
             return jsonify({"message": "Only finance/admin can mark expense as paid"}), 403
 
+    actor = current_employee(db)
+    if str(existing.get('employee_id')) in responsibility.identifiers(actor):
+        return jsonify({'message': 'Self-approval is not allowed'}), 403
     previous_status = normalize_status(existing.get("status"))
+    if (status == 'paid' and previous_status != 'approved') or (status in {'approved', 'rejected'} and previous_status != 'pending'):
+        return jsonify({'message': 'Expense is not awaiting this decision'}), 409
     now = datetime.utcnow()
 
     db.expenses.update_one(
-        {"_id": expense_obj_id},
+        {"_id": expense_obj_id, 'tenant_id': current_tenant_id(), 'status': existing.get('status')},
         {
             "$set": {
                 "status": status,
@@ -6497,8 +6480,8 @@ def resolve_performance_review_scope(reviewer_emp, reviewer_roles, employee):
         return None, "", "You cannot submit your own performance review"
 
     if (
-        ("team_leader" in reviewer_roles or employee_is_team_leader(reviewer_emp))
-        and employee_field_matches_employee(employee, "team_leader_id", reviewer_emp)
+        responsibility.can_lead(get_db(), current_tenant_id(), reviewer_emp,
+                                employee.get('team_leader_id'), employee.get('_id'))
     ):
         return {
             "reviewer_role": "team_leader",
