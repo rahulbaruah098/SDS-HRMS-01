@@ -927,11 +927,32 @@ def resolve_team_leader_for_project(db, tenant_id, data, creator_employee):
     # Persist the stable team key; presentation supplies the effective leader.
     return source
 
-def resolve_reporting_officer_for_project(db, tenant_id, data, creator_employee, team_leader=None):
-    officer = responsibility.resolve(db, tenant_id, (team_leader or {}).get('reporting_officer_id'))
-    if data.get('reporting_officer_id') and str(data['reporting_officer_id']) not in responsibility.identifiers(officer):
-        raise ValueError('Reporting Officer must match the selected team hierarchy.')
-    return officer if responsibility.capability(officer, 'ro') else None
+def resolve_reporting_officer_for_project(
+    db, tenant_id, data, creator_employee, team_leader=None
+):
+    if not team_leader:
+        return None
+
+    officer, state = responsibility.effective_reporting_officer(
+        db, tenant_id, team_leader['_id']
+    )
+
+    requested = str(data.get('reporting_officer_id') or '')
+
+    if requested and requested not in responsibility.identifiers(officer):
+        raise ValueError(
+            'Reporting Officer must match the selected team hierarchy.'
+        )
+
+    # Acting authority is resolved dynamically. Do not save
+    # an acting TL as a permanent RO in project history.
+    if state == 'acting':
+        return responsibility.resolve(
+            db, tenant_id,
+            team_leader.get('reporting_officer_id')
+        )
+
+    return officer
 
 
 def find_project_employee(db, tenant_id, employee_id):

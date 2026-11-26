@@ -2030,184 +2030,140 @@ def applicant_is_admin_or_hr():
 
 
 def build_initial_leave_stage(employee):
-    """
-    Leave approval entry stage:
-
-    Normal employees:
-    - Team Leader -> Reporting Officer -> Final
-    - If no Team Leader, Reporting Officer -> Final
-    - If no TL/RO, HR -> Final
-
-    HR/Admin special rule:
-    - HR leave goes to Admin
-    - Admin leave goes to HR
-    """
-
     roles = current_user_roles()
 
-    if roles.intersection(HR_APPROVER_ROLES) and not roles.intersection(ADMIN_APPROVER_ROLES):
-        return "admin"
+    if (
+        roles.intersection(HR_APPROVER_ROLES)
+        and not roles.intersection(ADMIN_APPROVER_ROLES)
+    ):
+        return 'admin'
 
     if roles.intersection(ADMIN_APPROVER_ROLES):
-        return "hr"
+        return 'hr'
 
-    applicant_is_team_leader = employee_is_team_leader(employee)
-
-    if (
-        employee.get("team_leader_id")
-        and not applicant_is_team_leader
-    ):
-        return "team_leader"
-
-    if employee.get("reporting_officer_id"):
-        return "reporting_officer"
-
-    return "hr"
+    return responsibility.initial_manager_stage(
+        get_db(), current_tenant_id(), employee
+    )
 
 
 def next_leave_stage(employee, current_stage, leave_doc=None):
-    """
-    Decide the next leave approval stage.
+    if current_stage != 'team_leader':
+        return 'final'
 
-    Rules:
-    - Normal employee with Team Leader and different Reporting Officer:
-      Team Leader -> Reporting Officer -> Final.
-    - Normal employee with same Team Leader and Reporting Officer:
-      Team Leader -> Final.
-    - Employee without Team Leader but with Reporting Officer:
-      Reporting Officer -> Final.
-    - Team Leader's own leave:
-      Reporting Officer -> Final.
-    - HR/Admin special stages:
-      Admin/HR -> Final.
-    """
+    db = get_db()
+    tenant = current_tenant_id()
 
-    leave_doc = leave_doc or {}
-    current_stage = normalize_text(current_stage)
-
-    team_leader_id = (
-        normalize_text(leave_doc.get("team_leader_id"))
-        or normalize_text(employee.get("team_leader_id") if employee else "")
+    hierarchy = responsibility.hierarchy_for_employee(
+        db, tenant, employee
     )
 
-    reporting_officer_id = (
-        normalize_text(leave_doc.get("reporting_officer_id"))
-        or normalize_text(employee.get("reporting_officer_id") if employee else "")
-    )
+    officer = hierarchy['reporting_officer']
+    actor = current_employee(db)
 
-    if current_stage == "team_leader":
-        if reporting_officer_id and reporting_officer_id != team_leader_id:
-            return responsibility.collision_next_stage(get_db(), current_tenant_id(), team_leader_id, reporting_officer_id, 'reporting_officer')
+    if not officer:
+        return 'hr'
 
-        return "final"
+    # One person holding both effective responsibilities
+    # must not approve the same leave twice.
+    if responsibility.same_employee(actor, officer):
+        return 'final'
 
-    if current_stage == "reporting_officer":
-        return "final"
+    if not responsibility.independent_manager(
+        employee, officer
+    ):
+        return 'hr'
 
-    if current_stage == "admin":
-        return "final"
-
-    if current_stage == "hr":
-        return "final"
-
-    return "final"
+    return 'reporting_officer'
 
 
 def reviewer_can_decide_leave(db, leave_doc):
     roles = current_user_roles()
+    tenant = current_tenant_id()
     actor = current_employee(db)
-    if leave_doc.get('tenant_id') != current_tenant_id() or str(leave_doc.get('employee_id')) in responsibility.identifiers(actor):
-        return False
-    if leave_doc.get('approval_stage') == 'team_leader':
-        return responsibility.can_lead(db, current_tenant_id(), actor, leave_doc.get('team_leader_id'), leave_doc.get('employee_id'))
-    if leave_doc.get('approval_stage') == 'reporting_officer' and str(g.current_user['_id']) == str(leave_doc.get('team_leader_decision_by')):
-        return False
-    stage = leave_doc.get("approval_stage") or "hr"
+    user_id = str(g.current_user.get('_id') or '')
 
-    if stage == "admin":
+    if leave_doc.get('tenant_id') != tenant:
+        return False
+
+    owner = responsibility.request_owner(
+        db, tenant, leave_doc
+    )
+
+    if not owner:
+        return False
+
+    if responsibility.same_employee(actor, owner):
+        return False
+
+    if user_id and user_id in {
+        str(owner.get('user_id') or ''),
+        str(leave_doc.get('created_by') or ''),
+    }:
+        return False
+
+    stage = leave_doc.get('approval_stage') or 'hr'
+
+    if stage in {'team_leader', 'reporting_officer'}:
+        return responsibility.can_decide_manager_stage(
+            db, tenant, actor, leave_doc, user_id
+        )
+
+    if responsibility.prior_approval(
+        leave_doc, actor, user_id
+    ):
+        return False
+
+    if stage == 'admin':
         return bool(roles.intersection(ADMIN_APPROVER_ROLES))
 
-    if stage == "hr":
-        if leave_doc.get("admin_hr_cross_approval"):
-            return bool(roles.intersection(HR_APPROVER_ROLES))
-
-        return bool(roles.intersection(ADMIN_HR_ROLES))
-
-    reviewer_emp = current_employee(db)
-
-    if not reviewer_emp:
-        return False
-
-    reviewer_emp_id = str(reviewer_emp["_id"])
-    reviewer_identifier_values = employee_identifier_values(reviewer_emp)
-
-    if reviewer_emp_id not in reviewer_identifier_values:
-        reviewer_identifier_values.append(reviewer_emp_id)
-
-    if stage == "team_leader":
-        return (
-            leave_doc.get("team_leader_id") in reviewer_identifier_values
-            and (
-                "team_leader" in roles
-                or employee_is_team_leader(reviewer_emp)
-            )
+    if stage == 'hr':
+        allowed = (
+            HR_APPROVER_ROLES
+            if leave_doc.get('admin_hr_cross_approval')
+            else ADMIN_HR_ROLES
         )
 
-    if stage == "reporting_officer":
-        return (
-            leave_doc.get("reporting_officer_id") in reviewer_identifier_values
-            and (
-                "reporting_officer" in roles
-                or "ro" in roles
-                or employee_is_reporting_officer(reviewer_emp)
-            )
-        )
+        return bool(roles.intersection(allowed))
 
     return False
 
 
 def scoped_leave_query(db, leave_obj_id):
+    tenant = current_tenant_id()
     roles = current_user_roles()
 
-    q = {
-        "_id": leave_obj_id,
-        "is_deleted": {"$ne": True},
+    query = {
+        '_id': leave_obj_id,
+        'tenant_id': tenant,
+        'is_deleted': {'$ne': True},
     }
 
-    if "super_admin" not in roles:
-        q["tenant_id"] = current_tenant_id()
-
     if roles.intersection(ADMIN_HR_ROLES):
-        return q
+        return query
 
-    reviewer_emp = current_employee(db)
+    actor = current_employee(db)
 
-    if not reviewer_emp:
-        q["employee_id"] = "__none__"
-        return q
+    if not actor:
+        query['employee_id'] = '__none__'
+        return query
 
-    reviewer_emp_id = str(reviewer_emp["_id"])
-    reviewer_identifier_values = employee_identifier_values(reviewer_emp)
+    query['$or'] = [
+        {
+            'employee_id': {
+                '$in': responsibility.subject_reference_values(
+                    db, tenant, actor
+                )
+            }
+        },
+        responsibility.manager_stage_scope(
+            db, tenant, actor, 'team_leader'
+        ),
+        responsibility.manager_stage_scope(
+            db, tenant, actor, 'reporting_officer'
+        ),
+    ]
 
-    if reviewer_emp_id not in reviewer_identifier_values:
-        reviewer_identifier_values.append(reviewer_emp_id)
-
-    scope_or = [{"employee_id": {"$in": reviewer_identifier_values}}]
-
-    if responsibility.leader_aliases(db, current_tenant_id(), reviewer_emp):
-        scope_or.append({
-            "team_leader_id": {"$in": responsibility.leader_aliases(db, current_tenant_id(), reviewer_emp)},
-            "approval_stage": "team_leader",
-        })
-
-    if "reporting_officer" in roles or "ro" in roles or employee_is_reporting_officer(reviewer_emp):
-        scope_or.append({
-            "reporting_officer_id": {"$in": reviewer_identifier_values},
-            "approval_stage": "reporting_officer",
-        })
-
-    q["$or"] = scope_or
-    return q
+    return query
 
 
 
@@ -2751,14 +2707,17 @@ def notify_next_leave_approvers(db, employee, leave_doc, stage):
     team_leader_id = normalize_text(leave_doc.get("team_leader_id")) or normalize_text(employee.get("team_leader_id"))
     reporting_officer_id = normalize_text(leave_doc.get("reporting_officer_id")) or normalize_text(employee.get("reporting_officer_id"))
 
-    if stage == "team_leader":
-        acting, _, _ = responsibility.effective(db, tenant_id, team_leader_id)
-        if acting:
-            user_ids.append(employee_user_id(db, str(acting['_id']), tenant_id))
+    if stage in {'team_leader', 'reporting_officer'}:
+        manager = responsibility.stage_manager(
+            db, tenant_id, employee, stage
+        )
+
+        if manager and manager.get('user_id'):
+            user_ids.append(str(manager['user_id']))
         else:
-            user_ids.extend(users_for_roles(db, ADMIN_HR_ROLES, tenant_id=tenant_id))
-    elif stage == "reporting_officer":
-        user_ids.append(employee_user_id(db, reporting_officer_id, tenant_id))
+            user_ids.extend(
+                users_for_roles(db, ADMIN_HR_ROLES, tenant_id)
+            )
     elif stage == "admin":
         user_ids.extend(users_for_roles(db, ADMIN_APPROVER_ROLES, tenant_id))
     elif stage == "hr":
@@ -3378,48 +3337,49 @@ def date_range_for_period(period, base_value=None):
 
 def leave_list_scope_query(db):
     roles = current_user_roles()
-    tenant_arg = normalize_text(request.args.get("tenant_id"))
+    tenant = current_tenant_id()
 
-    if "super_admin" in roles and tenant_arg:
-        q = {"tenant_id": tenant_arg}
-    elif "super_admin" in roles and not tenant_arg:
-        q = {}
-    else:
-        q = {"tenant_id": current_tenant_id()}
-
-    q["is_deleted"] = {"$ne": True}
+    query = {
+        'tenant_id': tenant,
+        'is_deleted': {'$ne': True},
+    }
 
     if roles.intersection(ADMIN_HR_ROLES):
-        return q
+        return query
 
-    employee = current_employee(db)
+    actor = current_employee(db)
 
-    if not employee:
-        q["employee_id"] = "__none__"
-        return q
+    if not actor:
+        query['employee_id'] = '__none__'
+        return query
 
-    emp_id = str(employee["_id"])
-    identifier_values = employee_identifier_values(employee)
+    query['$or'] = [
+        {
+            'employee_id': {
+                '$in': responsibility.subject_reference_values(
+                    db, tenant, actor
+                )
+            }
+        },
+        responsibility.manager_stage_scope(
+            db, tenant, actor, 'team_leader'
+        ),
+        responsibility.manager_stage_scope(
+            db, tenant, actor, 'reporting_officer'
+        ),
+        {
+            'team_leader_decision_by': str(
+                g.current_user['_id']
+            )
+        },
+        {
+            'reporting_officer_decision_by': str(
+                g.current_user['_id']
+            )
+        },
+    ]
 
-    if emp_id not in identifier_values:
-        identifier_values.append(emp_id)
-
-    scope_or = [{"employee_id": {"$in": identifier_values}}]
-
-    if responsibility.leader_aliases(db, current_tenant_id(), employee):
-        scope_or.append({
-            "team_leader_id": {"$in": responsibility.leader_aliases(db, current_tenant_id(), employee)},
-            "approval_stage": "team_leader",
-        })
-
-    if "reporting_officer" in roles or "ro" in roles or employee_is_reporting_officer(employee):
-        scope_or.append({
-            "reporting_officer_id": {"$in": identifier_values},
-            "approval_stage": "reporting_officer",
-        })
-
-    q["$or"] = scope_or
-    return q
+    return query
 
 # -----------------------------------------------------------------------------
 # Notification APIs
@@ -4365,14 +4325,37 @@ def team_approvals():
                 "status": {"$in": ["pending", "in_review", "approved", "rejected"]},
             })
 
-    if is_team_leader:
-        add_team_leader_scope()
-    delegated = responsibility.leader_aliases(db, tenant_id, employee)
-    if delegated and status_filter in ['', 'pending', 'all']:
-        approval_or.append(responsibility.pending_scope(db, tenant_id, employee))
+    if status_filter in ['', 'pending', 'all'] and employee:
+        approval_or.extend([
+            responsibility.manager_stage_scope(
+                db, tenant_id, employee, 'team_leader'
+            ),
+            responsibility.manager_stage_scope(
+                db, tenant_id, employee, 'reporting_officer'
+            ),
+        ])
 
-    if is_reporting_officer:
-        add_reporting_officer_scope()
+    if status_filter in ['approved', 'rejected', 'all']:
+        historical = {
+            '$or': [
+                {
+                    'team_leader_decision_by':
+                        str(g.current_user['_id'])
+                },
+                {
+                    'reporting_officer_decision_by':
+                        str(g.current_user['_id'])
+                },
+            ]
+        }
+
+        historical['status'] = (
+            status_filter
+            if status_filter != 'all'
+            else {'$in': ['approved', 'rejected']}
+        )
+
+        approval_or.append(historical)
 
     if is_admin_hr:
         add_hr_scope()
@@ -6497,9 +6480,12 @@ def resolve_performance_review_scope(reviewer_emp, reviewer_roles, employee):
             ],
         }, "", ""
 
-    if (
-        ("reporting_officer" in reviewer_roles or "ro" in reviewer_roles or employee_is_reporting_officer(reviewer_emp))
-        and employee_field_matches_employee(employee, "reporting_officer_id", reviewer_emp)
+    hierarchy = responsibility.hierarchy_for_employee(
+        get_db(), current_tenant_id(), employee
+    )
+
+    if responsibility.same_employee(
+        reviewer_emp, hierarchy['reporting_officer']
     ):
         if reviewed_is_team_leader:
             review_target_type = "team_leader"

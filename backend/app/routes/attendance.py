@@ -2065,51 +2065,70 @@ def employee_user_id(db, employee_id, tenant_id=None):
 
 
 def approval_target_user_ids(db, employee):
-    tenant_id = employee.get("tenant_id") or current_tenant_id()
-    user_ids = []
+    tenant = employee.get('tenant_id') or current_tenant_id()
 
-    effective_leader, _, _ = responsibility.effective(db, tenant_id, employee.get('team_leader_id'))
-    team_leader_user_id = employee_user_id(
-        db,
-        str(effective_leader['_id']) if effective_leader else '',
-        tenant_id,
+    manager = responsibility.reviewer(
+        db, tenant, employee
     )
 
-    reporting_officer_user_id = employee_user_id(
-        db,
-        employee.get("reporting_officer_id"),
-        tenant_id,
+    if manager and manager.get('user_id'):
+        return [str(manager['user_id'])]
+
+    return users_for_roles(
+        db, FULL_TENANT_REPORT_ROLES, tenant
     )
-
-    if team_leader_user_id:
-        user_ids.append(team_leader_user_id)
-    elif reporting_officer_user_id:
-        user_ids.append(reporting_officer_user_id)
-    else:
-        user_ids.extend(users_for_roles(db, FULL_TENANT_REPORT_ROLES, tenant_id))
-
-    return user_ids
 
 
 def first_approval_stage(employee):
-    if employee.get("team_leader_id"):
-        return "team_leader", "Team Leader"
+    stage = responsibility.initial_manager_stage(
+        get_db(), current_tenant_id(), employee
+    )
 
-    if employee.get("reporting_officer_id"):
-        return "reporting_officer", "Reporting Officer"
+    labels = {
+        'team_leader': 'Team Leader',
+        'reporting_officer': 'Reporting Officer',
+        'hr': 'HR',
+    }
 
-    return "hr", "HR"
+    return stage, labels[stage]
 
 
 def next_approval_stage_after_team_leader(request_doc):
-    team_leader_id = normalize_text(request_doc.get("team_leader_id"))
-    reporting_officer_id = normalize_text(request_doc.get("reporting_officer_id"))
+    db = get_db()
+    tenant = current_tenant_id()
 
-    if reporting_officer_id and reporting_officer_id != team_leader_id:
-        stage = responsibility.collision_next_stage(get_db(), current_tenant_id(), team_leader_id, reporting_officer_id, 'reporting_officer')
-        return stage, 'HR' if stage == 'hr' else 'Reporting Officer'
+    owner = responsibility.request_owner(
+        db, tenant, request_doc
+    )
 
-    return "approved", "Approved"
+    if not owner:
+        return 'hr', 'HR'
+
+    hierarchy = responsibility.hierarchy_for_employee(
+        db, tenant, owner
+    )
+
+    officer = hierarchy['reporting_officer']
+    actor = emp(db)
+
+    if not officer:
+        return 'hr', 'HR'
+
+    if responsibility.same_employee(actor, officer):
+        # Retain the established independent HR review for
+        # temporary attendance succession cases.
+        if (
+            hierarchy['team_leader_status'] == 'acting'
+            or hierarchy['reporting_officer_status'] == 'acting'
+        ):
+            return 'hr', 'HR'
+
+        return 'approved', 'Approved'
+
+    if not responsibility.independent_manager(owner, officer):
+        return 'hr', 'HR'
+
+    return 'reporting_officer', 'Reporting Officer'
 
 
 def create_compoff_if_needed(db, employee, attendance_doc, holiday_info):
@@ -2258,49 +2277,42 @@ def compoff_claim_window_details(db, employee, compoff):
 
 def can_decide_mode_request(db, request_doc):
     roles = current_user_roles()
-    reviewer = emp(db)
-    if request_doc.get('tenant_id') != current_tenant_id() or str(request_doc.get('employee_id')) in responsibility.identifiers(reviewer):
-        return False
-    if request_doc.get('approval_stage') == 'team_leader':
-        return responsibility.can_lead(db, current_tenant_id(), reviewer, request_doc.get('team_leader_id'), request_doc.get('employee_id'))
+    tenant = current_tenant_id()
+    actor = emp(db)
+    user_id = str(g.current_user.get('_id') or '')
 
-    history = request_doc.get('approval_history') or []
-    if any(str(h.get('decided_by')) == str(g.current_user['_id']) and h.get('status') == 'approved' for h in history):
-        return False
-    if roles.intersection(FULL_TENANT_REPORT_ROLES):
-        return True
-
-    reviewer = emp(db)
-
-    if not reviewer:
+    if request_doc.get('tenant_id') != tenant:
         return False
 
-    reviewer_id = str(reviewer["_id"])
-    reviewer_identifier_values = employee_identifier_values(reviewer)
+    owner = responsibility.request_owner(
+        db, tenant, request_doc
+    )
 
-    if reviewer_id not in reviewer_identifier_values:
-        reviewer_identifier_values.append(reviewer_id)
+    if not owner:
+        return False
 
-    if request_doc.get("approval_stage") == "team_leader":
-        return (
-            request_doc.get("team_leader_id") in reviewer_identifier_values
-            and (
-                "team_leader" in roles
-                or employee_is_team_leader(reviewer)
-            )
+    if responsibility.same_employee(actor, owner):
+        return False
+
+    if user_id and user_id == str(owner.get('user_id') or ''):
+        return False
+
+    if responsibility.prior_approval(
+        request_doc, actor, user_id
+    ):
+        return False
+
+    if request_doc.get('approval_stage') in {
+        'team_leader', 'reporting_officer'
+    }:
+        return responsibility.can_decide_manager_stage(
+            db, tenant, actor, request_doc, user_id
         )
 
-    if request_doc.get("approval_stage") == "reporting_officer":
-        return (
-            request_doc.get("reporting_officer_id") in reviewer_identifier_values
-            and (
-                "reporting_officer" in roles
-                or "ro" in roles
-                or employee_is_reporting_officer(reviewer)
-            )
-        )
-
-    return False
+    return bool(
+        request_doc.get('approval_stage') == 'hr'
+        and roles.intersection(FULL_TENANT_REPORT_ROLES)
+    )
 
 
 @attendance_bp.get("/schedule-settings")
@@ -4235,8 +4247,15 @@ def list_holiday_work_requests():
                 "reporting_officer_id": {"$in": reviewer_identifier_values},
             })
 
-        if pending_scope and status == "pending":
-            q["$or"] = pending_scope
+        if status == "pending" and reviewer:
+            q["$or"] = [
+                responsibility.manager_stage_scope(
+                    db, current_tenant_id(), reviewer, 'team_leader'
+                ),
+                responsibility.manager_stage_scope(
+                    db, current_tenant_id(), reviewer, 'reporting_officer'
+                ),
+            ]
 
     items = list(
         db.holiday_work_requests
@@ -4622,6 +4641,20 @@ def list_mode_requests():
                     "approval_stage": "reporting_officer",
                     "reporting_officer_id": {"$in": reviewer_identifier_values},
                 })
+
+    if (
+        not roles.intersection(FULL_TENANT_REPORT_ROLES)
+        and emp(db)
+        and status in ('', 'pending')
+    ):
+        q['$or'] = [
+            responsibility.manager_stage_scope(
+                db, current_tenant_id(), emp(db), 'team_leader'
+            ),
+            responsibility.manager_stage_scope(
+                db, current_tenant_id(), emp(db), 'reporting_officer'
+            ),
+        ]
 
     items = list(
         db.attendance_mode_requests

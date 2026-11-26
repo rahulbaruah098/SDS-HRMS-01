@@ -60,7 +60,7 @@ def _manager_key(employee, level):
     return None, ''
 
 
-def resolve_approver(db, tenant, employee):
+def _legacy_resolve_approver(db, tenant, employee):
     """Prioritise a mapped TL; otherwise the directly mapped Reporting Officer.
 
     Fail closed on missing/ambiguous mappings. Never route a claim to arbitrary
@@ -70,7 +70,13 @@ def resolve_approver(db, tenant, employee):
     # references, but only a verified senior with NO actual mapping may bypass TL/RO.
     if senior_direct_accounts_eligible(employee) and _has_manager_placeholder(employee):
         raise ValueError('No assigned TL/RO: eligible senior LC claim requires Accounts Manager verification.')
-    for level in ('team_leader', 'reporting_officer'):
+    # A Team Leader's own claim must go to the Reporting Officer.
+    approval_levels = (
+        ('reporting_officer',)
+        if responsibility.capability(employee, 'tl')
+        else ('team_leader', 'reporting_officer')
+    )
+    for level in approval_levels:
         field, value = _manager_key(employee, level)
         if not value:
             continue
@@ -158,6 +164,9 @@ def senior_direct_accounts_eligible(employee):
     """
     if not employee:
         return False
+
+    if _is_managing_director(employee):
+        return True
     designation = employee.get('designation') or ''
     if isinstance(designation, dict):
         designation = designation.get('name') or designation.get('title') or ''
@@ -181,20 +190,23 @@ def direct_claimant(bill, employee, user_id=None):
 
 
 def can_verify_accounts(bill, employee, roles, user_id=None):
-    if not is_direct_accounts_bill(bill):
-        return bool(roles & ACCOUNT_ROLES)
-    # SENIOR_FINANCE_APPROVAL_V2: Direct senior claims can be reviewed by any
-    # authenticated Finance user, while the claimant cannot review their own bill.
-    # Preserve legacy Accounts Manager eligibility for existing assignments.
-    return can_mark_paid(roles, employee) and not direct_claimant(bill, employee, user_id)
+    if direct_claimant(bill, employee, user_id):
+        return False
+
+    if is_direct_accounts_bill(bill):
+        return can_mark_paid(roles, employee)
+
+    return bool(roles & ACCOUNT_ROLES)
 
 
 def can_confirm_payment(bill, employee, roles, user_id=None):
-    return can_mark_paid(roles, employee) and (
-        not is_direct_accounts_bill(bill) or not direct_claimant(bill, employee, user_id))
+    return (
+        can_mark_paid(roles, employee)
+        and not direct_claimant(bill, employee, user_id)
+    )
 
 
-def is_approver(bill, employee, roles, db=None):
+def _legacy_is_approver(bill, employee, roles, db=None):
     assigned = bill.get('approval') or {}
     if db is not None and assigned.get('type') == 'team_leader':
         return responsibility.can_lead(db, bill.get('tenant_id'), employee,
@@ -280,3 +292,143 @@ def correction_lines(original_lines, edits):
         result.append(row)
     total = _money(sum((Decimal(str(x['amount'])) for x in result), Decimal('0')))
     return result, total
+
+
+def _is_managing_director(employee):
+    if not employee:
+        return False
+
+    designation = employee.get('designation') or ''
+
+    if isinstance(designation, dict):
+        designation = (
+            designation.get('name')
+            or designation.get('title')
+            or ''
+        )
+
+    designation = ' '.join(
+        str(designation).lower()
+        .replace('_', ' ')
+        .replace('-', ' ')
+        .split()
+    )
+
+    return (
+        designation == 'managing director'
+        and responsibility.capability(employee, 'ro')
+    )
+
+
+def resolve_approver(db, tenant, employee):
+    if employee.get('tenant_id') not in (None, tenant):
+        raise ValueError('Invalid employee company mapping.')
+
+    if _is_managing_director(employee):
+        raise ValueError(
+            'Managing Director claims require direct Finance verification.'
+        )
+
+    current = responsibility.resolve(
+        db, tenant, employee.get('_id')
+    )
+
+    if not current:
+        return _legacy_resolve_approver(
+            db, tenant, employee
+        )
+
+    hierarchy = responsibility.hierarchy_for_employee(
+        db, tenant, current
+    )
+
+    stage = responsibility.initial_manager_stage(
+        db, tenant, current
+    )
+
+    manager = responsibility.stage_manager(
+        db, tenant, current, stage
+    )
+
+    if not manager:
+        if (
+            not current.get('team_leader_id')
+            and not current.get('reporting_officer_id')
+            and not responsibility.capability(current, 'tl')
+        ):
+            return _legacy_resolve_approver(
+                db, tenant, current
+            )
+
+        raise ValueError(
+            'No independent active manager is available. '
+            'Ask HR to resolve the reporting hierarchy.'
+        )
+
+    source = hierarchy.get('source')
+
+    return {
+        'type': stage,
+        'source_team_leader_id': (
+            str(source['_id']) if source else ''
+        ),
+        'employee_ref_id': str(manager['_id']),
+        'name': (
+            manager.get('name')
+            or manager.get('full_name')
+            or manager.get('employee_name')
+            or ''
+        ),
+        'user_id': str(manager.get('user_id') or ''),
+    }
+
+
+def is_approver(bill, employee, roles, db=None):
+    if not employee:
+        return False
+
+    if direct_claimant(bill, employee):
+        return False
+
+    if db is None:
+        return _legacy_is_approver(
+            bill, employee, roles, db=None
+        )
+
+    tenant = bill.get('tenant_id')
+
+    if employee.get('tenant_id') != tenant:
+        return False
+
+    if not responsibility.employee_is_active(employee):
+        return False
+
+    if bill.get('status') != 'pending_manager':
+        decision = bill.get('manager_validation') or {}
+
+        if str(decision.get('by') or '') in ids(employee):
+            return True
+
+        return _legacy_is_approver(
+            bill, employee, roles, db=db
+        )
+
+    claimant = responsibility.request_owner(
+        db, tenant, bill, field='employee_ref_id'
+    )
+
+    if not claimant:
+        return False
+
+    try:
+        assignment = resolve_approver(
+            db, tenant, claimant
+        )
+
+    except ValueError:
+        return False
+
+    return (
+        str(employee['_id'])
+        == str(assignment.get('employee_ref_id'))
+    )

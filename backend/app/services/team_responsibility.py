@@ -92,55 +92,157 @@ def key(tenant, source_id):
 
 
 def effective(db, tenant, source_id, seen=None):
-    """Return (current leader, state, original source), never an arbitrary fallback."""
+    """Resolve the current leader of an explicitly mapped team."""
+
     source = resolve(db, tenant, source_id)
+
     if not source:
         return None, 'reassignment_required', None
+
     seen = set(seen or ())
     sid = str(source['_id'])
+
     if sid in seen:
         return None, 'reassignment_required', source
+
     seen.add(sid)
+
     snapshot = read_snapshot(db, tenant)
-    record = (snapshot['records'].get(key(tenant, sid)) if snapshot is not None else
-              db.team_successions.find_one({'_id': key(tenant, sid), 'tenant_id': tenant}))
-    replacement = (record or {}).get('replacement_employee_id')
-    # An explicit earlier HR handover has priority over remaining notice service.
-    if replacement:
-        target = resolve(db, tenant, replacement)
-        officer = resolve(db, tenant, record.get('reporting_officer_id'))
-        if capability(target, 'tl') and capability(officer, 'ro') and str(target.get('reporting_officer_id', '')) in identifiers(officer):
-            return target, 'replacement_assigned', source
+
+    record = (
+        snapshot['records'].get(key(tenant, sid))
+        if snapshot is not None
+        else db.team_successions.find_one({
+            '_id': key(tenant, sid),
+            'tenant_id': tenant,
+        })
+    )
+
+    replacement_id = (record or {}).get(
+        'replacement_employee_id'
+    )
+
+    if replacement_id:
+        target = resolve(db, tenant, replacement_id)
+
+        if capability(target, 'tl'):
+            raw_ro = target.get('reporting_officer_id')
+            officer = resolve(db, tenant, raw_ro)
+
+            # Preserve an already authorized permanent TL
+            # when their RO subsequently separates.
+            if not raw_ro or (
+                officer and (
+                    capability(officer, 'ro')
+                    or not employee_is_active(officer)
+                )
+            ):
+                return target, 'replacement_assigned', source
+
         if target and not employee_is_active(target):
-            current, _, _ = effective(db, tenant, target['_id'], seen)
-            return current, 'acting' if current else 'reassignment_required', source
+            leader, _, _ = effective(
+                db, tenant, target['_id'], seen
+            )
+
+            return (
+                leader,
+                'acting' if leader else 'reassignment_required',
+                source,
+            )
+
         return None, 'reassignment_required', source
+
     if employee_is_active(source):
-        return (source, 'active', source) if capability(source, 'tl') else (None, 'reassignment_required', source)
-    officer = resolve(db, tenant, source.get('reporting_officer_id'))
-    if officer and officer['_id'] != source['_id'] and capability(officer, 'ro'):
+        if capability(source, 'tl'):
+            return source, 'active', source
+
+        # A mapped RO may serve as the TL where a separate
+        # Team Leader does not exist.
+        if capability(source, 'ro') and team_members(
+            db, tenant, source['_id']
+        ):
+            return source, 'active', source
+
+        return None, 'reassignment_required', source
+
+    officer = resolve(
+        db, tenant, source.get('reporting_officer_id')
+    )
+
+    if (
+        officer
+        and officer['_id'] != source['_id']
+        and capability(officer, 'ro')
+    ):
         return officer, 'acting', source
+
     return None, 'reassignment_required', source
 
 
 def sources(db, tenant):
-    """All actual mapped team keys, plus known vacancies (no designation inference)."""
     snapshot = read_snapshot(db, tenant)
+
     if snapshot is not None and 'sources' in snapshot:
         return snapshot['sources']
-    values = set(str(v) for v in db.employees.distinct('team_leader_id', {'tenant_id': tenant}) if v)
-    values.update(str(v) for v in db.projects.distinct('team_leader_id', {'tenant_id': tenant, 'is_deleted': {'$ne': True}}) if v)
-    values.update(str(r['source_employee_id']) for r in db.team_successions.find({'tenant_id': tenant}))
+
+    people = hierarchy_people(db, tenant)
+
+    values = {
+        str(p.get('team_leader_id'))
+        for p in people
+        if p.get('team_leader_id')
+    }
+
+    values.update(
+        str(v) for v in db.projects.distinct(
+            'team_leader_id',
+            {
+                'tenant_id': tenant,
+                'is_deleted': {'$ne': True},
+            }
+        ) if v
+    )
+
+    values.update(
+        str(r['source_employee_id'])
+        for r in db.team_successions.find({
+            'tenant_id': tenant
+        })
+    )
+
+    for person in people:
+        if (
+            employee_is_active(person)
+            and not person.get('team_leader_id')
+            and person.get('reporting_officer_id')
+            and not capability(person, 'tl')
+            and not capability(person, 'ro')
+        ):
+            values.add(
+                str(person['reporting_officer_id'])
+            )
+
     found = {}
+
     for value in values:
         person = resolve(db, tenant, value)
+
         if person:
             found[str(person['_id'])] = person
+
         elif ObjectId.is_valid(value):
-            found[value] = {'_id': ObjectId(value), 'tenant_id': tenant, 'name': 'Missing Team Leader', 'is_deleted': True}
+            found[value] = {
+                '_id': ObjectId(value),
+                'tenant_id': tenant,
+                'name': 'Missing Team Leader',
+                'is_deleted': True,
+            }
+
     result = list(found.values())
+
     if snapshot is not None:
         snapshot['sources'] = result
+
     return result
 
 
@@ -167,50 +269,118 @@ def can_lead(db, tenant, actor, source_id, subject=None):
 
 def team_members(db, tenant, source_id):
     source = resolve(db, tenant, source_id)
+
     if not source:
         return []
+
     refs = identifiers(source)
-    # Canonical original team key distinguishes multiple teams supervised by one RO.
-    return [p for p in db.employees.find({'tenant_id': tenant})
-            if employee_is_active(p) and str(p.get('team_leader_id', '')) in refs]
+    output = []
+
+    for person in hierarchy_people(db, tenant):
+        if not employee_is_active(person):
+            continue
+
+        if same_employee(person, source):
+            continue
+
+        tl = str(person.get('team_leader_id') or '')
+        ro = str(person.get('reporting_officer_id') or '')
+
+        explicitly_mapped = tl in refs
+
+        no_separate_tl = (
+            not tl
+            and ro in refs
+            and capability(source, 'ro')
+            and not capability(person, 'tl')
+            and not capability(person, 'ro')
+        )
+
+        if explicitly_mapped or no_separate_tl:
+            output.append(person)
+
+    return output
 
 
 def scoped_people(db, tenant, actor, include_self=True):
-    if not actor or actor.get('tenant_id') != tenant or not employee_is_active(actor):
+    if (
+        not actor
+        or actor.get('tenant_id') != tenant
+        or not employee_is_active(actor)
+    ):
         return []
-    tl_ids = set(leader_aliases(db, tenant, actor))
-    own = identifiers(actor)
-    people = list(db.employees.find({'tenant_id': tenant, 'is_deleted': {'$ne': True}}))
-    if capability(actor, 'ro'):
-        for person in people:
-            if str(person.get('reporting_officer_id', '')) in own:
-                tl_ids.update(identifiers(person))
-    return [p for p in people if (include_self and p['_id'] == actor['_id'])
-            or str(p.get('team_leader_id', '')) in tl_ids
-            or (capability(actor, 'ro') and str(p.get('reporting_officer_id', '')) in own)]
+
+    result = []
+
+    for person in hierarchy_people(db, tenant):
+
+        if same_employee(actor, person):
+            if include_self:
+                result.append(person)
+
+            continue
+
+        hierarchy = hierarchy_for_employee(
+            db, tenant, person
+        )
+
+        team_authority = (
+            same_employee(
+                actor,
+                hierarchy['team_leader'],
+            )
+            or same_employee(
+                actor,
+                hierarchy['reporting_officer'],
+            )
+        )
+
+        # The superior can still review the leader's own
+        # requests without inheriting unrelated teams.
+        personal_authority = (
+            (
+                capability(person, 'tl')
+                or capability(person, 'ro')
+            )
+            and same_employee(
+                actor,
+                personal_reporting_officer(
+                    db, tenant, person
+                ),
+            )
+        )
+
+        if team_authority or personal_authority:
+            result.append(person)
+
+    return result
 
 
 def reviewer(db, tenant, employee):
-    if not employee or employee.get('tenant_id') != tenant:
+    stage = initial_manager_stage(db, tenant, employee)
+
+    if stage == 'hr':
         return None
-    if capability(employee, 'tl'):
-        manager = resolve(db, tenant, employee.get('reporting_officer_id'))
-        return manager if capability(manager, 'ro') and manager['_id'] != employee['_id'] else None
-    if employee.get('team_leader_id'):
-        manager, _, _ = effective(db, tenant, employee['team_leader_id'])
-    else:
-        manager = resolve(db, tenant, employee.get('reporting_officer_id'))
-        if not capability(manager, 'ro'):
-            manager = None
-    return manager if manager and manager['_id'] != employee['_id'] else None
+
+    return stage_manager(db, tenant, employee, stage)
 
 
 def can_manage_team(db, tenant, actor, source_id):
+    if (
+        not actor
+        or actor.get('tenant_id') != tenant
+        or not employee_is_active(actor)
+    ):
+        return False
+
     if can_lead(db, tenant, actor, source_id):
         return True
-    source = resolve(db, tenant, source_id)
-    return bool(capability(actor, 'ro') and source and source.get('tenant_id') == tenant
-                and str(source.get('reporting_officer_id', '')) in identifiers(actor))
+
+    officer, _ = effective_reporting_officer(
+        db, tenant, source_id
+    )
+
+    return same_employee(actor, officer)
 
 
 def pending_scope(db, tenant, actor, field='team_leader_id'):
@@ -221,6 +391,18 @@ def pending_scope(db, tenant, actor, field='team_leader_id'):
 def collision_next_stage(db, tenant, source_id, officer_id, ordinary_next):
     leader, state, _ = effective(db, tenant, source_id)
     officer = resolve(db, tenant, officer_id)
+
+    # Avoid duplicate approval when both roles resolve to the same
+    # active employee, even if different identifier aliases are stored.
+    if (
+        state == 'active'
+        and ordinary_next == 'reporting_officer'
+        and leader
+        and officer
+        and leader['_id'] == officer['_id']
+    ):
+        return 'final'
+
     if state != 'active' and ordinary_next == 'reporting_officer' and (
             not officer or not capability(officer, 'ro') or (leader and leader['_id'] == officer['_id'])):
         # Preserve independent review; HR is an existing authorized fallback.
@@ -358,9 +540,19 @@ def _reconcile(db, tenant, dry_run=True, actor='system'):
 
 def reconcile(db, tenant, dry_run=True, actor='system'):
     if dry_run:
-        return _reconcile(db, tenant, dry_run=True, actor=actor)
+        return _reconcile(
+            db, tenant, dry_run=True, actor=actor
+        )
+
     with mutation_guard(db, tenant):
-        return _reconcile(db, tenant, dry_run=False, actor=actor)
+        result = _reconcile(
+            db, tenant, dry_run=False, actor=actor
+        )
+
+        reconcile_reporting_officers(db, tenant)
+        reconcile_pending_officer_collisions(db, tenant)
+
+        return result
 
 
 def dispatch_events(db, tenant, identifier):
@@ -490,3 +682,781 @@ def serialized_action(fn):
         with mutation_guard(get_db(), tenant):
             return fn(*args, **kwargs)
     return wrapped
+
+
+# ============================================================
+# YOURCOMATE_CENTRAL_HIERARCHY_V2
+# Scoped reverse succession and effective approval resolution.
+# ============================================================
+
+def same_employee(first, second):
+    return bool(
+        first and second
+        and first.get('_id') is not None
+        and str(first['_id']) == str(second.get('_id'))
+    )
+
+
+def hierarchy_people(db, tenant):
+    if not isinstance(tenant, str) or not tenant.strip():
+        return []
+
+    snapshot = read_snapshot(db, tenant)
+
+    if snapshot is not None:
+        return snapshot['people']
+
+    return list(db.employees.find({
+        'tenant_id': tenant,
+        'is_deleted': {'$ne': True},
+    }))
+
+
+def live_employee(db, tenant, employee):
+    if not employee or employee.get('tenant_id') != tenant:
+        return None
+
+    return resolve(db, tenant, employee.get('_id'))
+
+
+def effective_reporting_officer(db, tenant, source_id):
+    """Resolve RO authority for this team only."""
+
+    leader, leader_state, source = effective(
+        db, tenant, source_id
+    )
+
+    if not leader or not source:
+        return None, 'reassignment_required'
+
+    # Explicitly assigned combined team responsibilities.
+    # The leader's personal reporting relationship is separate.
+    if capability(leader, 'tl') and capability(leader, 'ro'):
+        return leader, 'active'
+
+    if leader_state == 'acting' and capability(leader, 'ro'):
+        return leader, 'active'
+
+    if (
+        same_employee(leader, source)
+        and capability(leader, 'ro')
+        and not capability(leader, 'tl')
+    ):
+        return leader, 'active'
+
+    raw_ro = leader.get('reporting_officer_id')
+
+    if raw_ro:
+        officer = resolve(db, tenant, raw_ro)
+
+        if capability(officer, 'ro'):
+            return officer, 'active'
+
+        # Reverse succession is allowed only when the mapped
+        # RO is a known employee of this tenant who separated.
+        if (
+            officer
+            and not employee_is_active(officer)
+            and capability(leader, 'tl')
+        ):
+            return leader, 'acting'
+
+        return None, 'reassignment_required'
+
+    # A genuine empty RO mapping allows temporary,
+    # team-scoped TL responsibility.
+    if capability(leader, 'tl'):
+        return leader, 'acting'
+
+    if capability(leader, 'ro'):
+        return leader, 'active'
+
+    return None, 'reassignment_required'
+
+
+def hierarchy_for_employee(db, tenant, employee):
+    """Resolve current team authority without changing employee roles."""
+
+    result = {
+        'source': None,
+        'team_leader': None,
+        'reporting_officer': None,
+        'team_leader_status': 'reassignment_required',
+        'reporting_officer_status': 'reassignment_required',
+    }
+
+    person = live_employee(db, tenant, employee)
+
+    if not person:
+        return result
+
+    source_id = None
+
+    if capability(person, 'tl'):
+        source_id = person['_id']
+
+    elif person.get('team_leader_id'):
+        source_id = person['team_leader_id']
+
+    if source_id:
+        leader, state, source = effective(
+            db, tenant, source_id
+        )
+
+        officer, officer_state = effective_reporting_officer(
+            db, tenant, source_id
+        )
+
+        result.update({
+            'source': source,
+            'team_leader': leader,
+            'reporting_officer': officer,
+            'team_leader_status': state,
+            'reporting_officer_status': officer_state,
+        })
+
+        if (
+            leader and officer
+            and same_employee(leader, officer)
+            and capability(leader, 'ro')
+            and not capability(leader, 'tl')
+        ):
+            result['team_leader_status'] = 'acting'
+
+        return result
+
+    raw_ro = person.get('reporting_officer_id')
+    officer = resolve(db, tenant, raw_ro)
+
+    if capability(officer, 'ro'):
+        result.update({
+            'source': officer,
+            'reporting_officer': officer,
+            'reporting_officer_status': 'active',
+        })
+
+        if not capability(person, 'ro'):
+            result['team_leader'] = officer
+            result['team_leader_status'] = 'acting'
+
+        return result
+
+    if capability(person, 'ro') and not raw_ro:
+        result['reporting_officer'] = person
+        result['reporting_officer_status'] = 'active'
+
+    return result
+
+
+def independent_manager(person, candidate):
+    return bool(
+        person
+        and candidate
+        and employee_is_active(candidate)
+        and person.get('tenant_id') == candidate.get('tenant_id')
+        and not same_employee(person, candidate)
+    )
+
+
+def initial_manager_stage(db, tenant, employee):
+    person = live_employee(db, tenant, employee)
+
+    if not person or not employee_is_active(person):
+        return 'hr'
+
+    if capability(person, 'tl') or capability(person, 'ro'):
+        return (
+            'reporting_officer'
+            if personal_reporting_officer(
+                db, tenant, person
+            )
+            else 'hr'
+        )
+
+    hierarchy = hierarchy_for_employee(
+        db, tenant, person
+    )
+
+    if (
+        person.get('team_leader_id')
+        and independent_manager(
+            person,
+            hierarchy['team_leader'],
+        )
+    ):
+        return 'team_leader'
+
+    if independent_manager(
+        person,
+        hierarchy['reporting_officer'],
+    ):
+        return 'reporting_officer'
+
+    return 'hr'
+
+
+def stage_manager(db, tenant, employee, stage):
+    person = live_employee(db, tenant, employee)
+
+    if not person or not employee_is_active(person):
+        return None
+
+    if stage not in {
+        'team_leader',
+        'reporting_officer',
+    }:
+        return None
+
+    # A leader's own request must not be resolved using
+    # their authority over subordinate employees.
+    if capability(person, 'tl') or capability(person, 'ro'):
+        return personal_reporting_officer(
+            db, tenant, person
+        )
+
+    hierarchy = hierarchy_for_employee(
+        db, tenant, person
+    )
+
+    candidate = hierarchy.get(stage)
+
+    if independent_manager(person, candidate):
+        return candidate
+
+    return None
+
+
+def request_owner(db, tenant, record, field='employee_id'):
+    if not record or record.get('tenant_id') != tenant:
+        return None
+
+    return resolve(db, tenant, record.get(field))
+
+
+def request_manager(db, tenant, record, stage=None,
+                    field='employee_id'):
+
+    person = request_owner(db, tenant, record, field)
+
+    if not person:
+        return None
+
+    return stage_manager(
+        db,
+        tenant,
+        person,
+        stage or record.get('approval_stage'),
+    )
+
+
+def prior_approval(record, actor, user_id=None):
+    if not actor and not user_id:
+        return False
+
+    values = identifiers(actor)
+
+    if user_id:
+        values.add(str(user_id))
+
+    if str(record.get('team_leader_decision_by') or '') in values:
+        return True
+
+    for entry in record.get('approval_history') or []:
+        action = str(
+            entry.get('status') or entry.get('action') or ''
+        ).lower()
+
+        decision_by = str(
+            entry.get('decided_by')
+            or entry.get('actor_id')
+            or entry.get('by')
+            or ''
+        )
+
+        if action == 'approved' and decision_by in values:
+            return True
+
+    return False
+
+
+def can_decide_manager_stage(db, tenant, actor, record,
+                             user_id=None):
+    if not actor or not employee_is_active(actor):
+        return False
+
+    if actor.get('tenant_id') != tenant:
+        return False
+
+    person = request_owner(db, tenant, record)
+
+    if not person or same_employee(actor, person):
+        return False
+
+    stage = record.get('approval_stage')
+    manager = request_manager(db, tenant, record, stage)
+
+    if not same_employee(actor, manager):
+        return False
+
+    if (
+        stage == 'reporting_officer'
+        and prior_approval(record, actor, user_id)
+    ):
+        return False
+
+    return True
+
+
+def subject_reference_values(db, tenant, person):
+    output = [str(person['_id']), person['_id']]
+
+    for value in identifiers(person):
+        if same_employee(resolve(db, tenant, value), person):
+            output.append(value)
+
+    return list(dict.fromkeys(output))
+
+
+def manager_subject_values(db, tenant, actor, stage=None):
+    if (
+        not actor
+        or actor.get('tenant_id') != tenant
+        or not employee_is_active(actor)
+    ):
+        return []
+
+    output = []
+
+    for person in hierarchy_people(db, tenant):
+        if not employee_is_active(person):
+            continue
+
+        if same_employee(actor, person):
+            continue
+
+        target_stage = stage or initial_manager_stage(
+            db, tenant, person
+        )
+
+        manager = stage_manager(
+            db, tenant, person, target_stage
+        )
+
+        if same_employee(actor, manager):
+            output.extend(
+                subject_reference_values(db, tenant, person)
+            )
+
+    return list(dict.fromkeys(output))
+
+
+def manager_stage_scope(db, tenant, actor, stage):
+    query = {
+        'approval_stage': stage,
+        'employee_id': {
+            '$in': manager_subject_values(
+                db, tenant, actor, stage
+            )
+        },
+        'status': {'$in': ['pending', 'in_review']},
+    }
+
+    if stage == 'reporting_officer' and actor:
+        query['team_leader_decision_by'] = {
+            '$nin': list(identifiers(actor))
+        }
+
+    return query
+
+
+def acting_officer_for_team(db, tenant, actor, source_id):
+    officer, state = effective_reporting_officer(
+        db, tenant, source_id
+    )
+
+    return bool(
+        state == 'acting'
+        and same_employee(actor, officer)
+        and employee_is_active(actor)
+        and actor.get('tenant_id') == tenant
+    )
+
+
+def current_manager_user_id(db, tenant, record, stage=None):
+    manager = request_manager(db, tenant, record, stage)
+
+    return str(manager.get('user_id') or '') if manager else ''
+
+
+def reconcile_reporting_officers(db, tenant):
+    """Persist team-scoped RO transitions and notify responsible staff.
+
+    Authority is computed live even before this worker executes.
+    No completed business record is rewritten.
+    """
+
+    from app.utils.notification_service import notify_users
+
+    output = []
+
+    for source in sources(db, tenant):
+        leader, _, _ = effective(
+            db, tenant, source.get('_id')
+        )
+
+        if not leader or not capability(leader, 'tl'):
+            continue
+
+        raw_ro = leader.get('reporting_officer_id')
+        former = resolve(db, tenant, raw_ro)
+
+        officer, state = effective_reporting_officer(
+            db, tenant, source['_id']
+        )
+
+        team_id = str(source['_id'])
+        record_id = 'officer:' + key(tenant, team_id)
+
+        previous = db.team_officer_successions.find_one({
+            '_id': record_id,
+            'tenant_id': tenant,
+        })
+
+        target = str(officer['_id']) if officer else ''
+        fingerprint = state + ':' + target + ':' + str(raw_ro or '')
+
+        known_departure = bool(
+            former and not employee_is_active(former)
+        )
+
+        if not previous and not known_departure:
+            db.team_officer_successions.update_one(
+                {'_id': record_id, 'tenant_id': tenant},
+                {
+                    '$setOnInsert': {
+                        'tenant_id': tenant,
+                        'team_id': team_id,
+                        'state_key': fingerprint,
+                        'status': state,
+                        'effective_officer_id': target,
+                        'version': 0,
+                        'events': [],
+                    }
+                },
+                upsert=True,
+            )
+            continue
+
+        if not previous:
+            db.team_officer_successions.update_one(
+                {'_id': record_id, 'tenant_id': tenant},
+                {
+                    '$setOnInsert': {
+                        'tenant_id': tenant,
+                        'team_id': team_id,
+                        'version': 0,
+                        'events': [],
+                    }
+                },
+                upsert=True,
+            )
+
+            previous = db.team_officer_successions.find_one({
+                '_id': record_id,
+                'tenant_id': tenant,
+            })
+
+        if previous.get('state_key') != fingerprint:
+            version = previous.get('version', 0) + 1
+            event_id = record_id + ':' + str(version)
+
+            event = {
+                'id': event_id,
+                'at': now().isoformat(),
+                'effective_at': (
+                    separation_instant(former)
+                    if known_departure else now().isoformat()
+                ),
+                'status': state,
+                'team_id': team_id,
+                'effective_officer_id': target,
+                'previous_officer_id': previous.get(
+                    'effective_officer_id'
+                ),
+                'acting_team_leader_id': str(leader['_id']),
+                'historical_records_rewritten': 0,
+                'categories': CATEGORIES,
+            }
+
+            db.team_officer_successions.update_one(
+                {
+                    '_id': record_id,
+                    'tenant_id': tenant,
+                    'version': previous.get('version', 0),
+                },
+                {
+                    '$set': {
+                        'state_key': fingerprint,
+                        'status': state,
+                        'effective_officer_id': target,
+                        'updated_at': now(),
+                    },
+                    '$inc': {'version': 1},
+                    '$push': {'events': event},
+                },
+            )
+
+            output.append(event)
+
+        current = db.team_officer_successions.find_one({
+            '_id': record_id,
+            'tenant_id': tenant,
+        })
+
+        for event in current.get('events', []):
+            if event.get('delivered'):
+                continue
+
+            event_id = event['id']
+
+            db.audit_logs.update_one(
+                {'_id': event_id},
+                {
+                    '$setOnInsert': {
+                        'tenant_id': tenant,
+                        'action': 'reporting_officer_succession',
+                        'entity': 'employees',
+                        'entity_id': team_id,
+                        'actor_id': 'system',
+                        'created_at': now(),
+                        'meta': event,
+                    }
+                },
+                upsert=True,
+            )
+
+            recipients = {
+                str(u['_id'])
+                for u in db.users.find({
+                    'tenant_id': tenant,
+                    'is_active': True,
+                    'roles': {'$in': sorted(HR_ROLES)},
+                })
+            }
+
+            for person in (
+                leader,
+                resolve(
+                    db, tenant,
+                    event.get('effective_officer_id')
+                ),
+                resolve(
+                    db, tenant,
+                    event.get('previous_officer_id')
+                ),
+            ):
+                if (
+                    person
+                    and employee_is_active(person)
+                    and person.get('user_id')
+                ):
+                    recipients.add(str(person['user_id']))
+
+            active_ids = [
+                ObjectId(uid)
+                for uid in recipients
+                if ObjectId.is_valid(uid)
+            ]
+
+            recipients = [
+                str(u['_id'])
+                for u in db.users.find({
+                    'tenant_id': tenant,
+                    'is_active': True,
+                    '_id': {'$in': active_ids},
+                })
+            ]
+
+            if recipients:
+                notify_users(
+                    db,
+                    recipients,
+                    'Reporting Officer Responsibility Updated',
+                    (
+                        'Team Leader now has Acting Reporting Officer '
+                        'responsibilities for the assigned team.'
+                        if event['status'] == 'acting'
+                        else 'Reporting Officer responsibilities have '
+                             'been reassigned. Review your approval queue.'
+                    ),
+                    {
+                        'type': 'reporting_officer_succession',
+                        'team_id': team_id,
+                        'page': 'team_approvals',
+                    },
+                    tenant_id=tenant,
+                    event='team.officer_succession',
+                    event_key=event_id,
+                )
+
+            db.team_officer_successions.update_one(
+                {
+                    '_id': record_id,
+                    'tenant_id': tenant,
+                    'events.id': event_id,
+                },
+                {'$set': {'events.$.delivered': True}},
+            )
+
+    return output
+
+
+def reconcile_pending_officer_collisions(db, tenant):
+    """Escalate already-pending duplicate RO approvals for HR review.
+
+    Never silently finalize an existing leave or financial request.
+    """
+
+    from app.utils.notification_service import notify_users
+
+    recipients = [
+        str(u['_id'])
+        for u in db.users.find({
+            'tenant_id': tenant,
+            'is_active': True,
+            'roles': {'$in': sorted(HR_ROLES)},
+        })
+    ]
+
+    for collection_name in (
+        'leave_requests',
+        'attendance_mode_requests',
+        'holiday_work_requests',
+    ):
+        collection = db[collection_name]
+
+        query = {
+            'tenant_id': tenant,
+            'approval_stage': 'reporting_officer',
+            'status': {'$in': ['pending', 'in_review']},
+            'is_deleted': {'$ne': True},
+        }
+
+        for record in collection.find(query):
+            owner = request_owner(db, tenant, record)
+
+            if not owner:
+                continue
+
+            hierarchy = hierarchy_for_employee(
+                db, tenant, owner
+            )
+
+            manager = stage_manager(
+                db, tenant, owner, 'reporting_officer'
+            )
+
+            collision = bool(
+                manager and prior_approval(
+                    record,
+                    manager,
+                    manager.get('user_id'),
+                )
+            )
+
+            owner_is_acting_ro = (
+                hierarchy['reporting_officer_status'] == 'acting'
+                and same_employee(
+                    owner, hierarchy['reporting_officer']
+                )
+            )
+
+            if not (collision or owner_is_acting_ro):
+                continue
+
+            if not recipients:
+                continue
+
+            event_id = (
+                'hierarchy-escalation:'
+                + collection_name
+                + ':'
+                + str(record['_id'])
+            )
+
+            changed = collection.update_one(
+                {
+                    '_id': record['_id'],
+                    'tenant_id': tenant,
+                    'status': record['status'],
+                    'approval_stage': 'reporting_officer',
+                },
+                {
+                    '$set': {
+                        'approval_stage': 'hr',
+                        'approval_stage_label': 'HR',
+                        'hr_status': 'pending',
+                        'hierarchy_escalation_reason':
+                            'Independent reviewer required after succession',
+                        'updated_at': now(),
+                    }
+                },
+            )
+
+            if not changed.modified_count:
+                continue
+
+            db.audit_logs.update_one(
+                {'_id': event_id},
+                {
+                    '$setOnInsert': {
+                        'tenant_id': tenant,
+                        'action': 'hierarchy_approval_escalated',
+                        'entity': collection_name,
+                        'entity_id': str(record['_id']),
+                        'actor_id': 'system',
+                        'created_at': now(),
+                    }
+                },
+                upsert=True,
+            )
+
+            notify_users(
+                db,
+                recipients,
+                'Independent Approval Required',
+                'A pending request needs HR review after a hierarchy change.',
+                {
+                    'type': 'hierarchy_approval_escalated',
+                    'page': 'team_approvals',
+                    'source_id': str(record['_id']),
+                },
+                tenant_id=tenant,
+                event='team.approval_escalation',
+                event_key=event_id,
+            )
+
+
+# YOURCOMATE_COMBINED_HIERARCHY_FINAL_V1
+
+def personal_reporting_officer(db, tenant, employee):
+    """Resolve a leader's own independent approver."""
+
+    person = live_employee(db, tenant, employee)
+
+    if not person or not employee_is_active(person):
+        return None
+
+    officer = resolve(
+        db,
+        tenant,
+        person.get('reporting_officer_id'),
+    )
+
+    if (
+        capability(officer, 'ro')
+        and independent_manager(person, officer)
+    ):
+        return officer
+
+    return None

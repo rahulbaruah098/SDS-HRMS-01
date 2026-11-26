@@ -88,17 +88,57 @@ def test_invalid_ro_requires_reassignment(setup,bad):
     assert e.db.leave_requests.find_one({'_id':req})['status']=='pending'
 
 
-def test_pending_leave_transfer_and_independent_hr_stage(setup):
-    e=setup;req=leave(e);before=e.db.leave_requests.find_one({'_id':req});separate(e)
-    rows=e.call('ro','GET','/team_approvals').get_json()['items'];assert str(req) in [x['_id'] for x in rows]
-    response=e.call('ro','PATCH',f'/leave_requests/{req}/decision',{'status':'approved','note':'Acting TL verified'})
-    assert response.status_code==200,response.get_json()
-    current=e.db.leave_requests.find_one({'_id':req})
-    assert current['approval_stage']=='hr' and current['status']=='pending'
-    assert current['team_leader_decision_by']==str(e.users['ro']['_id'])
-    assert current['reference']==before['reference'] and current['attachments']==before['attachments']
-    assert current['approval_history'][0]==before['approval_history'][0]
-    assert e.call('ro','PATCH',f'/leave_requests/{req}/decision',{'status':'approved'}).status_code in (403,404)
+def test_pending_leave_transfer_and_single_combined_approval(setup):
+    e = setup
+    req = leave(e)
+
+    e.db.leave_requests.update_one(
+        {'_id': req},
+        {'$set': {'leave_type': 'LWP'}}
+    )
+
+    before = e.db.leave_requests.find_one({'_id': req})
+
+    separate(e)
+
+    rows = e.call(
+        'ro', 'GET', '/team_approvals'
+    ).get_json()['items']
+
+    assert str(req) in [x['_id'] for x in rows]
+
+    response = e.call(
+        'ro', 'PATCH',
+        f'/leave_requests/{req}/decision',
+        {
+            'status': 'approved',
+            'note': 'Combined effective TL and RO authority',
+        }
+    )
+
+    assert response.status_code == 200, response.get_json()
+
+    current = e.db.leave_requests.find_one({'_id': req})
+
+    assert current['status'] == 'approved'
+    assert current['approval_stage'] == 'approved'
+
+    assert current['team_leader_decision_by'] == str(
+        e.users['ro']['_id']
+    )
+
+    assert current['reference'] == before['reference']
+    assert current['attachments'] == before['attachments']
+
+    assert current['approval_history'][0] == (
+        before['approval_history'][0]
+    )
+
+    assert e.call(
+        'ro', 'PATCH',
+        f'/leave_requests/{req}/decision',
+        {'status': 'approved'}
+    ).status_code in (400, 403, 404)
 
 
 def test_new_leave_notifies_acting_reviewer(setup,monkeypatch):
@@ -401,11 +441,27 @@ def test_legacy_ro_code_is_canonicalized_for_replacement_picker(setup):
     assert appointment(e).status_code==200
 
 
-def test_replacement_loses_scope_if_mapped_ro_becomes_inactive(setup):
-    e=setup;separate(e)
-    assert appointment(e).status_code==200
-    separate(e,'ro')
-    assert r.effective(e.db,'alpha',e.people['tl']['_id'])[:2]==(None,'reassignment_required')
+def test_replacement_retains_scope_and_becomes_acting_ro(setup):
+    e = setup
+    separate(e)
+
+    assert appointment(e).status_code == 200
+
+    separate(e, 'ro')
+
+    leader, state, _ = r.effective(
+        e.db, 'alpha', e.people['tl']['_id']
+    )
+
+    assert state == 'replacement_assigned'
+    assert leader['_id'] == e.people['replacement']['_id']
+
+    officer, officer_state = r.effective_reporting_officer(
+        e.db, 'alpha', e.people['tl']['_id']
+    )
+
+    assert officer_state == 'acting'
+    assert officer['_id'] == e.people['replacement']['_id']
 
 
 def test_appointment_retry_finishes_interrupted_outbox(setup,monkeypatch):

@@ -606,8 +606,39 @@ def employee_identifier_values(employee):
 
 
 def employee_mapping_query(field_name, employee, tenant_id):
-    values = responsibility.leader_aliases(get_db(), tenant_id, employee) if field_name == 'team_leader_id' else list(responsibility.identifiers(employee))
-    return {'tenant_id': tenant_id, **active_employee_fields(), field_name: {'$in': values}}
+    db = get_db()
+    people = []
+
+    if not employee:
+        return {
+            'tenant_id': tenant_id,
+            '_id': {'$in': []},
+        }
+
+    target = (
+        'team_leader'
+        if field_name == 'team_leader_id'
+        else 'reporting_officer'
+    )
+
+    for person in responsibility.hierarchy_people(db, tenant_id):
+        if responsibility.same_employee(employee, person):
+            continue
+
+        hierarchy = responsibility.hierarchy_for_employee(
+            db, tenant_id, person
+        )
+
+        if responsibility.same_employee(
+            employee, hierarchy[target]
+        ):
+            people.append(person['_id'])
+
+    return {
+        'tenant_id': tenant_id,
+        **active_employee_fields(),
+        '_id': {'$in': people},
+    }
 
 def employee_state(employee):
     employee = employee or {}
@@ -1039,62 +1070,44 @@ def scoped_employee_ids_for_manager(db, tenant_id, emp_id, roles, employee=None)
 
 
 def pending_leave_scope_for_employee_capability(tenant_id, emp_id, employee, roles):
-    stage_or = []
-    identifier_values = employee_identifier_values(employee)
-
-    if emp_id and emp_id not in identifier_values:
-        identifier_values.append(emp_id)
-
-    if responsibility.leader_aliases(get_db(), tenant_id, employee):
-        stage_or.append({
-            "team_leader_id": {"$in": responsibility.leader_aliases(get_db(), tenant_id, employee)},
-            "approval_stage": "team_leader",
-        })
-
-    if is_reporting_officer_capability(employee, roles):
-        stage_or.append({
-            "reporting_officer_id": {"$in": identifier_values},
-            "approval_stage": "reporting_officer",
-        })
-
-    if not stage_or:
+    if not employee:
         return None
 
+    db = get_db()
+
     return {
-        "tenant_id": tenant_id,
-        "status": "pending",
-        "is_deleted": {"$ne": True},
-        "$or": stage_or,
+        'tenant_id': tenant_id,
+        'status': 'pending',
+        'is_deleted': {'$ne': True},
+        '$or': [
+            responsibility.manager_stage_scope(
+                db, tenant_id, employee, 'team_leader'
+            ),
+            responsibility.manager_stage_scope(
+                db, tenant_id, employee, 'reporting_officer'
+            ),
+        ],
     }
 
 
 def pending_attendance_mode_scope_for_employee_capability(tenant_id, emp_id, employee, roles):
-    stage_or = []
-    identifier_values = employee_identifier_values(employee)
-
-    if emp_id and emp_id not in identifier_values:
-        identifier_values.append(emp_id)
-
-    if responsibility.leader_aliases(get_db(), tenant_id, employee):
-        stage_or.append({
-            "team_leader_id": {"$in": responsibility.leader_aliases(get_db(), tenant_id, employee)},
-            "approval_stage": "team_leader",
-        })
-
-    if is_reporting_officer_capability(employee, roles):
-        stage_or.append({
-            "reporting_officer_id": {"$in": identifier_values},
-            "approval_stage": "reporting_officer",
-        })
-
-    if not stage_or:
+    if not employee:
         return None
 
+    db = get_db()
+
     return {
-        "tenant_id": tenant_id,
-        "status": "pending",
-        "is_deleted": {"$ne": True},
-        "$or": stage_or,
+        'tenant_id': tenant_id,
+        'status': 'pending',
+        'is_deleted': {'$ne': True},
+        '$or': [
+            responsibility.manager_stage_scope(
+                db, tenant_id, employee, 'team_leader'
+            ),
+            responsibility.manager_stage_scope(
+                db, tenant_id, employee, 'reporting_officer'
+            ),
+        ],
     }
 
 
@@ -1313,14 +1326,19 @@ def build_employee_team_hierarchy_tree(db, tenant_id, employee, roles, team_memb
 
     self_payload = employee_member_payload(employee, "self")
 
-    reporting_officer = None
-    team_leader = None
+    hierarchy = responsibility.hierarchy_for_employee(
+        db, tenant_id, employee
+    )
 
-    if employee.get("reporting_officer_id"):
-        reporting_officer = employee_by_id(db, tenant_id, employee.get("reporting_officer_id"))
+    reporting_officer = hierarchy['reporting_officer']
+    team_leader = hierarchy['team_leader']
 
-    if employee.get("team_leader_id"):
-        team_leader, _, _ = responsibility.effective(db, tenant_id, employee.get('team_leader_id'))
+    if team_leader:
+        team_members = responsibility.team_members(
+            db,
+            tenant_id,
+            (hierarchy.get('source') or team_leader)['_id']
+        )
 
     reporting_officer_payload = (
         employee_member_payload(reporting_officer, "reporting_officer")
@@ -1337,6 +1355,20 @@ def build_employee_team_hierarchy_tree(db, tenant_id, employee, roles, team_memb
         if is_team_leader_capability(employee, roles)
         else {}
     )
+
+    if reporting_officer_payload:
+        reporting_officer_payload['hierarchy_role_label'] = (
+            'Acting Reporting Officer'
+            if hierarchy['reporting_officer_status'] == 'acting'
+            else 'Reporting Officer'
+        )
+
+    if team_leader_payload:
+        team_leader_payload['hierarchy_role_label'] = (
+            'Acting Team Leader'
+            if hierarchy['team_leader_status'] == 'acting'
+            else 'Team Leader'
+        )
 
     team_member_payloads = [
         employee_member_payload(member, "team_member")
@@ -1364,6 +1396,16 @@ def build_employee_team_hierarchy_tree(db, tenant_id, employee, roles, team_memb
 
     return {
         "self": self_payload,
+        "effective_hierarchy": {
+            "team_leader_status":
+                hierarchy['team_leader_status'],
+            "reporting_officer_status":
+                hierarchy['reporting_officer_status'],
+            "combined_responsibilities":
+                responsibility.same_employee(
+                    team_leader, reporting_officer
+                ),
+        },
         "reporting_officer": reporting_officer_payload,
         "team_leader": team_leader_payload,
         "team_members": team_member_payloads,

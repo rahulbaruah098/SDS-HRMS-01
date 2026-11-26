@@ -1,4 +1,3 @@
-import { ComplianceWidget } from './AttendanceCompliance';
 import FaceVerifiedBadge from '../components/FaceVerifiedBadge';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -733,7 +732,7 @@ function TeamHierarchyMap({ tree = {}, title = 'My Team Root Map' }) {
       <div className="emp-root-map-stage">
         <div className="emp-root-node ro-node">
           {reportingOfficer?.employee_name || reportingOfficer?.name ? (
-            <PersonChip person={reportingOfficer} label="Reporting Officer" />
+            <PersonChip person={reportingOfficer} label={reportingOfficer.hierarchy_role_label || tree?.reporting_officer?.hierarchy_role_label || "Reporting Officer"} />
           ) : (
             <div className="emp-root-empty">No Reporting Officer mapped</div>
           )}
@@ -743,7 +742,7 @@ function TeamHierarchyMap({ tree = {}, title = 'My Team Root Map' }) {
 
         <div className="emp-root-node tl-node">
           {teamLeader?.employee_name || teamLeader?.name ? (
-            <PersonChip person={teamLeader} label="Team Leader" />
+            <PersonChip person={teamLeader} label={teamLeader.hierarchy_role_label || tree?.team_leader?.hierarchy_role_label || "Team Leader"} />
           ) : (
             <PersonChip person={self} label="Current Employee" />
           )}
@@ -1991,7 +1990,6 @@ const reportingProjectAverage = projectSummary.reporting_average_progress || ave
 
   return (
     <div className="page-grid employee-dashboard-page">
-      <ComplianceWidget setPage={setPage} />
       <style>{`
         .emp-project-dashboard,
         .emp-performance-dashboard {
@@ -5789,7 +5787,6 @@ const reportingProjectAverage = projectSummary.reporting_average_progress || ave
               <span className="kicker">Employee Self Service</span>
 
               <AutoFitEmployeeName name={displayName} /> <FaceVerifiedBadge />
-              <ComplianceWidget setPage={setPage} />
 
               <p className="employee-dashboard-subtitle">
                 Manage attendance, leave, projects, approvals, support requests,

@@ -59,6 +59,22 @@ def _serialize_with_actions(db, bill):
     employee = get_current_employee(db)
     roles = current_user_roles()
     visible = clean_doc(bill)
+
+    if bill.get('status') == 'pending_manager':
+        claimant = responsibility.request_owner(
+            db, bill.get('tenant_id'),
+            bill, field='employee_ref_id'
+        )
+
+        if claimant:
+            try:
+                visible['effective_approval'] = resolve_approver(
+                    db, bill['tenant_id'], claimant
+                )
+            except ValueError:
+                visible['effective_approval'] = {
+                    'type': 'reassignment_required'
+                }
     visible['capabilities'] = {
         'can_submit': _owner(bill, employee) and bill.get('status') in {'draft', 'rejected', 'pending_verification'},
         'can_correct': _owner(bill, employee) and bill.get('status') == 'rejected',
@@ -248,6 +264,14 @@ def list_bills():
                 {'status': 'pending_manager', 'approval.type': 'team_leader', '$or': [
                     {'approval.source_team_leader_id': {'$in': refs}},
                     {'approval.employee_ref_id': {'$in': refs}}]}]
+            query['$or'].append({
+                'status': 'pending_manager',
+                'employee_ref_id': {
+                    '$in': responsibility.manager_subject_values(
+                        db, current_tenant_id(), employee
+                    )
+                },
+            })
             query['status'] = {'$in': sorted(REVIEW_STATES)}
         else:
             return _error('No review access', 403)
@@ -304,6 +328,15 @@ def lc_pending_dashboard_approvals():
                 ],
             },
         ]
+
+        query['$or'].append({
+            'status': 'pending_manager',
+            'employee_ref_id': {
+                '$in': responsibility.manager_subject_values(
+                    db, current_tenant_id(), employee
+                )
+            },
+        })
 
     output = []
     # One employee/role lookup and a small Mongo projection per request.

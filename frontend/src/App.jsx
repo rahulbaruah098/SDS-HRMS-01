@@ -1,4 +1,4 @@
-import AttendanceCompliance, { ComplianceWidget } from './pages/AttendanceCompliance';
+import AttendanceCompliance from './pages/AttendanceCompliance';
 import ComplianceSettings from './components/compliance/ComplianceSettings';
 import React, { useEffect, useMemo, useState } from 'react';
 import { api, currentUser, getTodayCelebrations } from './api/client';
@@ -1365,7 +1365,7 @@ if (normalizedPage === 'companies') {
   }
 
   if (normalizedPage === 'profile') {
-    return <div className="page-grid"><ComplianceWidget setPage={setPage}/><Profile setPage={setPage} user={safeUser} /></div>;
+    return <Profile setPage={setPage} user={safeUser} />;
   }
 
 if (normalizedPage === 'system_settings') {
