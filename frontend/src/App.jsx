@@ -1,3 +1,5 @@
+import AttendanceCompliance, { ComplianceWidget } from './pages/AttendanceCompliance';
+import ComplianceSettings from './components/compliance/ComplianceSettings';
 import React, { useEffect, useMemo, useState } from 'react';
 import { api, currentUser, getTodayCelebrations } from './api/client';
 import {
@@ -815,6 +817,8 @@ function getPageFromHrmsPath(pathname) {
 function moduleAccessKey(page) {
   const normalizedPage = normalizePageKey(page);
 
+  if (normalizedPage === 'attendance_payroll_integration') return 'system_settings';
+
   // Employee handover is an HR/Admin subpage of Employee Management.
   // Preserve the existing Employees module permission and the page's own role check.
   if (normalizedPage === 'employee_handover') {
@@ -1266,6 +1270,14 @@ if (normalizedPage === 'attendance') {
   return <Attendance setPage={setPage} user={safeUser} />;
 }
 
+if (normalizedPage === 'attendance_payroll_integration') {
+    return <div className="page-grid"><ComplianceSettings user={safeUser} setPage={setPage}/></div>;
+  }
+
+if (normalizedPage === 'attendance_compliance') {
+    return <AttendanceCompliance user={safeUser} setPage={setPage} />;
+  }
+
 if (normalizedPage === 'attendance_logs') {
   return <AttendanceLogs setPage={setPage} user={safeUser} />;
 }
@@ -1353,7 +1365,7 @@ if (normalizedPage === 'companies') {
   }
 
   if (normalizedPage === 'profile') {
-    return <Profile setPage={setPage} user={safeUser} />;
+    return <div className="page-grid"><ComplianceWidget setPage={setPage}/><Profile setPage={setPage} user={safeUser} /></div>;
   }
 
 if (normalizedPage === 'system_settings') {

@@ -1,3 +1,4 @@
+import { ComplianceWidget } from './AttendanceCompliance';
 import FaceVerifiedBadge from '../components/FaceVerifiedBadge';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -1990,6 +1991,7 @@ const reportingProjectAverage = projectSummary.reporting_average_progress || ave
 
   return (
     <div className="page-grid employee-dashboard-page">
+      <ComplianceWidget setPage={setPage} />
       <style>{`
         .emp-project-dashboard,
         .emp-performance-dashboard {
@@ -5787,6 +5789,7 @@ const reportingProjectAverage = projectSummary.reporting_average_progress || ave
               <span className="kicker">Employee Self Service</span>
 
               <AutoFitEmployeeName name={displayName} /> <FaceVerifiedBadge />
+              <ComplianceWidget setPage={setPage} />
 
               <p className="employee-dashboard-subtitle">
                 Manage attendance, leave, projects, approvals, support requests,

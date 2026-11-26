@@ -1,3 +1,4 @@
+import { ComplianceLink } from '../components/compliance/ComplianceSettings';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
@@ -1904,6 +1905,7 @@ export default function Settings({ user, setPage }) {
 
   return (
     <div className="page-grid settings-branding-page">
+      <ComplianceLink setPage={setPage} />
       <style>{`
         .settings-branding-page {
           --st-ink: #101a3a;

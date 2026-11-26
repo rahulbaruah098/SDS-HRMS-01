@@ -682,6 +682,7 @@ export const coreModules = [
     'Validate submitted monthly LC bills, verify in Accounts, and record actual payment as Accounts Manager.',
     [...HR_ROLES, 'finance', 'accounts_finance', 'accounts', 'accountant', 'accounts_manager', 'finance_manager', 'team_leader', 'reporting_officer', 'ro', 'manager'],
   ],
+  ['attendance_compliance', 'Attendance Compliance', Clock, 'Review points, working minutes and approved payroll shortages.', [...ALL_COMMON_ROLES, 'finance', 'accounts_finance'].filter(r => r !== 'super_admin')],
   [
     'attendance_logs',
     'Attendance Logs',

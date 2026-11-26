@@ -1,3 +1,4 @@
+import DynamicPayroll from '../components/compliance/DynamicPayroll';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity,
@@ -2205,6 +2206,7 @@ export default function PayrollConfiguration({ user = {}, setPage = () => {} }) 
 
   return (
     <section className="payroll-config-page">
+      <DynamicPayroll />
       <header className="payroll-config-hero">
         <div>
           <span className="payroll-config-eyebrow">

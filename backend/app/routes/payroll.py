@@ -6713,6 +6713,11 @@ def calculate_monthly_payroll():
                 attendance=attendance,
                 inputs=calculation_inputs,
             )
+            from app.services.attendance_payroll_integration import enhance_calculation
+            calculation = enhance_calculation(
+                db, tenant_id, employee, period_key, calculation, salary_structure,
+                effective_statutory_config, attendance, calculation_inputs,
+            )
             calculation = _apply_reimbursements_to_calculation(
                 calculation,
                 reimbursements,
@@ -6861,6 +6866,8 @@ def calculate_monthly_payroll():
                 "tds_instruction_snapshot": _snapshot(
                     tax_context.get("tds") or {}
                 ),
+                "attendance_compliance_snapshot": _snapshot(calculation.get("attendance_compliance_snapshot")),
+                "dynamic_payroll_snapshot": _snapshot(calculation.get("dynamic_payroll_snapshot")),
                 "calculation_input_snapshot": _snapshot(calculation_inputs),
                 "calculated_at": _now(),
                 "calculated_by": _current_user_id(),
@@ -7321,6 +7328,14 @@ def advance_payroll_run():
             status_code=409,
             code="payroll_payslip_status_mismatch",
         )
+
+    if action in {"hr_review", "finance_approve", "lock"}:
+        from app.services.attendance_payroll_integration import validate_workflow_snapshots
+        from app.services.attendance_payroll_engine import ComplianceError
+        try:
+            validate_workflow_snapshots(db, tenant_id, payslips)
+        except ComplianceError as exc:
+            raise PayrollConfigError(str(exc), status_code=409, code="stale_compliance_snapshot")
 
     note = safe_str(payload.get("note"))[:1000]
     now = _now()

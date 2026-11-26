@@ -204,6 +204,8 @@ def create_app():
     # and tenant/state-wise statutory configuration.
     # Keep this before workflow and generic CRUD because workflow.py still
     # contains the existing legacy payroll-run endpoint.
+    from .routes.attendance_compliance import compliance_bp
+    app.register_blueprint(compliance_bp, url_prefix="/api/v1/attendance-compliance")
     app.register_blueprint(payroll_bp, url_prefix="/api/v1/payroll")
 
     # Payroll Branding / Payslip Designer APIs:
@@ -546,4 +548,6 @@ def create_app():
 
     from app.services.team_responsibility import start_worker
     start_worker(app)
+    from app.services.attendance_compliance_worker import start_worker as start_compliance_worker
+    start_compliance_worker(app)
     return app

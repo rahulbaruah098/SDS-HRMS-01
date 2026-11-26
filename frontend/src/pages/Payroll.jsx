@@ -1,3 +1,4 @@
+import { Snapshot as ComplianceSnapshot } from '../components/compliance/shared';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
@@ -8006,6 +8007,7 @@ export default function Payroll({ user = {}, setPage = () => {} }) {
                       </span>
                       <span className="payroll-employee-meta">
                         {safeText(payslip.employee_code || payslip.employee_info?.employee_code)}
+                        {payslip.attendance_compliance_snapshot && <details><summary>Attendance calculation</summary><ComplianceSnapshot snapshot={payslip.attendance_compliance_snapshot} /></details>}
                       </span>
                     </td>
                     <td>

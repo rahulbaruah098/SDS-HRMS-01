@@ -926,6 +926,7 @@ def calculate_payroll(
     statutory_config: Mapping[str, Any],
     attendance: Mapping[str, Any],
     inputs: Mapping[str, Any] | None = None,
+    allow_dynamic_components: bool = False,
 ) -> dict[str, Any]:
     """Calculate one employee's payroll without reading or writing a database.
 
@@ -1050,7 +1051,7 @@ def calculate_payroll(
         and component.get("include_in_gross")
         and component["code"] not in SDS_GROSS_COMPONENT_CODES
     ]
-    if unexpected_gross_components:
+    if unexpected_gross_components and not allow_dynamic_components:
         raise PayrollCalculationError(
             "SDS Gross Salary must consist only of Basic, HRA, Medical Allowance, "
             "and Other Allowance. Unexpected gross component(s): "
@@ -1064,6 +1065,12 @@ def calculate_payroll(
         monthly_ctc,
         pf_enabled=_bool_value(pf_config.get("enabled"), default=False),
     )
+    if allow_dynamic_components:
+        # Values are produced only by the bounded, server-side component engine.
+        # Original callers retain the exact legacy SDS preset behavior.
+        for code, value in (salary_structure.get("_dynamic_resolved_components") or {}).items():
+            if code in SDS_GROSS_COMPONENT_CODES:
+                sds_amounts[code] = _decimal(value, "dynamic." + code, minimum=ZERO) or ZERO
     full_amounts = _resolve_non_statutory_components(
         salary_structure,
         components,
@@ -1488,6 +1495,15 @@ def calculate_payroll(
         )
 
     earnings.sort(key=lambda item: (item["display_order"], item["code"]))
+    if allow_dynamic_components:
+        for component in components:
+            if component.get("source") == "dynamic_payroll" and component.get("category") == "employer_contribution":
+                value = _round_money(payable_amounts.get(component["code"], ZERO), rounding_mode)
+                employer_contributions.append(_line(code=component["code"], label=component["label"],
+                    amount=value, category="employer_contribution", display_order=component["display_order"]))
+                deductions.append(_line(code=component["code"] + "_pass_through", label=component["label"] + " (employer)",
+                    amount=value, category="deduction", display_order=component["display_order"],
+                    metadata={"pass_through": True}))
     employer_contributions.sort(
         key=lambda item: (item["display_order"], item["code"])
     )
@@ -1496,7 +1512,10 @@ def calculate_payroll(
     gross_salary = _round_money(contractual_gross, rounding_mode)
     payable_gross_salary = _round_money(payable_gross, rounding_mode)
     employer_contribution_total = _round_money(
-        pf_employer + esi_employer,
+        pf_employer + esi_employer + (_sum(
+            _round_money(payable_amounts.get(c["code"], ZERO), rounding_mode)
+            for c in components if c.get("source") == "dynamic_payroll" and c.get("category") == "employer_contribution"
+        ) if allow_dynamic_components else ZERO),
         rounding_mode,
     )
     cost_to_company = gross_salary + employer_contribution_total

@@ -1,3 +1,4 @@
+import { ComplianceWidget } from '../pages/AttendanceCompliance';
 import {
   AlertTriangle,
   Bell,
@@ -267,7 +268,7 @@ const SIDEBAR_SECTIONS = [
     name: 'Attendance & Leave',
     keys: [
       'attendance', 'team_field_attendance', 'my_local_conveyance', 'lc_verification', 'leave_requests', 'team_approvals', 'application_status',
-      'attendance_logs', 'leave', 'leave_balances',
+      'attendance_compliance', 'attendance_logs', 'leave', 'leave_balances',
       'holiday_work_requests', 'compoff_credits', 'compoff_records',
       'holiday_calendar', 'attendance_mode_requests',
     ],
@@ -1112,7 +1113,9 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
   const saasSummary = useMemo(() => getSaasSummary(safeUser), [safeUser]);
 
   const currentTitle =
-    page === 'dashboard'
+    page === 'attendance_payroll_integration'
+      ? 'Attendance & Payroll Integration'
+      : page === 'dashboard'
       ? 'Dashboard'
       : page === 'subscription_expired'
         ? saasSummary.isSuspended
@@ -3155,6 +3158,7 @@ export default function AppLayout({ user, setUser, page, setPage, children }) {
           ) : null}
 
           <div className="topbar-actions">
+            {page === 'dashboard' && <ComplianceWidget compact setPage={goTo}/>}
             <div className="notification-wrap" ref={notificationRef}>
               <button
                 type="button"
