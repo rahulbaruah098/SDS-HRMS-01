@@ -294,3 +294,100 @@ def test_disabled_controls_stop_new_backdated_charges_but_allow_restoration(setu
     assert not any(x.get('date')=='2026-11-03' for x in row['events'])
     data={'employee_id':str(e.people['employee']['_id']),'date':'2026-11-03','rule':'leave_not_applied','leave_not_applied':True,'reason':'Backdated violation'}
     assert e.call('hr','POST','/attendance-compliance/violations',data).status_code==400
+
+
+def test_midmonth_pilot_own_statement_initialises_missing_ledger(setup, monkeypatch):
+    e = setup
+    monkeypatch.setattr(ac, 'local_now', lambda: datetime(2026, 11, 27, 10, 30))
+    p = configure(e, monthly_points=5, balance_cap=5, expiry_days=0)
+    p.update(effective_from='2026-11-27')
+    e.db.attendance_compliance_settings.update_one({'_id': ac.uid('alpha', 'settings')}, {'$set': {'versions': [p]}})
+    log(e, '2026-11-25')  # Before the pilot: never charged.
+    assert summary(e)['allocated'] == 0  # Core summary remains read-only.
+    url = '/attendance-compliance/summary/me?period=2026-11'
+    for _ in range(2):
+        r = e.call('employee', 'GET', url)
+        assert r.status_code == 200, r.get_json()
+        item = r.get_json()['item']
+        assert (item['allocated'], item['points'], item['consumed'], item['eligible_minutes']) == (5, 5, 0, 0)
+        assert len(item['events']) == 1 and item['events'][0]['date'] == '2026-11-27'
+    process(e)
+    assert summary(e)['points'] == 5 and len(summary(e)['events']) == 1
+    assert summary(e)['violations'] == 0
+    assert e.db.employee_compliance_ledgers.count_documents({'tenant_id': 'alpha'}) == 1
+
+
+def test_current_statement_never_refills_exhausted_points(setup):
+    e = setup
+    p = configure(e, monthly_points=1)
+    who = e.people['employee']
+    on = '2026-12-01'
+    ac.ensure_allocation(e.db, 'alpha', who, on, p)
+    rule = p['rules'][0]
+    ac.post_event(e.db, 'alpha', who, on, {'id': 'exhaust-test', 'kind': 'violation', 'rule': rule['code'],
+        'rule_snapshot': rule, 'delta': -1, 'actor_id': 'system', 'reason': 'Test charge'}, p)
+    r = e.call('employee', 'GET', '/attendance-compliance/summary/me?period=2026-12')
+    assert r.status_code == 200, r.get_json()
+    assert r.get_json()['item']['points'] == 0
+    assert len(ac.ledger(e.db, 'alpha', who, on, p)['events']) == 2
+
+
+def test_statement_bootstrap_skips_historical_and_disabled(setup):
+    e = setup
+    who = e.people['employee']
+    assert ac.ensure_current_allocation(e.db, 'alpha', who, '2026-12') is None
+    configure(e, monthly_points=5)
+    assert ac.ensure_current_allocation(e.db, 'alpha', who, '2026-11') is None
+    assert ac.ensure_current_allocation(e.db, 'alpha', who, '2027-01') is None
+    assert e.db.employee_compliance_ledgers.count_documents({}) == 0
+
+
+def test_worker_continues_after_employee_error(setup, monkeypatch):
+    from app.services import attendance_compliance_worker as worker
+    e = setup
+    configure(e)
+    seen = []
+    bad = str(e.people['employee']['_id'])
+    good = str(e.people['employee2']['_id'])
+    def fake_process(db, tenant, employee, period):
+        eid = str(employee['_id'])
+        seen.append(eid)
+        if eid == bad:
+            raise ValueError('Simulated malformed employee data')
+    monkeypatch.setattr(ac, 'process_employee', fake_process)
+    with pytest.raises(RuntimeError, match='failed'):
+        worker.run_once(e.db, 'alpha', '2026-11')
+    assert bad in seen and good in seen
+
+
+def test_worker_starts_once_in_serving_process(monkeypatch):
+    from app.services import attendance_compliance_worker as worker
+    monkeypatch.delenv('YOURCOMATE_TEST_ISOLATION', raising=False)
+    monkeypatch.delenv('ATTENDANCE_COMPLIANCE_WORKER', raising=False)
+    class FakeApp:
+        config = {}
+        extensions = {}
+        hooks = []
+        def before_request(self, fn):
+            self.hooks.append(fn)
+            return fn
+    started = []
+    class FakeThread:
+        def __init__(self, **kwargs):
+            self.alive = False
+        def start(self):
+            started.append(self)
+            self.alive = True
+        def is_alive(self):
+            return self.alive
+    monkeypatch.setattr(worker, 'Thread', FakeThread)
+    app = FakeApp()
+    worker.start_worker(app)
+    worker.start_worker(app)
+    assert len(app.hooks) == 1 and not started
+    app.hooks[0]()
+    app.hooks[0]()
+    assert len(started) == 1
+    state = app.extensions['attendance_compliance_worker']
+    worker.wake_worker(app)
+    assert state['wake'].is_set()

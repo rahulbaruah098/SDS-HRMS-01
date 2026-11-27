@@ -3,7 +3,7 @@ from copy import deepcopy
 from functools import wraps
 from io import BytesIO
 from datetime import timedelta
-from flask import Blueprint, g, jsonify, request, send_file
+from flask import Blueprint, current_app, g, jsonify, request, send_file
 from app.extensions import get_db
 from app.utils.auth import current_user_required, find_employee_for_user, normalize_roles
 from app.services import attendance_compliance as ac
@@ -105,6 +105,9 @@ def settings():
 @access('payroll')
 def settings_save():
     result = ac.save_policy(get_db(), g.compliance_tenant, body(), actor(), payroll_only=not bool(g.compliance_roles & ac.HR))
+    if result['enabled']:
+        from app.services.attendance_compliance_worker import wake_worker
+        wake_worker(current_app._get_current_object())
     return jsonify(policy=result)
 
 
@@ -135,7 +138,10 @@ def projects():
 @access()
 def summary(reference):
     employee = person(reference)
-    result = public_summary(employee, period_arg(), own_statement=(reference == "me"))
+    period = period_arg()
+    if reference == 'me':
+        ac.ensure_current_allocation(get_db(), g.compliance_tenant, employee, period)
+    result = public_summary(employee, period, own_statement=(reference == "me"))
     ac.audit(get_db(), g.compliance_tenant, 'compliance_view', actor(), str(employee['_id']), None, {'period': result['period']}, 'Viewed compliance statement')
     return jsonify(item=result)
 

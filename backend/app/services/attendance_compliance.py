@@ -276,6 +276,45 @@ def ensure_allocation(db, tenant, employee, on, p):
     return current
 
 
+
+def ensure_current_allocation(db, tenant, employee, period):
+    """Bootstrap a missing current-cycle ledger on the employee's own statement.
+
+    No historical period, attendance reconciliation, notification or payroll work
+    runs in this request. Carry-forward and expiry policies remain worker-owned
+    because they may depend on previous cycles and historical policy changes.
+    """
+    today = local_now().date()
+    on = str(today)
+    if period != on[:7] or employee.get('is_deleted'):
+        return
+    joined = str(employee.get('joining_date') or employee.get('date_of_joining') or '2000-01-01')[:10]
+    left = str(employee.get('last_working_day') or employee.get('last_working_date') or '2099-12-31')[:10]
+    if not joined <= on <= left:
+        return
+    p = policy(db, tenant, on)
+    if not p['enabled'] or p['carry_forward'] or p['expiry_days']:
+        return
+    current = ledger(db, tenant, employee, on, p)
+    if current['version']:
+        return  # Never refill an existing (including exhausted) ledger.
+    # Match the reconciler's first eligible allocation date within this cycle.
+    # This also handles a first activation on a holiday or late in the month.
+    first = day(current['cycle'])
+    while first <= today:
+        candidate = str(first)
+        first += timedelta(days=1)
+        if candidate < joined:
+            continue
+        effective = policy(db, tenant, candidate)
+        if not effective['enabled'] or cycle(candidate, effective['reset_day']) != current['cycle']:
+            continue
+        if effective['carry_forward'] or effective['expiry_days']:
+            return
+        # Existing CAS and deterministic allocation event ID prevent duplicates.
+        return ensure_allocation(db, tenant, employee, candidate, effective)
+
+
 def reverse_event(db, tenant, employee, on, event_id, actor, why):
     p = policy(db, tenant, on)
     current = ledger(db, tenant, employee, on, p)
