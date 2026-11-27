@@ -706,3 +706,74 @@ def test_v3_approval_during_checkout_seal_requires_report(env, monkeypatch):
         ready, token = p.seal_checkout_day(env.db, env.people["employee"], "2026-11-23")
         assert not ready["checkout_allowed"] and token is None
         assert "2026-11-23" not in p.get_plan(env.db, str(env.people["employee"]["_id"]), "2026-11").get("sealed_dates", {})
+
+
+def batch_target_payload(env, project, recipients=("employee", "employee2"), **overrides):
+    task = next(t for t in p.MASTER["tasks"] if t["function"] == project["function"])
+    return {"request_id": uuid4().hex, "month": "2026-11", "project_id": project["_id"],
+            "deliverable_id": project["deliverables"][0]["id"],
+            "employee_ids": [str(env.people[name]["_id"]) for name in recipients],
+            "output": "Complete assigned development work", "unit": "Count", "quantity": 2,
+            "activity": task["activity"], "due_date": "2026-11-28", "priority": "Medium", **overrides}
+
+
+def test_bulk_monthly_targets_per_employee_and_retry(env):
+    project = create_project(env)
+    payload = batch_target_payload(env, project, ("employee", "employee2", "tl", "employee"))
+    first = env.call("tl", "POST", "/projects/planning/targets", payload)
+    assert first.status_code == 201, first.get_json()
+    data = first.get_json()
+    assert data["count"] == data["created_count"] == 3
+    assert len({t["_id"] for t in data["items"]}) == 3
+    assert all(t["quantity"] == 2 and t["status"] == "approved" for t in data["items"])
+    for name in ("employee", "employee2", "tl"):
+        mine = env.call(name, "GET", f"/projects/planning/targets?month=2026-11&employee_id={env.people[name]['_id']}")
+        assert mine.status_code == 200
+        assert len(mine.get_json()["items"]) == 1
+    again = env.call("tl", "POST", "/projects/planning/targets", payload)
+    assert again.status_code == 200 and again.get_json()["created_count"] == 0
+    assert env.db.project_monthly_targets.count_documents({}) == 3
+    changed = env.call("tl", "POST", "/projects/planning/targets", {**payload, "quantity": 9})
+    assert changed.status_code == 409
+    assert env.db.project_monthly_targets.count_documents({}) == 3
+
+
+@pytest.mark.parametrize("recipients", [("employee", "outsider"), ("employee", "foreign"), ("employee", "ro"), ()])
+def test_bulk_invalid_recipient_writes_nothing(env, recipients):
+    project = create_project(env)
+    result = env.call("tl", "POST", "/projects/planning/targets", batch_target_payload(env, project, recipients))
+    assert result.status_code in (400, 403), result.get_json()
+    assert env.db.project_monthly_targets.count_documents({}) == 0
+
+
+def test_bulk_rejects_inactive_employee_and_unauthorized_actor(env):
+    project = create_project(env)
+    payload = batch_target_payload(env, project)
+    assert env.call("employee", "POST", "/projects/planning/targets", payload).status_code == 403
+    env.db.employees.update_one({"_id": env.people["employee2"]["_id"]}, {"$set": {"status": "resigned"}})
+    assert env.call("tl", "POST", "/projects/planning/targets", payload).status_code in (400, 403)
+    assert env.db.project_monthly_targets.count_documents({}) == 0
+
+
+def test_bulk_retry_resumes_partial_write(env, monkeypatch):
+    from pymongo.errors import AutoReconnect
+    project = create_project(env)
+    payload = batch_target_payload(env, project)
+    collection_class = type(env.db.project_monthly_targets)
+    original = collection_class.update_one
+    calls = 0
+    def interrupted(self, *args, **kwargs):
+        nonlocal calls
+        if self.name == "project_monthly_targets":
+            calls += 1
+            if calls == 2:
+                raise AutoReconnect("simulated temporary disconnect")
+        return original(self, *args, **kwargs)
+    monkeypatch.setattr(collection_class, "update_one", interrupted)
+    first = env.call("tl", "POST", "/projects/planning/targets", payload)
+    assert first.status_code == 503
+    assert env.db.project_monthly_targets.count_documents({}) == 1
+    second = env.call("tl", "POST", "/projects/planning/targets", payload)
+    assert second.status_code == 201, second.get_json()
+    assert second.get_json()["count"] == 2 and second.get_json()["created_count"] == 1
+    assert env.db.project_monthly_targets.count_documents({}) == 2

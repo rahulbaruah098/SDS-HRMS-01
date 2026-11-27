@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Plus, Trash2, CalendarDays, Send, Check, Clock, FileCheck2, ArrowUpRight, Download, ChevronDown, Pencil } from 'lucide-react';
 import { Field, Modal } from './ProjectPlanForm';
 import { localDate, planning, uid } from '../api/projectPlanning';
@@ -9,34 +9,71 @@ export const Badge = ({ value }) => <span className={`pw-badge pw-status-${Strin
 export const Empty = ({ title, children }) => <div className="pw-empty"><CalendarDays size={28} /><h3>{title}</h3><p>{children}</p></div>;
 
 export function TargetForm({ options, projects, month, onClose, onSaved }) {
-  const [form, setForm] = useState({ request_id: uid(), month, project_id: '', deliverable_id: '', employee_id: '', output: '', unit: 'Count', quantity: 1, activity: '', due_date: '', expected_evidence: '', evidence_required: false, priority: 'Medium' });
+  const [form, setForm] = useState(() => ({ request_id: uid(), month, project_id: '', deliverable_id: '', employee_ids: [], output: '', unit: 'Count', quantity: 1, activity: '', due_date: '', expected_evidence: '', evidence_required: false, priority: 'Medium' }));
   const [error, setError] = useState('');
+  const [search, setSearch] = useState('');
+  const [retryLocked, setRetryLocked] = useState(false);
+  const submitting = useRef(false);
   const [busy, setBusy] = useState(false);
   const project = projects.find(p => p._id === form.project_id);
-  const people = options.employees.filter(e => [...(project?.assigned_employee_ids || []), ...(project?.collaborator_ids || []), project?.team_leader_id].includes(e.id));
+  const people = options.employees.filter(e => e.is_active !== false && [...(project?.assigned_employee_ids || []), ...(project?.collaborator_ids || []), project?.team_leader_id].includes(e.id));
   const activities = [...new Set(options.master.tasks.filter(t => t.function === project?.function).map(t => t.activity))];
-  const change = (key, value) => setForm(f => ({ ...f, [key]: value, ...(key === 'project_id' ? { deliverable_id: '', employee_id: '', activity: '', due_date: '' } : {}) }));
+  const selected = form.employee_ids.filter(id => people.some(p => p.id === id));
+  const allSelected = people.length > 0 && selected.length === people.length;
+  const filteredPeople = people.filter(p => `${p.name || ''} ${p.employee_code || ''} ${p.department || ''}`.toLowerCase().includes(search.trim().toLowerCase()));
+  const change = (key, value) => {
+    if (key === 'project_id') setSearch('');
+    setForm(f => ({ ...f, [key]: value, ...(key === 'project_id' ? { deliverable_id: '', employee_ids: [], activity: '', due_date: '' } : {}) }));
+  };
+  const toggleEmployee = (id, checked) => setForm(f => ({ ...f, employee_ids: checked ? [...new Set([...f.employee_ids, id])] : f.employee_ids.filter(v => v !== id) }));
+  const close = event => { if (submitting.current) { event?.preventDefault(); return; } onClose(); };
   async function submit(e) {
-    e.preventDefault(); setBusy(true); setError('');
-    try { await planning('/targets', form, 'POST'); await onSaved(); onClose(); } catch (err) { setError(err.message); } finally { setBusy(false); }
+    e.preventDefault();
+    if (submitting.current) return;
+    if (!selected.length) { setError('Select at least one responsible employee.'); return; }
+    submitting.current = true; setBusy(true); setError('');
+    try {
+      const result = await planning('/targets', { ...form, employee_ids: selected }, 'POST');
+      await onSaved(result.count ?? selected.length); onClose();
+    } catch (err) {
+      if (!err.status || err.status >= 500) {
+        setRetryLocked(true);
+        setError(`${err.message} Some targets may already have been saved. Retry this same assignment without changing its details.`);
+      } else { setError(err.message); }
+    }
+    finally { submitting.current = false; setBusy(false); }
   }
-  return <Modal title={`Assign monthly work · ${month}`} onClose={onClose}><form onSubmit={submit} className="pw-form"><div className="pw-form-body">
+  return <Modal title={`Assign monthly work · ${month}`} onClose={close}><form onSubmit={submit} className="pw-form"><div className="pw-form-body">
     {error && <p role="alert" className="pw-notice pw-error">{error}</p>}
-    <p className="pw-muted">Set one measurable target per employee. They will distribute this work across dates in their monthly plan.</p>
-    <div className="pw-grid">
+    <p className="pw-muted">Assign the same measurable target to one or more project members. Each employee receives their own target and plans it independently.</p>
+    <fieldset className="pw-grid pw-target-fields" disabled={busy || retryLocked}>
       <Field label="Project"><select required value={form.project_id} onChange={e => change('project_id', e.target.value)}><option value="">Select configured project</option>{projects.filter(p => p.can_manage_project_team && p.planning_schema === 1 && p.status === 'active').map(p => <option value={p._id} key={p._id}>{p.name}</option>)}</select></Field>
       <Field label="Deliverable"><select required value={form.deliverable_id} onChange={e => change('deliverable_id', e.target.value)}><option value="">Select deliverable</option>{project?.deliverables?.map(d => <option key={d.id} value={d.id}>{d.title}</option>)}</select></Field>
-      <Field label="Responsible employee"><select required value={form.employee_id} onChange={e => change('employee_id', e.target.value)}><option value="">Select project member</option>{people.map(p => <option value={p.id} key={p.id}>{p.name}</option>)}</select></Field>
+      <div className="pw-field pw-target-employee-field"><span id="pw-target-employee-label">Responsible employees</span>
+        <details className="pw-target-employee-select" key={form.project_id}>
+          <summary aria-labelledby="pw-target-employee-label pw-target-employee-summary"><span id="pw-target-employee-summary">{selected.length === 1 ? people.find(p => p.id === selected[0])?.name : selected.length ? `${selected.length} employees selected` : 'Select project members'}</span><ChevronDown size={16} aria-hidden="true" /></summary>
+          <div className="pw-target-employee-menu">
+            <input type="search" aria-label="Search responsible employees" placeholder="Search employees…" value={search} onChange={e => setSearch(e.target.value)} disabled={!people.length} />
+            <label className="pw-target-employee-all"><input type="checkbox" checked={allSelected} disabled={!people.length} onChange={e => change('employee_ids', e.target.checked ? people.map(p => p.id) : [])} /> Select all ({people.length})</label>
+            <div className="pw-target-employee-list">
+              {filteredPeople.map(p => <label key={p.id}><input type="checkbox" checked={selected.includes(p.id)} onChange={e => toggleEmployee(p.id, e.target.checked)} /><span>{p.name}{(p.employee_code || p.department) && <small>{[p.employee_code, p.department].filter(Boolean).join(' · ')}</small>}</span></label>)}
+              {!filteredPeople.length && <p className="pw-muted">{people.length ? 'No matching employees.' : project ? 'No eligible project members.' : 'Choose a project first.'}</p>}
+            </div>
+            <div className="pw-target-employee-actions"><small aria-live="polite">{selected.length} of {people.length} selected</small><button type="button" className="pw-button pw-text" disabled={!selected.length} onClick={() => change('employee_ids', [])}>Clear</button></div>
+          </div>
+        </details>
+      </div>
       <Field label="Standard activity"><select required value={form.activity} onChange={e => change('activity', e.target.value)}><option value="">Select activity</option>{activities.map(a => <option key={a}>{a}</option>)}</select></Field>
       <Field label="Monthly target / output" wide><textarea required value={form.output} onChange={e => change('output', e.target.value)} placeholder="Describe a measurable result" rows={2} /></Field>
       <Field label="Unit"><select value={form.unit} onChange={e => change('unit', e.target.value)}>{options.master.units.map(u => <option key={u}>{u}</option>)}</select></Field>
-      <Field label="Target quantity"><input type="number" required min="0.000001" step="any" value={form.quantity} onChange={e => change('quantity', e.target.value)} /></Field>
+      <Field label="Target quantity per employee"><input type="number" required min="0.000001" step="any" value={form.quantity} onChange={e => change('quantity', e.target.value)} /></Field>
       <Field label="Target due date"><input type="date" required min={[`${month}-01`, project?.start_date || ''].sort().at(-1)} max={project?.deliverables?.find(d => d.id === form.deliverable_id)?.due_date || project?.due_date} value={form.due_date} onChange={e => change('due_date', e.target.value)} /></Field>
       <Field label="Priority"><select value={form.priority} onChange={e => change('priority', e.target.value)}>{options.master.priorities.map(v => <option key={v}>{v}</option>)}</select></Field>
       <Field label="Expected evidence" wide><input value={form.expected_evidence} onChange={e => change('expected_evidence', e.target.value)} placeholder="Report, dataset, shared document or other result" /></Field>
       <label className="pw-check pw-wide"><input type="checkbox" checked={form.evidence_required} onChange={e => change('evidence_required', e.target.checked)} /> Require an evidence link for completed work</label>
-    </div>
-  </div><footer><button type="button" className="pw-button" onClick={onClose}>Cancel</button><button className="pw-button pw-primary" disabled={busy}>{busy ? 'Assigning…' : 'Assign monthly target'}</button></footer></form></Modal>;
+      {selected.length > 0 && <p className="pw-target-assignment-summary pw-wide" aria-live="polite">{selected.length} {selected.length === 1 ? 'employee' : 'employees'} · {form.quantity || '0'} {form.unit} each. Separate monthly targets will be created.</p>}
+    </fieldset>
+  </div><footer><button type="button" className="pw-button" disabled={busy} onClick={close}>Cancel</button><button className="pw-button pw-primary" disabled={busy || !selected.length}>{busy ? 'Assigning…' : retryLocked ? 'Retry assignment' : selected.length > 1 ? `Assign to ${selected.length} employees` : 'Assign monthly target'}</button></footer></form></Modal>;
 }
 
 export function MonthlyEditor({ plan, targets, options, isOwn, onRefresh, onNotice }) {

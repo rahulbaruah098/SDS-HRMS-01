@@ -16,3 +16,24 @@
 @media(max-width:1100px){.pw-kpis{grid-template-columns:repeat(3,minmax(0,1fr))}.pw-score-row{grid-template-columns:1fr}.pw-score{padding:16px}.pw-ring{width:64px;height:64px;flex-basis:64px}.pw-grid-four{grid-template-columns:repeat(2,minmax(0,1fr))}.pw-hero{padding:24px}}
 @media(max-width:700px){.pw-hero{padding:20px;border-radius:18px;align-items:flex-start;flex-direction:column;gap:18px}.pw-hero h1{font-size:28px}.pw-hero h1 span{font-size:16px}.pw-hero p{font-size:12px}.pw-tabs{border-radius:12px;margin-bottom:16px}.pw-tabs button{padding:11px 12px;font-size:12px}.pw-panel,.pw-filters,.pw-approval,.pw-chart{padding:16px;border-radius:14px}.pw-panel-head{flex-wrap:wrap;gap:12px}.pw-panel-head>.pw-field{flex-basis:100%}.pw-toolbar{gap:12px}.pw-toolbar>.pw-field{flex:1 1 140px;min-width:0}.pw-grid,.pw-grid-three,.pw-grid-four{grid-template-columns:1fr;gap:14px}.pw-chart-grid,.pw-week,.pw-export{grid-template-columns:1fr;gap:0}.pw-field input,.pw-field select,.pw-field textarea,.pw-members>input{font-size:16px;min-height:46px}.pw-deliverables>article{grid-template-columns:1fr}.pw-deliverable-edit{grid-template-columns:minmax(0,1fr) 44px}.pw-deliverable-edit>.pw-deliverable-title{grid-column:1}.pw-deliverable-edit>.pw-deliverable-time{grid-column:1}.pw-deliverable-edit>.pw-icon{grid-column:2;grid-row:1}.pw-modal,.pw-modal-wide{width:calc(100vw - 16px);max-height:calc(100dvh - 16px);border-radius:16px}.pw-modal>header{padding:12px 16px}.pw-modal>header h2{font-size:17px}.pw-form-body{padding:16px}.pw-form footer{padding:12px 16px max(12px,env(safe-area-inset-bottom));flex-wrap:wrap}.pw-form footer>.pw-button{flex:1}.pw-kpis{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.pw-kpis article{padding:15px}.pw-kpis strong{font-size:25px}.pw-workspace h2{font-size:18px}.pw-readiness{padding:15px}.pw-notice{align-items:flex-start}.pw-day-section{padding:12px}.pw-plan-row{padding:14px}.pw-skeleton{grid-template-columns:1fr}.pw-skeleton i{height:90px}.pw-line-chart{height:165px}.pw-actions>.pw-spacer{display:none}.pw-plan-rows+.pw-actions>.pw-button{flex:1 1 140px}}
 @media(prefers-reduced-motion:reduce){.pw-workspace *,.pw-modal *{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
+
+/* Monthly target recipient picker — scoped to this form. */
+.pw-target-fields{border:0;padding:0;margin:0;min-width:0}
+.pw-target-employee-select{min-width:0;border:1px solid var(--pw-line,#dfe4ee);border-radius:9px;background:var(--pw-card,#fff)}
+.pw-target-employee-select summary{list-style:none;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 12px;min-height:44px;cursor:pointer;overflow-wrap:anywhere}
+.pw-target-employee-select summary::-webkit-details-marker{display:none}
+.pw-target-employee-select summary svg{flex-shrink:0;color:var(--pw-muted,#64718b)}
+.pw-target-employee-select[open] summary svg{transform:rotate(180deg)}
+.pw-target-employee-menu{display:grid;gap:8px;padding:10px;border-top:1px solid var(--pw-line,#e4e8f1)}
+.pw-target-employee-menu input[type=search]{min-height:40px;padding:8px 10px}
+.pw-target-employee-menu label{display:flex;align-items:center;gap:10px;min-height:42px;padding:6px 3px;font-size:13px;cursor:pointer;overflow-wrap:anywhere}
+.pw-target-employee-menu label input[type=checkbox]{display:block;flex:0 0 17px;width:17px;min-width:17px;height:17px;min-height:17px;padding:0;margin:0;accent-color:var(--pw-primary,#4f46e5)}
+.pw-target-employee-menu label span{min-width:0}
+.pw-target-employee-menu label small{display:block;margin-top:3px}
+.pw-target-employee-all{font-weight:650;border-bottom:1px solid var(--pw-line,#e4e8f1)}
+.pw-target-employee-list{max-height:180px;overflow:auto;overscroll-behavior:contain}
+.pw-target-employee-list p{margin:8px 0;font-size:12px}
+.pw-target-employee-actions{display:flex;align-items:center;justify-content:space-between;gap:8px;border-top:1px solid var(--pw-line,#e4e8f1);padding-top:4px}
+.pw-target-employee-actions .pw-button{padding:6px 8px;min-height:32px;font-size:12px}
+.pw-target-assignment-summary{margin:0;padding:10px 12px;background:#efefff;border-radius:9px;color:#4e49a5;font-size:12px;overflow-wrap:anywhere}
+@media(max-width:700px){.pw-target-employee-select summary{min-height:46px}.pw-target-employee-list{max-height:160px}.pw-target-employee-menu label{min-height:44px}}

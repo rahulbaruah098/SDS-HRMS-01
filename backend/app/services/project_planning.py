@@ -17,7 +17,7 @@ import re
 from bson import BSON, ObjectId
 from flask import g
 from app.services import team_responsibility as responsibility
-from pymongo.errors import DuplicateKeyError
+from pymongo.errors import DuplicateKeyError, PyMongoError
 
 MASTER = json.loads((Path(__file__).parent.parent / "data/project_planning_master.json").read_text(encoding="utf-8"))
 TASKS = {r["code"]: r for r in MASTER["tasks"]}
@@ -284,10 +284,10 @@ def target_by_id(db, identifier):
     return row
 
 
-def save_target(db, data):
-    project = get_project(db, data.get("project_id"), manage=True)
+def prepare_target(db, data, *, identifier=None, project=None, employee=None):
+    project = project if project is not None else get_project(db, data.get("project_id"), manage=True)
     require(project.get("planning_schema") == 1, "Complete this project's dates, function and deliverables first")
-    employee = authorize_employee(db, data.get("employee_id"))
+    employee = employee if employee is not None else authorize_employee(db, data.get("employee_id"))
     require(str(employee["_id"]) in project_api().project_member_ids(project), "Employee must be assigned to the project")
     require(project.get("status") == "active", "Monthly targets require an active project")
     period = month(data.get("month"))
@@ -305,8 +305,9 @@ def save_target(db, data):
     require(any(t["function"] == function and t["activity"] == activity for t in TASKS.values()), "Activity does not belong to the project's function")
     key = text(data.get("request_id"), "Request ID", True, 64)
     require(re.fullmatch(r"[A-Za-z0-9_-]{8,64}", key), "Invalid request ID")
-    identifier = ObjectId(sha256((tenant() + ":target:" + key).encode()).hexdigest()[:24])
-    require(not db.project_monthly_targets.find_one({"_id": identifier}), "This target request has already been saved", 409)
+    if identifier is None:
+        identifier = ObjectId(sha256((tenant() + ":target:" + key).encode()).hexdigest()[:24])
+        require(not db.project_monthly_targets.find_one({"_id": identifier}), "This target request has already been saved", 409)
     doc = {"_id": identifier, "tenant_id": tenant(), "month": period, "project_id": str(project["_id"]),
            "project_code": project["project_code"], "project_name": project_api().project_name(project),
            "deliverable_id": deliverable["id"], "deliverable_title": deliverable["title"],
@@ -318,12 +319,74 @@ def save_target(db, data):
            "evidence_required": bool(data.get("evidence_required")), "priority": priority,
            "status": "approved", "version": 1, "events": [event("assigned")], "created_at": stamp(),
            "assessment": "", "corrective_action": ""}
+    return doc, employee
+
+
+def save_target(db, data):
+    doc, employee = prepare_target(db, data)
     try:
         db.project_monthly_targets.insert_one(doc)
     except DuplicateKeyError:
         raise PlanningError("This target request has already been saved", 409)
-    notify(db, employee, "Monthly project work assigned", f"{period}: {doc['output']}")
+    notify(db, employee, "Monthly project work assigned", f"{doc['month']}: {doc['output']}")
     return doc
+
+
+def save_targets(db, data):
+    """Create one independent target per employee. Validate the full batch first.
+
+    Stable per-recipient IDs make an identical retry safe after a partial write or
+    lost response, without requiring a MongoDB replica set or rewriting old data.
+    """
+    require("employee_id" not in data, "Use either employee_id or employee_ids, not both")
+    raw_ids = data.get("employee_ids")
+    require(isinstance(raw_ids, list) and raw_ids, "Select at least one responsible employee")
+    require(all(isinstance(i, str) for i in raw_ids), "Invalid employee identifier")
+    ids = list(dict.fromkeys(str(object_id(i)) for i in raw_ids))
+    key = text(data.get("request_id"), "Request ID", True, 64)
+    require(re.fullmatch(r"[A-Za-z0-9_-]{8,64}", key), "Invalid request ID")
+    project = get_project(db, data.get("project_id"), manage=True)
+    scoped = {str(e["_id"]): e for e in detail_employees(db)}
+    # Same recipients as the original UI, additionally constrained by reporting scope.
+    member_ids = {str(i) for i in (project.get("assigned_employee_ids") or []) +
+                  (project.get("collaborator_ids") or []) + [project.get("team_leader_id")]}
+    prepared = []
+    for employee_id in ids:
+        require(employee_id in scoped, "Employee details are outside your reporting scope", 403)
+        require(employee_id in member_ids, "Employee must be assigned to the project")
+        employee = scoped[employee_id]
+        require(responsibility.employee_is_active(employee), "Only active employees can receive new monthly targets")
+        identifier = ObjectId(sha256(f"{tenant()}:target-batch:{key}:{employee_id}".encode()).hexdigest()[:24])
+        prepared.append(prepare_target(db, {**data, "employee_id": employee_id},
+                                       identifier=identifier, project=project, employee=employee))
+    # Bind retries to the original selection and target values, not mutable review fields.
+    fields = ("month", "project_id", "deliverable_id", "output", "activity", "quantity",
+              "unit", "due_date", "expected_evidence", "evidence_required", "priority")
+    fingerprint = sha256(json.dumps({"employee_ids": sorted(ids),
+        "target": {k: prepared[0][0][k] for k in fields}}, sort_keys=True).encode()).hexdigest()
+    collection = db.project_monthly_targets
+    for old in collection.find({"tenant_id": tenant(), "assignment_batch_id": key}):
+        require(old.get("assignment_batch_fingerprint") == fingerprint,
+                "This assignment was already started with different details. Review existing targets before starting a new assignment.", 409)
+    items = []
+    created = 0
+    try:
+        for doc, employee in prepared:
+            doc.update(assignment_batch_id=key, assignment_batch_fingerprint=fingerprint)
+            query = {"_id": doc["_id"], "tenant_id": tenant(), "assignment_batch_fingerprint": fingerprint}
+            try:
+                result = collection.update_one(query, {"$setOnInsert": doc}, upsert=True)
+            except DuplicateKeyError:
+                # A concurrent identical retry may have inserted the target first.
+                require(collection.find_one(query), "Conflicting assignment request. Review existing targets.", 409)
+                result = None
+            if result is not None and result.upserted_id is not None:
+                created += 1
+                notify(db, employee, "Monthly project work assigned", f"{doc['month']}: {doc['output']}")
+            items.append(collection.find_one(query) or doc)
+    except PyMongoError as exc:
+        raise PlanningError("Assignment could not finish. Some targets may have been saved. Retry the same selection and details to safely resume.", 503, "TARGET_BATCH_RETRY") from exc
+    return {"items": items, "count": len(items), "created_count": created}
 
 
 def plan_key(employee_id, period):

@@ -49,7 +49,7 @@ def options():
         p.require(leader, "Team Leader is outside your scope", 403)
         department = p.text(leader.get("department"), "Team Leader department", True)
         eligible = p.eligible_members(db, leader, department)
-    public = lambda e: {"id": str(e["_id"]), "name": p.project_api().employee_display_name(e), "department": e.get("department", ""), "employee_code": p.project_api().employee_code(e)}
+    public = lambda e: {"id": str(e["_id"]), "name": p.project_api().employee_display_name(e), "department": e.get("department", ""), "employee_code": p.project_api().employee_code(e), "is_active": responsibility.employee_is_active(e)}
     leader_options = []
     for e in leaders:
         effective, state, _ = responsibility.effective(db, p.tenant(), e['_id'])
@@ -88,7 +88,11 @@ def targets():
 @planning_bp.post("/targets")
 @endpoint
 def create_target():
-    return response({"item": p.save_target(get_db(), request.get_json())}, 201)
+    data = request.get_json()
+    if "employee_ids" in data:
+        result = p.save_targets(get_db(), data)
+        return response(result, 201 if result["created_count"] else 200)
+    return response({"item": p.save_target(get_db(), data)}, 201)
 
 
 @planning_bp.patch("/targets/<identifier>/review")

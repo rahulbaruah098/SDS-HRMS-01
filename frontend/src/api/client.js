@@ -4034,6 +4034,10 @@ export async function downloadLocalConveyancePdf(reference) {
 export function getSavedMyVisitVehicles() {
   return api('/field-visits/saved-vehicles');
 }
+
+export function getMyVisitProjectOptions() {
+  return api('/field-visits/project-options');
+}
 export function actionLocalConveyanceBill(reference, action, remarks = '') {
   return api(`/local-conveyance/bills/${encodeURIComponent(reference)}/action`, {
     method: 'POST', body: JSON.stringify({ action, remarks }),

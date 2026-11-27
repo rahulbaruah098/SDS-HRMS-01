@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import {
   CalendarDays,
   Camera,
   CheckCircle2,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Clock3,
@@ -32,6 +33,7 @@ import {
   endFieldVisit,
   getFieldVisit,
   getSavedMyVisitVehicles,
+  getMyVisitProjectOptions,
   getLocalConveyanceSettings,
   getMyFieldVisits,
   getTeamFieldVisits,
@@ -52,17 +54,114 @@ const TRAVEL_MODES = [
 const EMPTY_TRAVEL_FORM = {
   travel_mode: '', vehicle_number: '', start_km: '',
   transport_type: '', transport_other: '', fare: '',
-  from_location: '', to_location: '', purpose: '', project: '', remarks: '',
+  from_location: '', to_location: '', purpose: '', project_id: '', remarks: '',
 };
 const TRAVEL_INPUT = { width: '100%', padding: '10px 12px', border: '1px solid #bdc8dc', borderRadius: 9,
   fontSize: 14, background: '#fff', color: '#152039', boxSizing: 'border-box' };
-const TRAVEL_GRID = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 205px), 1fr))', gap: 12 };
+const TRAVEL_GRID = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 205px), 1fr))', gap: 12, alignItems: 'start' };
 function LcField({ label, value, onChange, type = 'text', children, required = false, readOnly = false }) {
   return <label style={{ display: 'grid', gap: 6, minWidth: 0, fontWeight: 600, fontSize: 13 }}>
     {label}{children ? <select style={TRAVEL_INPUT} value={value || ''} onChange={onChange} required={required}>{children}</select> :
       <input style={TRAVEL_INPUT} type={type} min={type === 'number' ? '0' : undefined}
         step={type === 'number' ? '0.01' : undefined} value={value ?? ''} onChange={onChange} required={required} readOnly={readOnly} />}
   </label>;
+}
+
+// One editable field for saved/new vehicles; the same picker also supports
+// searching the authorised project list without allowing arbitrary projects.
+const vehicleKey = value => String(value || '').toUpperCase().replace(/[\s-]+/g, '');
+function uniqueVehicles(values) {
+  const byKey = new Map();
+  for (const value of values) {
+    if (typeof value !== 'string' || !vehicleKey(value)) continue;
+    if (!byKey.has(vehicleKey(value))) byKey.set(vehicleKey(value), value);
+  }
+  return [...byKey.values()];
+}
+function TravelPicker({ label, value, onChange, options, allowCustom = false, placeholder, hint, disabled = false }) {
+  const id = useId();
+  const inputRef = useRef(null);
+  const listRef = useRef(null);
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState(null);
+  const [active, setActive] = useState(-1);
+  const selected = options.find(item => item.value === value);
+  const text = allowCustom ? (value || '') : (query ?? selected?.label ?? '');
+  const filter = query === null ? '' : (allowCustom ? vehicleKey(query) : query.toLowerCase().trim());
+  const matches = options.filter(item => !filter || (allowCustom
+    ? vehicleKey(item.label).includes(filter)
+    : `${item.label} ${item.detail || ''}`.toLowerCase().includes(filter)));
+  const custom = allowCustom && vehicleKey(text) && !options.some(item => vehicleKey(item.value) === vehicleKey(text));
+  const choices = [...matches, ...(custom ? [{ value: text, label: `Use ${text}`, custom: true }] : [])];
+  useEffect(() => {
+    const list = listRef.current;
+    const item = list?.children[active];
+    if (!open || !item) return;
+    if (item.offsetTop < list.scrollTop) list.scrollTop = item.offsetTop;
+    else if (item.offsetTop + item.offsetHeight > list.scrollTop + list.clientHeight) {
+      list.scrollTop = item.offsetTop + item.offsetHeight - list.clientHeight;
+    }
+  }, [active, open]);
+  const close = () => { setOpen(false); setQuery(null); setActive(-1); };
+  const pick = item => { onChange(item.value); close(); };
+  function onKeyDown(event) {
+    if (event.key === 'Escape' && open) { event.preventDefault(); event.stopPropagation(); close(); }
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      setOpen(true);
+      if (choices.length) setActive(old => event.key === 'ArrowDown'
+        ? (old + 1) % choices.length : (old <= 0 ? choices.length - 1 : old - 1));
+    }
+    if (event.key === 'Enter' && open) {
+      event.preventDefault();
+      if (choices[active]) pick(choices[active]);
+      else if (allowCustom) close();
+      else if (choices.length === 1) pick(choices[0]);
+    }
+  }
+  return <div style={{ minWidth: 0, display: 'grid', gap: 6, fontSize: 13 }}>
+    <label htmlFor={id} style={{ fontWeight: 600 }}>{label}</label>
+    <div style={{ position: 'relative', minWidth: 0 }} onBlur={event => {
+      if (!event.currentTarget.contains(event.relatedTarget)) close();
+    }}>
+      <input id={id} ref={inputRef} role="combobox" aria-autocomplete="list" aria-expanded={open && !disabled}
+        aria-controls={`${id}-options`} aria-activedescendant={open && choices[active] ? `${id}-option-${active}` : undefined}
+        aria-describedby={`${id}-hint`} autoComplete="off" disabled={disabled} required={allowCustom}
+        style={{ ...TRAVEL_INPUT, paddingRight: 35, minHeight: 40 }} value={text} placeholder={placeholder}
+        maxLength={allowCustom ? 40 : undefined}
+        onFocus={() => { setOpen(true); setQuery(null); setActive(-1); }}
+        onClick={() => { if (!open) { setOpen(true); setQuery(null); } }}
+        onChange={event => {
+          const next = allowCustom ? event.target.value.toUpperCase() : event.target.value;
+          setQuery(next); setOpen(true); setActive(-1);
+          if (allowCustom) onChange(next);
+        }} onKeyDown={onKeyDown} />
+      <button type="button" aria-label={`Show ${label.toLowerCase()} options`} disabled={disabled}
+        tabIndex={-1} onMouseDown={event => event.preventDefault()} onClick={() => {
+          if (open) close();
+          else { inputRef.current?.focus(); setQuery(null); setOpen(true); }
+        }} style={{ position: 'absolute', right: 3, top: 3, height: 34, width: 31, padding: 0,
+          border: 0, background: 'transparent', color: '#4338a8', display: 'grid', placeItems: 'center', cursor: 'pointer' }}>
+        <ChevronDown size={17} />
+      </button>
+      {open && !disabled ? <div ref={listRef} id={`${id}-options`} role="listbox" aria-label={`${label} options`}
+        style={{ position: 'absolute', zIndex: 20, left: 0, right: 0, top: 'calc(100% + 4px)',
+          background: '#fff', border: '1px solid #c8d2e8', borderRadius: 10, boxShadow: '0 8px 24px #26335424',
+          maxHeight: 190, overflowY: 'auto', padding: 4 }}>
+        {choices.map((item, index) => <div key={`${item.value}-${item.custom ? 'new' : 'saved'}`}
+          id={`${id}-option-${index}`} role="option" aria-selected={item.value === value}
+          onMouseDown={event => event.preventDefault()} onClick={() => pick(item)}
+          onMouseEnter={() => setActive(index)}
+          style={{ padding: '8px 9px', borderRadius: 6, cursor: 'pointer', overflowWrap: 'anywhere',
+            background: index === active || item.value === value ? '#efedff' : '#fff', color: '#152039' }}>
+          {item.custom ? <Plus size={13} style={{ verticalAlign: 'middle', marginRight: 4 }} /> : null}
+          {item.label}{item.detail ? <small style={{ display: 'block', color: '#64748b' }}>{item.detail}</small> : null}
+        </div>)}
+        {!choices.length ? <div style={{ padding: 9, color: '#64748b' }}>{allowCustom ? 'Type a new vehicle number.' : 'No matching active projects.'}</div> : null}
+      </div> : null}
+    </div>
+    <small id={`${id}-hint`} style={{ color: '#64748b', fontSize: 11, lineHeight: 1.4 }}>{hint}</small>
+  </div>;
 }
 
 const EMPTY_CREATE_FORM = {
@@ -551,9 +650,34 @@ export default function MyVisits({ user = {}, setPage: navigatePage }) {
   const [actionLoading, setActionLoading] = useState('');
   const [travelForm, setTravelForm] = useState({ ...EMPTY_TRAVEL_FORM });
   const [savedVehicles, setSavedVehicles] = useState({});
+  const [vehicleOptions, setVehicleOptions] = useState({});
+  const [visitProjects, setVisitProjects] = useState([]);
+  const [pickerLoading, setPickerLoading] = useState(false);
+  const [vehicleOptionsError, setVehicleOptionsError] = useState(false);
+  const [projectOptionsError, setProjectOptionsError] = useState(false);
+  const [pickerRefresh, setPickerRefresh] = useState(0);
+  const scheduledVisitId = scope === 'mine' && selectedVisit?.status === 'scheduled' ? getVisitId(selectedVisit) : '';
   useEffect(() => {
-    getSavedMyVisitVehicles().then(data => setSavedVehicles(data?.items || {})).catch(() => {});
-  }, []);
+    if (!scheduledVisitId) return;
+    let cancelled = false;
+    setPickerLoading(true);
+    setVehicleOptionsError(false);
+    setProjectOptionsError(false);
+    setVisitProjects([]);
+    setSavedVehicles({});
+    setVehicleOptions({});
+    Promise.allSettled([getSavedMyVisitVehicles(), getMyVisitProjectOptions()]).then(([vehicles, projects]) => {
+      if (cancelled) return;
+      if (vehicles.status === 'fulfilled') {
+        setSavedVehicles(vehicles.value?.items || {});
+        setVehicleOptions(vehicles.value?.vehicle_options || {});
+      } else setVehicleOptionsError(true);
+      if (projects.status === 'fulfilled') setVisitProjects(projects.value?.items || []);
+      else setProjectOptionsError(true);
+      setPickerLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [scheduledVisitId, pickerRefresh]);
   const [endKm, setEndKm] = useState('');
   const [endFare, setEndFare] = useState('');
   const [lcRates, setLcRates] = useState({ two_wheeler_rate: 4, four_wheeler_rate: 14 });
@@ -561,7 +685,7 @@ export default function MyVisits({ user = {}, setPage: navigatePage }) {
     getLocalConveyanceSettings().then(setLcRates).catch(() => {});
   }, []);
   const updateTravelField = (key, value) => setTravelForm(old => ({ ...old, [key]: value,
-    ...(key === 'travel_mode' ? { vehicle_number: savedVehicles[value] || '' } : {}),
+    ...(key === 'travel_mode' ? { vehicle_number: savedVehicles[value] || '', ...(value === 'official_vehicle' ? { project_id: '' } : {}) } : {}),
   }));
   const [visitNotes, setVisitNotes] = useState('');
   const [savingNotes, setSavingNotes] = useState(false);
@@ -1061,9 +1185,14 @@ export default function MyVisits({ user = {}, setPage: navigatePage }) {
 
       if (action === 'start') {
         if (!travelForm.travel_mode) throw new Error('Select the mode of travel before starting your visit.');
+        if (['own_two_wheeler', 'own_four_wheeler'].includes(travelForm.travel_mode) && !vehicleKey(travelForm.vehicle_number)) {
+          throw new Error('Enter or select your vehicle registration number.');
+        }
         response = await startFieldVisit(visitId, { ...location, ...travelForm, ...deviceTimeContext() });
         if (['own_two_wheeler', 'own_four_wheeler'].includes(travelForm.travel_mode)) {
-          setSavedVehicles(old => ({ ...old, [travelForm.travel_mode]: response?.item?.travel?.vehicle_number || travelForm.vehicle_number }));
+          const number = response?.item?.travel?.vehicle_number || travelForm.vehicle_number;
+          setSavedVehicles(old => ({ ...old, [travelForm.travel_mode]: number }));
+          setVehicleOptions(old => ({ ...old, [travelForm.travel_mode]: uniqueVehicles([number, ...(old[travelForm.travel_mode] || [])]) }));
         }
       } else if (action === 'reached') response = await markFieldVisitReached(visitId, { ...location, ...deviceTimeContext() });
       else response = await endFieldVisit(visitId, {
@@ -3284,8 +3413,10 @@ export default function MyVisits({ user = {}, setPage: navigatePage }) {
                           {TRAVEL_MODES.map(([code, label]) => <option key={code} value={code}>{label}</option>)}
                         </LcField>
                         {['own_two_wheeler', 'own_four_wheeler'].includes(travelForm.travel_mode) ? <>
-                          <LcField label="Vehicle Number (saved for future visits)" value={travelForm.vehicle_number} onChange={e => updateTravelField('vehicle_number', e.target.value)} required />
-                          {savedVehicles[travelForm.travel_mode] ? <p style={{fontSize:12,margin:0,color:'#475569'}}>Saved vehicle pre-filled. Edit the number to update it for your future visits.</p> : null}
+                          <TravelPicker key={travelForm.travel_mode} label="Vehicle Number" value={travelForm.vehicle_number}
+                            onChange={value => updateTravelField('vehicle_number', value)} allowCustom
+                            options={uniqueVehicles([savedVehicles[travelForm.travel_mode], ...(vehicleOptions[travelForm.travel_mode] || [])]).map(number => ({ value: number, label: number }))}
+                            placeholder="Type or select vehicle" hint={vehicleOptionsError ? 'Saved vehicles unavailable. You can still type your number.' : 'Select a saved number or type a new one. Saved after Start Visit.'} />
                           <LcField label="Starting Odometer (KM)" type="number" value={travelForm.start_km} onChange={e => updateTravelField('start_km', e.target.value)} required />
                         </> : null}
                         {travelForm.travel_mode === 'public_transport' ? <>
@@ -3302,10 +3433,15 @@ export default function MyVisits({ user = {}, setPage: navigatePage }) {
                           <LcField label="From Location" value={travelForm.from_location} onChange={e => updateTravelField('from_location', e.target.value)} required />
                           <LcField label="To Location" value={travelForm.to_location} onChange={e => updateTravelField('to_location', e.target.value)} required />
                           <LcField label="Purpose" value={travelForm.purpose} onChange={e => updateTravelField('purpose', e.target.value)} required />
-                          <LcField label="Project (if applicable)" value={travelForm.project} onChange={e => updateTravelField('project', e.target.value)} />
+                          <TravelPicker key={scheduledVisitId} label="Project (if applicable)" value={travelForm.project_id}
+                            onChange={value => updateTravelField('project_id', value)} disabled={pickerLoading || projectOptionsError}
+                            options={[{ value: '', label: 'No project' }, ...visitProjects.map(project => ({ value: project.id, label: project.name, detail: project.department }))]}
+                            placeholder={pickerLoading ? 'Loading projects…' : 'Search or select project'}
+                            hint={projectOptionsError ? 'Projects could not be loaded. Retry below or continue without a project.' : 'Optional — choose an active project within your scope, or No project.'} />
                           <LcField label="Remarks (optional)" value={travelForm.remarks} onChange={e => updateTravelField('remarks', e.target.value)} />
                         </> : null}
                       </div>
+                      {(vehicleOptionsError || projectOptionsError) && !pickerLoading ? <button type="button" className="mv-button mv-button--secondary" onClick={() => { updateTravelField('project_id', ''); setPickerRefresh(n => n + 1); }}><RefreshCw size={14}/> Retry saved vehicles / projects</button> : null}
                       {travelForm.travel_mode === 'own_two_wheeler' ? <p>Applicable rate: ₹{lcRates.two_wheeler_rate}/km</p> : null}
                       {travelForm.travel_mode === 'own_four_wheeler' ? <p>Applicable rate: ₹{lcRates.four_wheeler_rate}/km</p> : null}
                       {travelForm.travel_mode === 'official_vehicle' ? <p>Office vehicle — no personal reimbursement.</p> : null}

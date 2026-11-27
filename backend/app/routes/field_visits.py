@@ -16,7 +16,8 @@ from werkzeug.utils import secure_filename
 
 from app.services import team_responsibility as responsibility
 from app.extensions import get_db
-from app.middleware.tenant_guard import tenant_module_required
+from app.middleware.tenant_guard import tenant_module_required, _trial_has_full_access
+from app.services.tenant_service import can_access_module, is_platform_superadmin
 from app.utils.auth import audit
 from app.utils.serializers import clean_doc
 from app.services.local_conveyance import start_travel, finish_travel, tenant_rates, MODE_TWO, MODE_FOUR
@@ -654,6 +655,35 @@ def cancel_visit(visit_id):
     return jsonify({"message": "Visit cancelled successfully", "item": clean_doc(updated)})
 
 
+def vehicle_number_key(value):
+    # Treat spacing, case and hyphens as formatting, not different vehicles.
+    return re.sub(r"[\s-]+", "", normalize_text(value).upper())[:40]
+
+
+def saved_vehicle_options(db, employee, mode):
+    preferred = (employee.get('my_visit_vehicles') or {}).get(mode)
+    remembered = (employee.get('my_visit_vehicle_history') or {}).get(mode) or []
+    if not isinstance(remembered, list):
+        remembered = [remembered]
+    # Recover previously used numbers from this employee's actual visits,
+    # including visits created before the multi-vehicle feature was deployed.
+    ids = sorted(employee_identity_values(employee))
+    previous = db.field_visits.distinct('travel.vehicle_number', {
+        'tenant_id': current_tenant_id(), 'employee_ref_id': {'$in': ids},
+        'is_deleted': {'$ne': True}, 'started_at': {'$ne': None},
+        'travel.mode': mode,
+    })
+    values = [preferred, *remembered, *previous]
+    options = {}
+    for value in values:
+        if not isinstance(value, str):
+            continue
+        key = vehicle_number_key(value)
+        if key:
+            options.setdefault(key, normalize_text(value).upper()[:40])
+    return list(options.values())
+
+
 @field_visits_bp.get('/saved-vehicles')
 @tenant_module_required('attendance')
 def saved_vehicles():
@@ -662,10 +692,66 @@ def saved_vehicles():
     if not employee:
         return jsonify({'message': 'Employee profile not found'}), 404
     vehicles = employee.get('my_visit_vehicles') or {}
-    return jsonify({'items': {
-        MODE_TWO: str(vehicles.get(MODE_TWO) or ''),
-        MODE_FOUR: str(vehicles.get(MODE_FOUR) or ''),
-    }})
+    # Keep the old preferred-number response for existing mobile clients.
+    return jsonify({
+        'items': {mode: str(vehicles.get(mode) or '') for mode in (MODE_TWO, MODE_FOUR)},
+        'vehicle_options': {mode: saved_vehicle_options(db, employee, mode)
+                            for mode in (MODE_TWO, MODE_FOUR)},
+    })
+
+
+def visit_project_scope(db):
+    """Use exactly the existing tenant Project module's visibility rules."""
+    from app.routes import projects as project_api
+    user = getattr(g, 'current_user', {}) or {}
+    tenant_id = current_tenant_id()
+    if (not tenant_id or is_platform_superadmin(user)
+            or current_user_roles().intersection({'super_admin', 'superadmin'})):
+        return None
+    context = getattr(g, 'tenant_context', {}) or {}
+    tenant = context.get('tenant')
+    subscription = context.get('subscription') or {}
+    if not (_trial_has_full_access(subscription, tenant) or can_access_module(
+            tenant, 'projects', user=user, config=current_app.config).get('allowed')):
+        return None
+    return project_api.project_scope_query(db)
+
+
+@field_visits_bp.get('/project-options')
+@tenant_module_required('attendance')
+def visit_project_options():
+    from app.routes import projects as project_api
+    db = get_db()
+    if not get_current_employee(db):
+        return jsonify({'message': 'Employee profile not found'}), 404
+    scope = visit_project_scope(db)
+    if scope is None:
+        return jsonify({'items': []})
+    # Return only the fields necessary for the picker, never project records.
+    rows = db.projects.find(scope, {
+        'name': 1, 'project_name': 1, 'title': 1, 'status': 1, 'department': 1,
+    })
+    items = [{'id': str(row['_id']), 'name': project_api.project_name(row),
+              'department': normalize_text(row.get('department'))}
+             for row in rows if project_api.normalize_status(row.get('status')) == 'active']
+    items.sort(key=lambda row: (row['name'].casefold(), row['id']))
+    return jsonify({'items': items})
+
+
+def resolve_visit_project(db, payload):
+    """Validate new ID-based selections; preserve old text-only clients."""
+    from app.routes import projects as project_api
+    project_id = normalize_text(payload.get('project_id'))
+    if not project_id:
+        return None
+    oid = safe_object_id(project_id)
+    scope = visit_project_scope(db)
+    if not oid or scope is None:
+        raise ValueError('Select an active project within your authorised scope')
+    project = db.projects.find_one({'$and': [scope, {'_id': oid}]})
+    if not project or project_api.normalize_status(project.get('status')) != 'active':
+        raise ValueError('The selected project is no longer active or within your authorised scope. Refresh and select again.')
+    return project
 
 
 def transition_visit(visit_id, expected_status, next_status, location_field, timestamp_field):
@@ -723,9 +809,22 @@ def transition_visit(visit_id, expected_status, next_status, location_field, tim
                 saved = (employee.get('my_visit_vehicles') or {}).get(mode)
                 if not normalize_text(payload.get('vehicle_number')):
                     payload['vehicle_number'] = saved
+            # The new web client sends a project ID, never a trusted label.
+            # Text-only legacy mobile requests remain backward compatible.
+            selected_project = None
+            if 'project_id' in payload:
+                payload = dict(payload)
+                selected_project = resolve_visit_project(db, payload)
+                if selected_project:
+                    from app.routes.projects import project_name
+                    payload['project'] = project_name(selected_project)
+                else:
+                    payload['project'] = ''
             updates["travel"] = start_travel(
                 payload, tenant_rates(db, current_tenant_id()), allow_legacy=True)
-            if mode in (MODE_TWO, MODE_FOUR) and not updates['travel'].get('vehicle_number'):
+            if selected_project and 'project' in updates['travel']:
+                updates['travel']['project_id'] = str(selected_project['_id'])
+            if mode in (MODE_TWO, MODE_FOUR) and not vehicle_number_key(updates['travel'].get('vehicle_number')):
                 raise ValueError('Enter your vehicle registration number once to save it for future visits')
         elif next_status == "completed":
             updates["travel"] = finish_travel(visit.get("travel"), payload)
@@ -748,9 +847,14 @@ def transition_visit(visit_id, expected_status, next_status, location_field, tim
         # record is the only mutable profile, and other employees are untouched.
         mode = updates['travel']['mode']
         try:
+            number = updates['travel']['vehicle_number']
+            previous = (employee.get('my_visit_vehicles') or {}).get(mode)
+            keys = list(dict.fromkeys(key for key in (
+                vehicle_number_key(previous), vehicle_number_key(number)) if key))
             db.employees.update_one(
                 {'_id': employee['_id'], 'tenant_id': current_tenant_id()},
-                {'$set': {f'my_visit_vehicles.{mode}': updates['travel']['vehicle_number']}})
+                {'$set': {f'my_visit_vehicles.{mode}': number},
+                 '$addToSet': {f'my_visit_vehicle_history.{mode}': {'$each': keys}}})
         except Exception:
             # The visit has already been started: never report that start failed
             # due solely to optional profile persistence. The journey snapshot is intact.
